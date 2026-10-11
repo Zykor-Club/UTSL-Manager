@@ -1,0 +1,11 @@
+{
+  "name": "点歌机面板",
+  "version": "1.0.0",
+  "author": "星梦",
+  "description": "点歌队列 / 已装客户端插件的玩家 / 滚动歌词（配套服务端插件 RuYouMusic）",
+  "entry": "RuYouMusicPanel.RuYouMusicPanelPlugin",
+  "type": "view",
+  "apiVersion": 2,
+  "permissions": ["rest"],
+  "dependencies": []
+}

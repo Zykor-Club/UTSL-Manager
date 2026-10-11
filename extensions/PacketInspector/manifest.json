@@ -1,0 +1,11 @@
+{
+  "name": "数据包查看器",
+  "version": "1.0.0",
+  "author": "Zykor-Club",
+  "description": "实时查看 UTSL 收到的所有数据包（配套服务端插件 NetPacketChannel）",
+  "entry": "PacketInspector.PacketInspectorPlugin",
+  "type": "view",
+  "apiVersion": 2,
+  "permissions": ["rest"],
+  "dependencies": []
+}

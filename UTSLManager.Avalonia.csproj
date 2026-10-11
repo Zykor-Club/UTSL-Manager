@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+    <RootNamespace>UTSLManager</RootNamespace>
+    <AssemblyName>UTSLManager</AssemblyName>
+    <!-- 发布输出目录：默认取仓库上两级的 AvaloniaUTSL\（本机即 桌面\AvaloniaUTSL\，与过去位置一致）；
+         也可以用 -p:PublishDir=你的路径\ 覆盖。不在仓库里硬编码任何个人绝对路径。 -->
+    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\..\AvaloniaUTSL\</PublishDir>
+  </PropertyGroup>
+  <!-- 示例插件是独立工程：不要被主工程的默认通配符编译进 UTSLManager.dll -->
+  <ItemGroup>
+    <Compile Remove="samples\**" />
+    <None Remove="samples\**" />
+    <EmbeddedResource Remove="samples\**" />
+    <AvaloniaResource Remove="samples\**" />
+    <!-- extensions/ 是「正式管理器插件」的源码目录（同样独立工程，不要被主工程编进去） -->
+    <Compile Remove="extensions\**" />
+    <None Remove="extensions\**" />
+    <EmbeddedResource Remove="extensions\**" />
+    <AvaloniaResource Remove="extensions\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.2" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.*" />
+    <PackageReference Include="Devolutions.AvaloniaTheme.MacOS" Version="*" />
+    <!-- P2-12：.csx 脚本插件（Roslyn） -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.9.0" />
+  </ItemGroup>
+</Project>

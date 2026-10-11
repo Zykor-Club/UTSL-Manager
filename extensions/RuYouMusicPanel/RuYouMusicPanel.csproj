@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    RuYouMusicPanel —— 管理器侧「点歌机面板」插件。
+    配套服务端插件：UTSLServerPlugin/src/RuYouMusic（提供 REST /music 系列）。
+
+    构建（默认自动部署到 <管理器目录>\plugins\）：
+      dotnet build -c Release
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>RuYouMusicPanel</AssemblyName>
+    <RootNamespace>RuYouMusicPanel</RootNamespace>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <ManagerDir Condition="'$(ManagerDir)' == '' And Exists('$(MSBuildThisFileDirectory)..\..\..\..\AvaloniaUTSL\UTSLManager.dll')">$(MSBuildThisFileDirectory)..\..\..\..\AvaloniaUTSL</ManagerDir>
+    <ManagerDir Condition="'$(ManagerDir)' == '' And Exists('$(MSBuildThisFileDirectory)..\..\bin\$(Configuration)\net10.0\UTSLManager.dll')">$(MSBuildThisFileDirectory)..\..\bin\$(Configuration)\net10.0</ManagerDir>
+    <ManagerDir Condition="'$(ManagerDir)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\AvaloniaUTSL</ManagerDir>
+    <PluginDeployDir Condition="'$(PluginDeployDir)' == ''">$(ManagerDir)\plugins</PluginDeployDir>
+    <PluginManifestSource>$(MSBuildThisFileDirectory)manifest.json</PluginManifestSource>
+  </PropertyGroup>
+
+  <Target Name="CheckManagerExists" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(ManagerDir)\UTSLManager.dll')"
+           Text="找不到 $(ManagerDir)\UTSLManager.dll —— 请用 -p:ManagerDir=&lt;UTSLManager 所在目录&gt; 指定。" />
+  </Target>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.2" />
+    <Reference Include="UTSLManager">
+      <HintPath>$(ManagerDir)\UTSLManager.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="DeployToManager" AfterTargets="Build">
+    <MakeDir Directories="$(PluginDeployDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDeployDir)" ContinueOnError="true" Retries="0" />
+    <Copy SourceFiles="$(PluginManifestSource)"
+          DestinationFiles="$(PluginDeployDir)\$(AssemblyName).manifest.json"
+          Condition="Exists('$(PluginManifestSource)')" ContinueOnError="true" Retries="0" />
+    <Message Importance="high" Text="[RuYouMusicPanel] 部署目标：$(PluginDeployDir)" />
+  </Target>
+
+</Project>

@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- ApiProbe —— 管理器插件 API v3 的端到端自检插件（审查/回归用，可随时删除）。 -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ApiProbe</AssemblyName>
+    <RootNamespace>ApiProbe</RootNamespace>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ManagerDir Condition="'$(ManagerDir)' == '' And Exists('$(MSBuildThisFileDirectory)..\..\..\..\AvaloniaUTSL\UTSLManager.dll')">$(MSBuildThisFileDirectory)..\..\..\..\AvaloniaUTSL</ManagerDir>
+    <ManagerDir Condition="'$(ManagerDir)' == '' And Exists('$(MSBuildThisFileDirectory)..\..\bin\$(Configuration)\net10.0\UTSLManager.dll')">$(MSBuildThisFileDirectory)..\..\bin\$(Configuration)\net10.0</ManagerDir>
+    <ManagerDir Condition="'$(ManagerDir)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\AvaloniaUTSL</ManagerDir>
+    <PluginDeployDir Condition="'$(PluginDeployDir)' == ''">$(ManagerDir)\plugins</PluginDeployDir>
+    <PluginManifestSource>$(MSBuildThisFileDirectory)manifest.json</PluginManifestSource>
+  </PropertyGroup>
+  <Target Name="CheckManagerExists" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(ManagerDir)\UTSLManager.dll')" Text="找不到 $(ManagerDir)\UTSLManager.dll —— 请用 -p:ManagerDir=&lt;目录&gt; 指定。" />
+  </Target>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.2" />
+    <Reference Include="UTSLManager">
+      <HintPath>$(ManagerDir)\UTSLManager.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+  <Target Name="DeployToManager" AfterTargets="Build">
+    <MakeDir Directories="$(PluginDeployDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDeployDir)" ContinueOnError="true" />
+    <Copy SourceFiles="$(PluginManifestSource)" DestinationFiles="$(PluginDeployDir)\$(AssemblyName).manifest.json" Condition="Exists('$(PluginManifestSource)')" ContinueOnError="true" />
+    <Message Importance="high" Text="[ApiProbe] 部署目标：$(PluginDeployDir)" />
+  </Target>
+</Project>

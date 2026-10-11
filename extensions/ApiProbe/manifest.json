@@ -1,0 +1,17 @@
+{
+  "name": "API 探针",
+  "version": "1.0.0",
+  "author": "Zykor-Club",
+  "description": "管理器插件 API v3 的端到端自检（验证文件/命令/HTTP/权限）",
+  "entry": "ApiProbe.ApiProbePlugin",
+  "type": "view",
+  "apiVersion": 3,
+  "permissions": [
+    "fs",
+    "rest",
+    "config",
+    "net",
+    "exec"
+  ],
+  "dependencies": []
+}

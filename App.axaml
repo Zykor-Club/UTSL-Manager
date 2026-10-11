@@ -1,0 +1,20 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mac="clr-namespace:Devolutions.AvaloniaTheme.MacOS;assembly=Devolutions.AvaloniaTheme.MacOS"
+             x:Class="UTSLManager.App"
+             RequestedThemeVariant="Dark">
+  <Application.Styles>
+    <mac:DevolutionsMacOsTheme />
+    <mac:DevolutionsMacOsThemeGlobalStyles />
+
+    <!-- ★ 滚动槽位「上下封顶」：主题自带的槽位是贴边拉伸的，端点被裁掉；缩进 6px 让圆角端点露出来 -->
+    <Style Selector="ScrollBar:vertical">
+      <Setter Property="Margin" Value="0,6,2,6" />
+    </Style>
+    <Style Selector="ScrollBar:horizontal">
+      <Setter Property="Margin" Value="6,0,6,2" />
+    </Style>
+
+
+  </Application.Styles>
+</Application>

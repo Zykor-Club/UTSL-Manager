@@ -1,0 +1,82 @@
+name: release
+
+# 触发方式：
+#   1) 推送 v* 标签（推荐）：git tag v1.0.0 && git push origin v1.0.0
+#   2) 手动运行，并在输入框里给一个 tag 名（例如 v1.0.0）
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag 名（例如 v1.0.0）'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # 解析版本：标签触发用标签名；手动触发用输入值；都没有就直接失败（避免建出空 tag）
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          $tag = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}' } else { '${{ inputs.tag }}' }
+          if ([string]::IsNullOrWhiteSpace($tag)) { throw '无法确定版本号：请推送 v* 标签，或手动运行时填写 tag。' }
+          if ($tag -notmatch '^v\d') { throw "tag 建议以 v 开头并带版本号，当前：$tag" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "发布版本：$tag"
+
+      - name: Publish
+        # 不用仓库默认 PublishDir（会输出到仓库外）
+        run: dotnet publish UTSLManager.Avalonia.csproj -c Release -p:PublishDir=${{ github.workspace }}/publish/
+
+      - name: Build extensions (官方扩展插件)
+        run: |
+          dotnet build extensions/PacketInspector/PacketInspector.csproj -c Release -p:ManagerDir=${{ github.workspace }}/publish
+          dotnet build extensions/RuYouMusicPanel/RuYouMusicPanel.csproj -c Release -p:ManagerDir=${{ github.workspace }}/publish
+          dotnet build extensions/ApiProbe/ApiProbe.csproj -c Release -p:ManagerDir=${{ github.workspace }}/publish
+
+      - name: Sanity check (产物必须完整)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path publish/UTSLManager.exe)) { throw 'publish/UTSLManager.exe 不存在' }
+          if (-not (Test-Path publish/UTSLManager.dll)) { throw 'publish/UTSLManager.dll 不存在' }
+          $plugins = Get-ChildItem publish/plugins -Filter *.dll -ErrorAction SilentlyContinue
+          Write-Host ("插件 dll：" + (($plugins | ForEach-Object { $_.BaseName }) -join ', '))
+          if (($plugins | Measure-Object).Count -lt 3) { throw 'publish/plugins 下的扩展 dll 少于 3 个' }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.ver.outputs.tag }}'
+          Compress-Archive -Path publish/* -DestinationPath "UTSLManager-$tag-win-x64.zip" -Force
+          Get-Item "UTSLManager-$tag-win-x64.zip" | ForEach-Object { Write-Host ("包大小：" + [math]::Round($_.Length/1MB,2) + " MB") }
+          "zip=UTSLManager-$tag-win-x64.zip" >> $env:GITHUB_OUTPUT
+        id: pack
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: UTSLManager ${{ steps.ver.outputs.tag }}
+          files: ${{ steps.pack.outputs.zip }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            **运行要求**：Windows 10/11 + [.NET 10 运行时](https://dotnet.microsoft.com/download)（本包是框架依赖发布，不含运行时）
+            系统自带 OpenSSH 客户端（`ssh` / `scp`）用于远端模式。
+
+            解压后直接运行 `UTSLManager.exe`；首次使用请在「连接设置」里填写 REST 与 SSH 信息。
+            自检：`UTSLManager.exe --selfcheck` → 结果写 `selfcheck.txt`。
