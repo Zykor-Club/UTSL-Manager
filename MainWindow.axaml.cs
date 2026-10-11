@@ -317,13 +317,15 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            ConnState.Text = ServerRunning ? "REST 无响应" : "未运行";
-            if (SrvDot is not null) { SrvDot.Background = new SolidColorBrush(Color.Parse(ServerRunning ? "#FEBC2E" : "#6B6B70")); }
+            // ★ 远端模式必须用【远端】存活判据，否则会被本机进程误导成"未运行"
+            bool aliveNow = UseRemote ? SnapshotProcs > 0 : ServerRunning;
+            ConnState.Text = aliveNow ? "REST 无响应" : "未运行";
+            if (SrvDot is not null) { SrvDot.Background = new SolidColorBrush(Color.Parse(aliveNow ? "#FEBC2E" : "#6B6B70")); }
             // 看门狗：本来在跑 → 现在没了 → 自动拉起
             downTicks++;
             // ★ 存活判据改成「进程是否还在」，不再用「REST 通不通」——
             //   世界加载/换图期间 REST 本来就没就绪，用 REST 判会把"正在加载"误判成"掉线"→ 重启循环（调研 D-6 的坑）。
-            bool procAlive = UseRemote ? SnapshotProcs > 0 : ServerRunning;
+            bool procAlive = aliveNow;
             if (procAlive)
             {
                 downTicks = 0;      // 进程还在 → 只是 REST 未就绪（加载中），看门狗不介入
@@ -1866,8 +1868,28 @@ public partial class MainWindow : Window
     [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool SetProcessWorkingSetSize(IntPtr hProcess, IntPtr min, IntPtr max);
 
-    private void OnTrimMemory(object? sender, RoutedEventArgs e)
+    private async void OnTrimMemory(object? sender, RoutedEventArgs e)
     {
+        if (UseRemote)
+        {
+            // ★ 远端模式：要压缩的是【远端】服务端的工作集。原实现读本机进程 —— 在远端模式下毫无意义
+            //   （本机根本没有被管的那个进程），这正是"没定向到远端"的典型遗漏。
+            try
+            {
+                ERR("正在压缩远端服务端的工作集…");
+                string ps = @"$sig='[DllImport(""psapi.dll"")] public static extern bool EmptyWorkingSet(IntPtr hProcess);'; " +
+                            "$t=Add-Type -MemberDefinition $sig -Name E -Namespace W -PassThru; $o=@(); " +
+                            "foreach($p in Get-Process UnifierTSL -ErrorAction SilentlyContinue){ $b=$p.WorkingSet64; " +
+                            "$null=$t::EmptyWorkingSet($p.Handle); Start-Sleep -Milliseconds 250; $p.Refresh(); " +
+                            "$o += ([string][math]::Round($b/1MB) + ' -> ' + [string][math]::Round($p.WorkingSet64/1MB) + ' MB') }; " +
+                            "if($o.Count -eq 0){'NORUN'} else {$o -join ' ; '}";
+                string r = await Task.Run(() => SshRun(ps, 90000));
+                if (r.Trim() == "NORUN") { ERR("远端服务端没在运行"); return; }
+                ERR("远端工作集已压缩: " + r.Trim() + " —— 注意：私有提交(commit)不变 ✗ 世界尺寸上限不会因此提高 ✓ 真正用途是【重操作前腾物理内存】✓");
+            }
+            catch (Exception ex) { ERR("远端压缩失败: " + ex.Message); }
+            return;
+        }
         try
         {
             var list = System.Diagnostics.Process.GetProcessesByName("UnifierTSL");
@@ -1967,6 +1989,8 @@ public partial class MainWindow : Window
 
     private static int HideUtslWindows(bool hide)
     {
+        // ★ 远端模式：被管的是远端服务端（headless，无窗口）；绝不去动本机可能存在的 UnifierTSL 窗口
+        if (UseRemote) { return 0; }
         int n = 0;
         try
         {
