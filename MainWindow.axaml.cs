@@ -196,6 +196,18 @@ public partial class MainWindow : Window
             }
         };
 
+        // ★ 服务端 /metrics 轮询（2 秒）—— 远端模式的实时指标来源；插件不存在时会失败并回退快照
+        var metricsTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        // ★ 不要用"失败闩锁"：服务端重启/插件临时不可用之后再也不会重试，指标会永久退化。
+        //   改成失败退避（失败后 10 秒再试），这样服务端恢复后自动回到实时指标。
+        metricsTimer.Tick += (_, _) =>
+        {
+            if (!UseRemote) { return; }
+            if (Environment.TickCount64 < MetricsNextTryMs) { return; }
+            RefreshMetricsAsync();
+        };
+        metricsTimer.Start();
+
         var listTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         listTimer.Tick += async (_, _) =>
         {
@@ -457,6 +469,13 @@ public partial class MainWindow : Window
     private static double SnapCpuPct, SnapUpKbps, SnapDownKbps;
     private static bool SnapHasRate;
     private static int samplesSeen;                   // 本机模式：首帧只记基线，避免"开机至今总CPU"假尖峰
+    // ★ 服务端 /metrics 插件（MetricsChannel）—— 远端模式的实时指标来源（实测单次 98~147ms，可 2 秒级）
+    private static double MetricsCpuPct, MetricsUpKbps, MetricsDownKbps, MetricsPrivateMB, MetricsGcMB;
+    private static int MetricsLogicalCpu = 1, MetricsThreads, MetricsPlayers, MetricsWorlds;
+    private static long MetricsAtMs;                  // 最近一次成功取值的时间
+    private static bool MetricsFetching;              // 防重入
+    private static bool MetricsPluginOk;              // 最近一次是否成功（仅用于显示提示）
+    private static long MetricsNextTryMs;             // 失败后的下次重试时间（退避，避免每 2 秒猛打）
     private static int SnapshotProcs;                 // 快照里的服务端进程数
     private static string SnapshotListen = "";        // 快照里的监听端口
 
@@ -1105,6 +1124,43 @@ public partial class MainWindow : Window
         return sb.ToString();
     }
 
+    /// <summary>
+    /// 轮询服务端 /metrics（MetricsChannel 插件）。实测单次 98~147ms，走同一条 SSH 隧道，不需要新端口。
+    /// 失败（服务器没装该插件）时不清空旧值：SampleMetrics 会按新鲜度自动回退到 SSH 合并快照。
+    /// </summary>
+    private async void RefreshMetricsAsync()
+    {
+        if (!UseRemote || MetricsFetching) { return; }
+        MetricsFetching = true;
+        try
+        {
+            string txt = await Http.GetStringAsync(Rest + "/metrics?token=" + Uri.EscapeDataString(Token));
+            if (JsonNode.Parse(txt) is JsonObject o)
+            {
+                MetricsCpuPct = Num(o["cpuPercent"]);
+                MetricsUpKbps = Num(o["upKbps"]);
+                MetricsDownKbps = Num(o["downKbps"]);
+                MetricsPrivateMB = Num(o["privateMB"]);
+                MetricsGcMB = Num(o["gcHeapMB"]);
+                MetricsLogicalCpu = Math.Max(1, (int)Num(o["logicalCpu"]));
+                MetricsThreads = (int)Num(o["threads"]);
+                MetricsPlayers = (int)Num(o["players"]);
+                MetricsWorlds = (int)Num(o["worlds"]);
+                MetricsAtMs = Environment.TickCount64;
+                MetricsPluginOk = true;
+                MetricsNextTryMs = 0;
+            }
+        }
+        catch { MetricsPluginOk = false; MetricsNextTryMs = Environment.TickCount64 + 10000; }   // 失败 10 秒后重试（服务端重启期间就是这条）
+        finally { MetricsFetching = false; }
+    }
+
+    private static double Num(JsonNode? n)
+    {
+        try { return n is null ? 0 : double.Parse(n.ToString(), System.Globalization.CultureInfo.InvariantCulture); }
+        catch { return 0; }
+    }
+
     /// <summary>刷新连接健康三灯（只在状态变化时改画刷，避免每 2 秒产生垃圾）。</summary>
     private void UpdateHealthDots()
     {
@@ -1572,9 +1628,10 @@ public partial class MainWindow : Window
         {
             try
             {
-                if (CpuTitle is not null) { CpuTitle.Text = UseRemote ? "CPU（远端 · 单核 %）" : "CPU 使用量（本机 · 单核 %）"; }
-                if (MemTitle is not null) { MemTitle.Text = UseRemote ? "内存（远端 · 私有）" : "内存使用量（本机 · 私有）"; }
-                if (NetTitle is not null) { NetTitle.Text = UseRemote ? "网络（远端网卡）" : "网络流量（本机全部网卡）"; }
+                bool live = UseRemote && MetricsAtMs > 0;
+                if (CpuTitle is not null) { CpuTitle.Text = !UseRemote ? "CPU 使用量（本机 · 单核 %）" : live ? "CPU（远端 · 实时 2s）" : "CPU（远端 · 单核 %）"; }
+                if (MemTitle is not null) { MemTitle.Text = !UseRemote ? "内存使用量（本机 · 私有）" : live ? "内存（远端 · 实时 2s）" : "内存（远端 · 私有）"; }
+                if (NetTitle is not null) { NetTitle.Text = !UseRemote ? "网络流量（本机全部网卡）" : live ? "网络（远端网卡 · 实时 2s）" : "网络（远端网卡）"; }
             }
             catch { }
         }
@@ -1585,28 +1642,48 @@ public partial class MainWindow : Window
         {
             // ★ 远端模式：数据来自「合并快照」（每 45 秒一次，不额外发 ssh）—— 监控的是被管的那台服务器。
             //   旧实现用 Process.GetProcessesByName 读的是【本机】进程、网络是本机全部网卡合计 → 测错对象。
-            if (!SnapHasRate)
+            bool pluginFresh = MetricsAtMs > 0 && Environment.TickCount64 - MetricsAtMs < 8000;
+            if (pluginFresh)
+            {
+                // ★ 首选：服务端 /metrics 插件（2 秒级、实测单次 ~0.1 秒），监控的就是服务器本进程
+                cpuVal = MetricsCpuPct;
+                memVal = MetricsPrivateMB / 1024.0;
+                up = MetricsUpKbps;
+                down = MetricsDownKbps;
+                Push(cpuHist, cpuVal);
+                Push(memHist, memVal);
+                Push(upHist, up); Push(downHist, down);
+                CpuNow.Text = $"{cpuVal:F2}%";
+                MemNow.Text = $"{memVal:F2} GB";
+                NetNow.Text = up >= 1024 || down >= 1024
+                    ? $"↑ {up / 1024.0:F2}  ↓ {down / 1024.0:F2} MB/s"
+                    : $"↑ {up:F2}  ↓ {down:F2} KB/s";
+            }
+            else if (SnapHasRate)
+            {
+                // 回退：SSH 合并快照（没装 MetricsChannel 插件的服务器走这条，45 秒粒度）
+                if (SnapPrevAtMs == snapPushedAt) { return; }
+                snapPushedAt = SnapPrevAtMs;
+                cpuVal = SnapCpuPct;
+                memVal = SnapMemBytes / 1073741824.0;
+                up = SnapUpKbps;
+                down = SnapDownKbps;
+                Push(cpuHist, cpuVal);
+                CpuNow.Text = $"{cpuVal:F2}%";
+                if (SnapMemBytes > 0) { Push(memHist, memVal); MemNow.Text = $"{memVal:F2} GB"; } else { MemNow.Text = "—"; }
+                Push(upHist, up); Push(downHist, down);
+                NetNow.Text = up >= 1024 || down >= 1024
+                    ? $"↑ {up / 1024.0:F2}  ↓ {down / 1024.0:F2} MB/s"
+                    : $"↑ {up:F2}  ↓ {down:F2} KB/s";
+            }
+            else
             {
                 if (CpuNow is not null) { CpuNow.Text = "—"; }
                 if (MemNow is not null) { MemNow.Text = "—"; }
                 if (NetNow is not null) { NetNow.Text = "—"; }
                 lastSample = now;
-                return;                       // 还没有第二次快照 → 没有速率可算
+                return;
             }
-            if (SnapPrevAtMs == snapPushedAt) { return; }   // 同一份快照不重复入图（图表间隔=快照间隔）
-            snapPushedAt = SnapPrevAtMs;
-
-            cpuVal = SnapCpuPct;
-            memVal = SnapMemBytes / 1073741824.0;
-            up = SnapUpKbps;
-            down = SnapDownKbps;
-            Push(cpuHist, cpuVal);
-            CpuNow.Text = $"{cpuVal:F2}%";
-            if (SnapMemBytes > 0) { Push(memHist, memVal); MemNow.Text = $"{memVal:F2} GB"; } else { MemNow.Text = "—"; }
-            Push(upHist, up); Push(downHist, down);
-            NetNow.Text = up >= 1024 || down >= 1024
-                ? $"↑ {up / 1024.0:F2}  ↓ {down / 1024.0:F2} MB/s"
-                : $"↑ {up:F2}  ↓ {down:F2} KB/s";
         }
         else
         {
@@ -1620,7 +1697,7 @@ public partial class MainWindow : Window
                     if (samplesSeen > 0)
                     {
                         double cpu = (srv.TotalProcessorTime - lastCpuTime).TotalMilliseconds / (secs * 1000) * 100.0;
-                        cpuVal = Math.Max(0, Math.Min(400, cpu));
+                        cpuVal = Math.Max(0, Math.Min(Environment.ProcessorCount * 100.0, cpu));   // 上限=核数×100（本机核数）
                         Push(cpuHist, cpuVal);
                     }
                     lastCpuTime = srv.TotalProcessorTime;
