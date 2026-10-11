@@ -451,6 +451,12 @@ public partial class MainWindow : Window
     }
 
     private static long SnapshotAtMs;                 // 上次快照时间
+    // ★ 远端指标（来自合并快照，不额外发 ssh）：相邻两次快照算速率 —— 监控的才是被管的那台服务器
+    private static long SnapPrevCpuMs = -1, SnapPrevNetSent, SnapPrevNetRecv, SnapPrevAtMs;
+    private static long SnapMemBytes;
+    private static double SnapCpuPct, SnapUpKbps, SnapDownKbps;
+    private static bool SnapHasRate;
+    private static int samplesSeen;                   // 本机模式：首帧只记基线，避免"开机至今总CPU"假尖峰
     private static int SnapshotProcs;                 // 快照里的服务端进程数
     private static string SnapshotListen = "";        // 快照里的监听端口
 
@@ -486,6 +492,12 @@ public partial class MainWindow : Window
                 "$o.r=@(Get-ChildItem -LiteralPath $b -ErrorAction SilentlyContinue|ForEach-Object{ $(if($_.PSIsContainer){'D'}else{'F'})+'|'+$_.Length+'|'+$_.LastWriteTime.ToString('o')+'|'+$_.Name }); " +
                 "$md=Join-Path (Join-Path $b 'GenerateMap') 'Images'; $o.m=@(if(Test-Path -LiteralPath $md){Get-ChildItem -LiteralPath $md -Filter *.png -ErrorAction SilentlyContinue|ForEach-Object{'F|'+$_.Length+'|'+$_.LastWriteTime.ToString('o')+'|'+$_.Name}}); " +
                 "$o.d=[ordered]@{}; foreach($n in @('config','Worlds','ServerPlugins','logs')){ $p=Join-Path $b $n; if(Test-Path -LiteralPath $p){ $o.d[$n]=@(Get-ChildItem -LiteralPath $p -ErrorAction SilentlyContinue|ForEach-Object{ $(if($_.PSIsContainer){'D'}else{'F'})+'|'+$_.Length+'|'+$_.LastWriteTime.ToString('o')+'|'+$_.Name }) } }; " +
+                "$u=Get-Process UnifierTSL -ErrorAction SilentlyContinue|Select-Object -First 1; " +
+                "if($u){$o.uc=[long]$u.TotalProcessorTime.TotalMilliseconds;$o.um=[long]$u.PrivateMemorySize64}else{$o.uc=-1;$o.um=0}; " +
+                "$ns=0;$nr=0; foreach($ni in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()){ " +
+                "  if($ni.OperationalStatus -ne 'Up'){continue}; if($ni.NetworkInterfaceType -eq 'Loopback'){continue}; " +
+                "  $st=$ni.GetIPStatistics(); $ns+=[long]$st.BytesSent; $nr+=[long]$st.BytesReceived }; " +
+                "$o.ns=$ns;$o.nr=$nr; " +
                 "$o|ConvertTo-Json -Depth 3 -Compress";
             string raw2 = SshRun(script, 60000);
             if (raw2.Length == 0) { return; }
@@ -581,6 +593,22 @@ public partial class MainWindow : Window
                     }
                 }
             }
+            // ★ 远端指标：用相邻快照算速率（首次只记基线，不产生假尖峰）
+            long at = Environment.TickCount64;
+            long cpuMs = long.TryParse(o["uc"]?.ToString(), out long uc) ? uc : -1;
+            long memB = long.TryParse(o["um"]?.ToString(), out long um) ? um : 0;
+            long ns2 = long.TryParse(o["ns"]?.ToString(), out long nb1) ? nb1 : 0;
+            long nr2 = long.TryParse(o["nr"]?.ToString(), out long nb2) ? nb2 : 0;
+            if (SnapPrevCpuMs >= 0 && cpuMs >= 0 && SnapPrevAtMs > 0)
+            {
+                double dtMs = Math.Max(500, at - SnapPrevAtMs);
+                SnapCpuPct = Math.Max(0, (cpuMs - SnapPrevCpuMs) / dtMs * 100.0);
+                SnapUpKbps = Math.Max(0, (ns2 - SnapPrevNetSent) / 1024.0 / (dtMs / 1000.0));
+                SnapDownKbps = Math.Max(0, (nr2 - SnapPrevNetRecv) / 1024.0 / (dtMs / 1000.0));
+                SnapHasRate = true;
+            }
+            SnapPrevCpuMs = cpuMs; SnapMemBytes = memB;
+            SnapPrevNetSent = ns2; SnapPrevNetRecv = nr2; SnapPrevAtMs = at;
             SnapshotProcs = int.TryParse(o["p"]?.ToString(), out int pc) ? pc : 0;
             SnapshotListen = o["l"]?.ToString() ?? "";
             SnapshotAtMs = now;
@@ -1525,6 +1553,8 @@ public partial class MainWindow : Window
     private DateTime lastSample = DateTime.Now;
     private TimeSpan lastCpuTime = TimeSpan.Zero;
     private long lastBytesSent, lastBytesRecv;
+    private bool lastBytesSeen;                       // ★ 首帧只记基线，避免"开机至今总字节"假尖峰
+    private long snapPushedAt;                        // 远端模式：已入图的那次快照时间（避免同一快照被重复压入）
 
     private static void Push(List<double> list, double v)
     {
@@ -1537,54 +1567,113 @@ public partial class MainWindow : Window
         var now = DateTime.Now;
         double secs = Math.Max(0.05, (now - lastSample).TotalSeconds);
 
-        double cpuVal = 0, memVal = 0;
-        var srv = System.Diagnostics.Process.GetProcessesByName("UnifierTSL").FirstOrDefault();
-        if (srv is not null)
+        // 口径标注（只在第一帧写一次）
+        if (samplesSeen == 0)
         {
             try
             {
-                srv.Refresh();
-                double cpu = (srv.TotalProcessorTime - lastCpuTime).TotalMilliseconds / (secs * 1000) * 100.0;
-                lastCpuTime = srv.TotalProcessorTime;
-                cpu = Math.Max(0, Math.Min(400, cpu));
-                Push(cpuHist, cpu);
-                CpuNow.Text = $"{cpu:F2}%";
-                cpuVal = cpu;
-                double gb = srv.PrivateMemorySize64 / 1073741824.0;
-                Push(memHist, gb);
-                MemNow.Text = $"{gb:F2} GB";
-                memVal = gb;
+                if (CpuTitle is not null) { CpuTitle.Text = UseRemote ? "CPU（远端 · 单核 %）" : "CPU 使用量（本机 · 单核 %）"; }
+                if (MemTitle is not null) { MemTitle.Text = UseRemote ? "内存（远端 · 私有）" : "内存使用量（本机 · 私有）"; }
+                if (NetTitle is not null) { NetTitle.Text = UseRemote ? "网络（远端网卡）" : "网络流量（本机全部网卡）"; }
             }
             catch { }
         }
 
-        long sent = 0, recv = 0;
-        try
+        double cpuVal = 0, memVal = 0, up = 0, down = 0;
+
+        if (UseRemote)
         {
-            foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+            // ★ 远端模式：数据来自「合并快照」（每 45 秒一次，不额外发 ssh）—— 监控的是被管的那台服务器。
+            //   旧实现用 Process.GetProcessesByName 读的是【本机】进程、网络是本机全部网卡合计 → 测错对象。
+            if (!SnapHasRate)
             {
-                if (ni.OperationalStatus != OperationalStatus.Up) { continue; }
-                var st = ni.GetIPStatistics();
-                sent += st.BytesSent;
-                recv += st.BytesReceived;
+                if (CpuNow is not null) { CpuNow.Text = "—"; }
+                if (MemNow is not null) { MemNow.Text = "—"; }
+                if (NetNow is not null) { NetNow.Text = "—"; }
+                lastSample = now;
+                return;                       // 还没有第二次快照 → 没有速率可算
             }
+            if (SnapPrevAtMs == snapPushedAt) { return; }   // 同一份快照不重复入图（图表间隔=快照间隔）
+            snapPushedAt = SnapPrevAtMs;
+
+            cpuVal = SnapCpuPct;
+            memVal = SnapMemBytes / 1073741824.0;
+            up = SnapUpKbps;
+            down = SnapDownKbps;
+            Push(cpuHist, cpuVal);
+            CpuNow.Text = $"{cpuVal:F2}%";
+            if (SnapMemBytes > 0) { Push(memHist, memVal); MemNow.Text = $"{memVal:F2} GB"; } else { MemNow.Text = "—"; }
+            Push(upHist, up); Push(downHist, down);
+            NetNow.Text = up >= 1024 || down >= 1024
+                ? $"↑ {up / 1024.0:F2}  ↓ {down / 1024.0:F2} MB/s"
+                : $"↑ {up:F2}  ↓ {down:F2} KB/s";
         }
-        catch { }
-        double up = Math.Max(0, (sent - lastBytesSent) / 1024.0 / secs);
-        double down = Math.Max(0, (recv - lastBytesRecv) / 1024.0 / secs);
-        lastBytesSent = sent; lastBytesRecv = recv;
-        Push(upHist, up); Push(downHist, down);
+        else
+        {
+            var srv = System.Diagnostics.Process.GetProcessesByName("UnifierTSL").FirstOrDefault();
+            if (srv is not null)
+            {
+                try
+                {
+                    srv.Refresh();
+                    // ★ 首帧只记基线：否则第一帧 = 该进程开机至今的总 CPU 时间 ÷ 秒数 → 假尖峰（曾把 Y 轴顶到 400%）
+                    if (samplesSeen > 0)
+                    {
+                        double cpu = (srv.TotalProcessorTime - lastCpuTime).TotalMilliseconds / (secs * 1000) * 100.0;
+                        cpuVal = Math.Max(0, Math.Min(400, cpu));
+                        Push(cpuHist, cpuVal);
+                    }
+                    lastCpuTime = srv.TotalProcessorTime;
+                    CpuNow.Text = $"{cpuVal:F2}%";
+                    memVal = srv.PrivateMemorySize64 / 1073741824.0;
+                    Push(memHist, memVal);
+                    MemNow.Text = $"{memVal:F2} GB";
+                }
+                catch { }
+            }
+            else
+            {
+                // 进程没了就显示 —（旧实现会一直留着上一次的读数，看着像还在跑）
+                CpuNow.Text = "—"; MemNow.Text = "—";
+                if (samplesSeen > 0) { Push(cpuHist, 0); }
+            }
+
+            long sent = 0, recv = 0;
+            try
+            {
+                foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus != OperationalStatus.Up) { continue; }
+                    if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) { continue; }   // 回环不计（避免隧道流量重复计）
+                    var st = ni.GetIPStatistics();
+                    sent += st.BytesSent; recv += st.BytesReceived;
+                }
+            }
+            catch { }
+            // ★ 首帧只记基线：否则第一帧 = 网卡开机至今的总字节 → 假尖峰（曾出现 18823250 这种天文数字）
+            if (lastBytesSeen && samplesSeen > 0)
+            {
+                up = Math.Max(0, (sent - lastBytesSent) / 1024.0 / secs);
+                down = Math.Max(0, (recv - lastBytesRecv) / 1024.0 / secs);
+                Push(upHist, up); Push(downHist, down);
+                NetNow.Text = $"↑ {up:F2}  ↓ {down:F2} KB/s";
+            }
+            else { NetNow.Text = "—"; }
+            lastBytesSent = sent; lastBytesRecv = recv; lastBytesSeen = true;
+        }
+
         timeHist.Add(now);
         if (timeHist.Count > MaxSamples) { timeHist.RemoveAt(0); }
-        NetNow.Text = $"↑ {up:F2}  ↓ {down:F2} KB/s";
-
+        samplesSeen++;
         lastSample = now;
+
         try { pluginHost?.RaiseMetricsSampled(new MetricsSample(cpuVal, memVal, up, down, now)); } catch { }
         if (pluginHost is not null && pluginHost.Metrics.Count > 0) { RefreshPluginMetrics(); }
-        // ★ 自检修复（卡顿主因）：三张图表原来每 2 秒无条件重绘，即使你在别的功能页 —— 每 2 秒一次
-        //   满核 0.3~0.5s 的突发就是它。只有控制台可见时才画。
+
+        // ★ 图表：控制台可见 且 窗口在前台 才重绘。
+        //   数值采样不受前台与否影响（所以仪表盘不会"冻结"），只有重绘被节流。
         double m1 = 0, m2 = 0, m3 = 0;
-        if (ConsoleView.IsVisible)
+        if (ConsoleView.IsVisible && IsActive)
         {
             m1 = DrawChart(CpuChart, [cpuHist], ["#0A84FF"]);
             m2 = DrawChart(MemChart, [memHist], ["#30D158"]);
@@ -1597,22 +1686,28 @@ public partial class MainWindow : Window
 
     private void UpdateAxes(TextBlock[] cy, TextBlock[] my, TextBlock[] ny, TextBlock[] cx, TextBlock[] mx, TextBlock[] nx, double m1, double m2, double m3)
     {
-        SetY(cy, m1, "F0");
-        SetY(my, m2, "F2");
-        SetY(ny, m3, "F2");
+        SetY(cy, m1, "cpu");
+        SetY(my, m2, "mem");
+        SetY(ny, m3, "net");
         SetX(cx); SetX(mx); SetX(nx);
     }
 
-    /// <summary>按量级选精度，避免长数字挤爆 Y 轴列。</summary>
-    private static string Fmt(double v)
-        => v >= 1000 ? v.ToString("F0") : v >= 100 ? v.ToString("F0") : v >= 10 ? v.ToString("F1") : v.ToString("F2");
+    /// <summary>Y 轴标签：带单位、短数字（避免出现 18823250 这种把轴挤爆的值）。</summary>
+    private static string FmtAxis(double v, string kind)
+    {
+        if (kind == "cpu") { return v.ToString("F0") + "%"; }
+        if (kind == "mem") { return v.ToString(v >= 10 ? "F1" : "F2") + " GB"; }
+        // net：≥1 MB/s 用 MB/s，否则 KB/s
+        if (v >= 1024) { double mb = v / 1024.0; return mb.ToString(mb >= 10 ? "F0" : "F1") + " MB/s"; }
+        return v.ToString(v >= 100 ? "F0" : v >= 10 ? "F1" : "F2") + " KB/s";
+    }
 
-    private static void SetY(TextBlock[] labels, double max, string fmt)
+    private static void SetY(TextBlock[] labels, double max, string kind)
     {
         double[] ratios = [1.0, 0.75, 0.5, 0.25];
         for (int i = 0; i < labels.Length && i < ratios.Length; i++)
         {
-            labels[i].Text = Fmt(max * ratios[i]);
+            labels[i].Text = FmtAxis(max * ratios[i], kind);
         }
     }
 
@@ -1635,6 +1730,8 @@ public partial class MainWindow : Window
         if (w < 12 || h < 12) { return 0; }
         double max = 0.0001;
         foreach (var s in series) { foreach (var v in s) { if (v > max) { max = v; } } }
+        // ★ 轴取"顺眼"刻度（1/2/5 × 10^n）：数字短、刻度整，避免天文数字把 Y 轴挤爆
+        double scale = NiceMax(max);
 
         // 网格线（4 条水平参考线，模仿示例卡片）
         for (int gi = 0; gi <= 4; gi++)
@@ -1657,7 +1754,7 @@ public partial class MainWindow : Window
             for (int i = 0; i < s.Count; i++)
             {
                 double x = 1 + i * (w - 2) / (MaxSamples - 1);
-                double y = h - 2 - (s[i] / max) * (h - 8);
+                double y = h - 2 - (s[i] / scale) * (h - 8);
                 pts.Add(new Avalonia.Point(x, y));
             }
             var brush = new SolidColorBrush(Color.Parse(colors[si]));
@@ -1674,7 +1771,18 @@ public partial class MainWindow : Window
                 StrokeJoin = Avalonia.Media.PenLineJoin.Round,
             });
         }
-        return max;
+        return scale;
+    }
+
+    /// <summary>把轴最大值抬到 1/2/5 × 10^n 的"顺眼"刻度。</summary>
+    private static double NiceMax(double v)
+    {
+        if (v <= 0) { return 1; }
+        double exp = Math.Floor(Math.Log10(v));
+        double pow = Math.Pow(10, exp);
+        double f = v / pow;
+        double nf = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10;
+        return nf * pow;
     }
 
     // ===== 内存压缩（移植自 TSManager 的"空服压缩工作集"）=====

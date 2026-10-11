@@ -84,7 +84,7 @@
           <Border Grid.Column="0" Background="#17171A" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" Padding="13,10" Margin="0,0,5,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Grid.Column="0" Text="CPU 使用量" FontSize="12" FontWeight="SemiBold" Foreground="#E8E8EC"/>
+                <TextBlock Grid.Column="0" x:Name="CpuTitle" Text="CPU 使用量" FontSize="12" FontWeight="SemiBold" Foreground="#E8E8EC"/>
                 <TextBlock Grid.Column="1" x:Name="CpuNow" Text="—" FontSize="11" Foreground="#9A9AA0"/>
               </Grid>
               <Grid ColumnDefinitions="Auto,*" Margin="0,8,0,0">
@@ -108,7 +108,7 @@
           <Border Grid.Column="1" Background="#17171A" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" Padding="13,10" Margin="5,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Grid.Column="0" Text="内存使用量" FontSize="12" FontWeight="SemiBold" Foreground="#E8E8EC"/>
+                <TextBlock Grid.Column="0" x:Name="MemTitle" Text="内存使用量" FontSize="12" FontWeight="SemiBold" Foreground="#E8E8EC"/>
                 <TextBlock Grid.Column="1" x:Name="MemNow" Text="—" FontSize="11" Foreground="#9A9AA0"/>
               </Grid>
               <Grid ColumnDefinitions="Auto,*" Margin="0,8,0,0">
@@ -132,7 +132,7 @@
           <Border Grid.Column="2" Background="#17171A" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" Padding="13,10" Margin="5,0,0,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Grid.Column="0" Text="网络流量" FontSize="12" FontWeight="SemiBold" Foreground="#E8E8EC"/>
+                <TextBlock Grid.Column="0" x:Name="NetTitle" Text="网络流量" FontSize="12" FontWeight="SemiBold" Foreground="#E8E8EC"/>
                 <TextBlock Grid.Column="1" x:Name="NetNow" Text="—" FontSize="11" Foreground="#9A9AA0"/>
               </Grid>
               <Grid ColumnDefinitions="Auto,*" Margin="0,8,0,0">
