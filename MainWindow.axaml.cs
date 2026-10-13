@@ -459,6 +459,26 @@ public partial class MainWindow : Window
         }
     }
 
+    private static IEnvironmentInfo? _env;
+
+    /// <summary>环境路径与文案；连接配置重载（本机/远端切换或目录变化）时自动重建。</summary>
+    private static IEnvironmentInfo Env
+    {
+        get
+        {
+            string root = UseRemote ? RemoteDir : LocalDir;
+            var e = _env;
+            if (e is null || e.IsRemote != UseRemote || e.FileRoot != root)
+            {
+                e = UseRemote
+                    ? new RemoteEnvironmentInfo(root, MapRemoteDir, MapCacheDir)
+                    : new LocalEnvironmentInfo(root, MapLocalDir);
+                _env = e;
+            }
+            return e;
+        }
+    }
+
     /// <summary>把既有 SshRun/scp 暴露给远端文件后端；传输的进度与取消仍沿用既有实现。</summary>
     private sealed class UtslSshTransport : ISshTransport
     {
@@ -953,7 +973,7 @@ public partial class MainWindow : Window
         // 6) 地图图片与缩略图
         Run("地图图片", () =>
         {
-            string mapDir = UseRemote ? MapRemoteDir : MapLocalDir;
+            string mapDir = Env.MapDir;
             var pngs = FsList(mapDir).Where(e => !e.IsDir && e.Name.EndsWith(".png", StringComparison.OrdinalIgnoreCase)).ToList();
             if (pngs.Count == 0) { return (false, mapDir + " 下没有 png（可用 GenerateMap 插件生成）"); }
             int thumbs = pngs.Count(e => e.Name.EndsWith(".thumb.png", StringComparison.OrdinalIgnoreCase));
@@ -2808,7 +2828,7 @@ public partial class MainWindow : Window
             cfgEdgePath = Path.Combine(FsRoot, "config", "EdgeStitch", "EdgeStitch.json");
             launcherRows.Clear(); edgeRows.Clear();
 
-            ConfigHost.Children.Add(Section("启动器 config.json · 世界列表" + (UseRemote ? "（远端 " + FsRoot + "）" : "（本机 " + FsRoot + "）")));
+            ConfigHost.Children.Add(Section("启动器 config.json · 世界列表（" + Env.Describe(FsRoot) + "）"));
             ConfigHost.Children.Add(new TextBlock { Text = "⚠ 这些改动【在下次整链重置时生效】（重置会重新生成源地图并按此列表切分）", FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#E3B341")) });
             cfgLauncher = ParseJsonObj(await Task.Run(() => FsReadText(cfgLauncherPath)));   // ★ 解析失败不再抛异常（视图已切过去）
             ConfigHost.Children.Clear();   // 数据到手才重建
@@ -3335,16 +3355,8 @@ public partial class MainWindow : Window
     /// <summary>地图 PNG 列表：本机直接枚举；远端用 SSH 列目录（下载交给 PickMapFile）。</summary>
     private static List<(string Name, DateTime Mtime)> ListMapPng()
     {
-        if (!UseRemote)
-        {
-            var di = new DirectoryInfo(MapLocalDir);
-            if (!di.Exists) { return new(); }
-            return di.GetFiles("*.png").Where(x => !x.Name.EndsWith(".thumb.png", StringComparison.OrdinalIgnoreCase))
-                       .Select(x => (x.Name, x.LastWriteTime)).ToList();
-        }
-        return FsList(MapRemoteDir)
-            // ★ 审查发现的 bug：缩略图（*.thumb.png）原来也被当成"地图"，
-            //   于是会被再生成缩略图 → .thumb.png.thumb.png 递归叠加，还污染下拉列表与「载入原图」。
+        // 缩略图（*.thumb.png）不能当"地图"，否则会被再生成缩略图 → 递归叠加并污染下拉列表
+        return FsList(Env.MapDir)
             .Where(e => !e.IsDir && e.Name.EndsWith(".png", StringComparison.OrdinalIgnoreCase)
                      && !e.Name.EndsWith(".thumb.png", StringComparison.OrdinalIgnoreCase))
             .Select(e => (e.Name, e.Mtime)).ToList();
@@ -3391,10 +3403,10 @@ public partial class MainWindow : Window
         if (chosen is null) { return null; }
         string remoteFull = Path.Combine(MapRemoteDir, chosen);
         // ★ 默认走缩略图：远端生成一次（宽 2048，约 0.6MB），之后本地缓存复用；点「载入原图」才拉 9MB 原图
-        bool full = !UseRemote || mapFullWanted;
+        bool full = !Env.IsRemote || mapFullWanted;
         string cacheName = full ? chosen : (chosen + ".thumb.png");
-        string localPath = Path.Combine(UseRemote ? MapCacheDir : MapLocalDir, cacheName);
-        if (UseRemote)
+        string localPath = Path.Combine(Env.MapCacheDir, cacheName);
+        if (Env.IsRemote)
         {
             Directory.CreateDirectory(MapCacheDir);
             if (full)
@@ -3416,11 +3428,11 @@ public partial class MainWindow : Window
     {
         try
         {
-            mapDirLocal = UseRemote ? MapCacheDir : MapLocalDir;
+            mapDirLocal = Env.MapCacheDir;
             MapInfo.Text = "读取中…";
             // ★ 远端模式会按需 scp 下载地图（可能几 MB），放后台线程
             var f = await Task.Run(() => PickMapFile());
-            if (f is null) { MapInfo.Text = (UseRemote ? "远端 " + MapRemoteDir : MapLocalDir) + " 里没有该地图的图片（远端模式会自动下载到本地缓存）"; return; }
+            if (f is null) { MapInfo.Text = Env.Describe(Env.MapDir) + " 里没有该地图的图片（远端模式会自动下载到本地缓存）"; return; }
             if (MapImage.Source is IDisposable old) { old.Dispose(); }
             // ★ 内存优化：按上限宽解码（11958 宽全解码 = 115MB 位图 ✗）
             //   限制到 4096 → 4096×822×4 ≈ 13MB ✓ 内存降 9 倍 ✓ 视觉上 1:1 会略糊但可接受
