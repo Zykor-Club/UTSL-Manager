@@ -7,6 +7,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
+using UTSLManager.Backends;
 using UTSLManager.Plugins;
 
 namespace UTSLManager;
@@ -439,8 +440,45 @@ public partial class MainWindow : Window
         return "#B9B9C0";
     }
 
-    // ===== 统一文件访问：本机模式直接读盘；远端模式走 SSH（列表/读/写/下载/改名）=====
-    private static string FsRoot => UseRemote ? RemoteDir : LocalDir;
+    // ===== 统一文件访问：本机直连 / 远端 SSH，统一由 IFileBackend 提供（本文件不再分叉）=====
+    private static IFileBackend? _fileBackend;
+
+    /// <summary>连接配置重载（本机/远端切换或根目录变化）时自动重建后端。</summary>
+    private static IFileBackend FileBackend
+    {
+        get
+        {
+            string root = UseRemote ? RemoteDir : LocalDir;
+            var b = _fileBackend;
+            if (b is null || b.IsRemote != UseRemote || b.Root != root)
+            {
+                b = new CachedFileBackend(UseRemote ? new RemoteFileBackend(new UtslSshTransport(), root) : new LocalFileBackend(root));
+                _fileBackend = b;
+            }
+            return b;
+        }
+    }
+
+    /// <summary>把既有 SshRun/scp 暴露给远端文件后端；传输的进度与取消仍沿用既有实现。</summary>
+    private sealed class UtslSshTransport : ISshTransport
+    {
+        public string Host => SshHost;
+        public int Port => SshPort;
+        public string User => SshUser;
+        public string KeyPath => SshKey;
+        public string Run(string psScript, int timeoutMs = 30000) => SshRun(psScript, timeoutMs);
+        public bool CopyToRemote(string localPath, string remotePath, Action<string>? progress = null, Func<bool>? cancelled = null)
+            => FsUpload(localPath, remotePath);
+        public bool CopyFromRemote(string remotePath, string localPath, long knownTotal = 0, Action<string>? progress = null, Func<bool>? cancelled = null)
+            => FsDownload(remotePath, localPath, knownTotal);
+    }
+
+    // 短 TTL 缓存：文件后端有自己的缓存（CachedFileBackend）；这一份仍供其它读取路径使用
+    private sealed class FsMemoEntry { public string? Text; public List<FsEntry>? List; public bool? Bool; public long AtMs; }
+    private static readonly Dictionary<string, FsMemoEntry> FsMemo = new();
+    private const int FsMemoTtlMs = 90000;
+    private static string FsKey(string op, string path) => op + "|" + path.ToLowerInvariant();
+
     private static string Q(string s) => s.Replace("'", "''");
     /// <summary>C:\a\b → /C:/a/b（Windows OpenSSH 的 scp 远端路径必须带前导斜杠）</summary>
     private static string ScpPath(string winPath)
@@ -448,14 +486,6 @@ public partial class MainWindow : Window
         string p = winPath.Replace('\\', '/');
         return (p.Length > 1 && p[1] == ':') ? "/" + p : p;
     }
-    private sealed record FsEntry(string Name, bool IsDir, long Size, DateTime Mtime);
-
-    // ===== 短 TTL 缓存（5 秒）：重复访问同一路径瞬时返回；任何写操作清空（见 FsInvalidate）=====
-    private sealed class FsMemoEntry { public string? Text; public List<FsEntry>? List; public bool? Bool; public long AtMs; }
-    private static readonly Dictionary<string, FsMemoEntry> FsMemo = new();
-    private const int FsMemoTtlMs = 90000;   // ★ 远端每次读取约 1.5 秒 → 缓存 90 秒，来回切页面零等待
-    private static void FsInvalidate() { lock (FsMemo) { FsMemo.Clear(); } }
-    private static string FsKey(string op, string path) => op + "|" + path.ToLowerInvariant();
 
     /// <summary>稳健 JSON 解析：空/坏内容返回 null 而不抛异常（避免把整个视图的后续代码一起打断）。</summary>
     private static JsonObject? ParseJsonObj(string text)
@@ -672,110 +702,21 @@ public partial class MainWindow : Window
         });
     }
 
-    private static List<FsEntry> FsList(string dir)
+    private static string FsRoot => FileBackend.Root;
+
+    private static void FsInvalidate()
     {
-        string key = FsKey("list", dir);
-        lock (FsMemo) { if (FsMemo.TryGetValue(key, out var m) && m.List is not null && Environment.TickCount64 - m.AtMs < FsMemoTtlMs) { return m.List; } }
-        var list = new List<FsEntry>();
-        if (!UseRemote)
-        {
-            if (!Directory.Exists(dir)) { return list; }
-            foreach (string d in Directory.GetDirectories(dir)) { var di = new DirectoryInfo(d); list.Add(new FsEntry(di.Name, true, 0, di.LastWriteTime)); }
-            foreach (string fn in Directory.GetFiles(dir)) { var fi = new FileInfo(fn); list.Add(new FsEntry(fi.Name, false, fi.Length, fi.LastWriteTime)); }
-            lock (FsMemo) { FsMemo[key] = new FsMemoEntry { List = list, AtMs = Environment.TickCount64 }; }
-            return list;
-        }
-        string outp = SshRun("$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
-            "Get-ChildItem -LiteralPath '" + Q(dir) + "' -ErrorAction SilentlyContinue | ForEach-Object { $(if ($_.PSIsContainer) { 'D' } else { 'F' }) + '|' + $_.Length + '|' + $_.LastWriteTime.ToString('o') + '|' + $_.Name }", 25000);
-        foreach (string ln in outp.Split('\n'))
-        {
-            var parts = ln.Trim().Split('|', 4);
-            if (parts.Length < 4) { continue; }
-            long size = long.TryParse(parts[1], out long s2) ? s2 : 0;
-            DateTime mt = DateTime.TryParse(parts[2], out DateTime m2) ? m2 : DateTime.MinValue;
-            list.Add(new FsEntry(parts[3], parts[0] == "D", size, mt));
-        }
-        lock (FsMemo) { FsMemo[key] = new FsMemoEntry { List = list, AtMs = Environment.TickCount64 }; }
-        return list;
+        lock (FsMemo) { FsMemo.Clear(); }
+        if (_fileBackend is CachedFileBackend c) { c.InvalidateCache(); }
     }
 
-    private static bool FsExists(string path)
-    {
-        string key = FsKey("exists", path);
-        lock (FsMemo) { if (FsMemo.TryGetValue(key, out var m) && m.Bool is bool bv && Environment.TickCount64 - m.AtMs < FsMemoTtlMs) { return bv; } }
-        if (!UseRemote)
-        {
-            bool lb = File.Exists(path) || Directory.Exists(path);
-            lock (FsMemo) { FsMemo[key] = new FsMemoEntry { Bool = lb, AtMs = Environment.TickCount64 }; }
-            return lb;
-        }
-        string r = SshRun("$ProgressPreference='SilentlyContinue'; if (Test-Path -LiteralPath '" + Q(path) + "') { 'YES' } else { 'NO' }", 20000);
-        bool rb = r.Contains("YES");
-        lock (FsMemo) { FsMemo[key] = new FsMemoEntry { Bool = rb, AtMs = Environment.TickCount64 }; }
-        return rb;
-    }
-
-    private static string FsReadText(string path)
-    {
-        string key = FsKey("read", path);
-        lock (FsMemo) { if (FsMemo.TryGetValue(key, out var m) && m.Text is not null && Environment.TickCount64 - m.AtMs < FsMemoTtlMs) { return m.Text; } }
-        if (!UseRemote)
-        {
-            string lt = File.Exists(path) ? File.ReadAllText(path) : "";
-            lock (FsMemo) { FsMemo[key] = new FsMemoEntry { Text = lt, AtMs = Environment.TickCount64 }; }
-            return lt;
-        }
-        string b64 = SshRun("$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
-            "if (Test-Path -LiteralPath '" + Q(path) + "') { [Convert]::ToBase64String([IO.File]::ReadAllBytes('" + Q(path) + "')) }", 25000).Trim();
-        if (b64.Length == 0) { return ""; }
-        string rt;
-        try { rt = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(b64)); } catch { rt = ""; }
-        lock (FsMemo) { FsMemo[key] = new FsMemoEntry { Text = rt, AtMs = Environment.TickCount64 }; }
-        return rt;
-    }
-
-    private static bool FsWriteText(string path, string text)
-    {
-        FsInvalidate();
-        if (!UseRemote) { File.WriteAllText(path, text); return true; }
-        string b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
-        const int CH = 1400;   // EncodedCommand 命令行有长度上限，分块追加
-        // ★ 原子写（移植面板的"临时文件 → 原子 rename"）：先写 .tmp，全部写完再改名覆盖，
-        //   避免中途失败/断电留下半个配置文件（原实现直接原地覆写目标文件）。
-        string tmp = path + ".tmp";
-        SshRun("$ProgressPreference='SilentlyContinue'; [IO.File]::WriteAllBytes('" + Q(tmp) + "', [Convert]::FromBase64String('" + b64.Substring(0, Math.Min(CH, b64.Length)) + "'))", 30000);
-        for (int i = CH; i < b64.Length; i += CH)
-        {
-            string chunk = b64.Substring(i, Math.Min(CH, b64.Length - i));
-            SshRun("$ProgressPreference='SilentlyContinue'; $p='" + Q(tmp) + "'; $b=[IO.File]::ReadAllBytes($p); [IO.File]::WriteAllBytes($p, $b + [Convert]::FromBase64String('" + chunk + "'))", 30000);
-        }
-        SshRun("$ProgressPreference='SilentlyContinue'; Move-Item -LiteralPath '" + Q(tmp) + "' -Destination '" + Q(path) + "' -Force; 'ok'", 30000);
-        return true;
-    }
-
-    private static bool FsMkdir(string dir)
-    {
-        FsInvalidate();
-        if (!UseRemote) { Directory.CreateDirectory(dir); return true; }
-        SshRun("$ProgressPreference='SilentlyContinue'; New-Item -ItemType Directory -Force -Path '" + Q(dir) + "' | Out-Null; 'ok'", 20000);
-        return true;
-    }
-
-    private static bool FsRename(string from, string to)
-    {
-        FsInvalidate();
-        if (!UseRemote) { File.Move(from, to); return true; }
-        SshRun("$ProgressPreference='SilentlyContinue'; Move-Item -LiteralPath '" + Q(from) + "' -Destination '" + Q(to) + "'; 'ok'", 20000);
-        return true;
-    }
-
-    private static bool FsDelete(string path)
-    {
-        FsInvalidate();
-        if (!UseRemote) { try { if (Directory.Exists(path)) { Directory.Delete(path, true); } else { File.Delete(path); } return true; } catch { return false; } }
-        SshRun("$ProgressPreference='SilentlyContinue'; Remove-Item -LiteralPath '" + Q(path) + "' -Recurse -Force -ErrorAction SilentlyContinue; 'ok'", 30000);
-        return true;
-    }
+    private static List<FsEntry> FsList(string dir) => FileBackend.List(dir).ToList();
+    private static bool FsExists(string path) => FileBackend.Exists(path);
+    private static string FsReadText(string path) => FileBackend.ReadText(path);
+    private static bool FsWriteText(string path, string text) => FileBackend.WriteText(path, text);
+    private static bool FsMkdir(string dir) => FileBackend.CreateDirectory(dir);
+    private static bool FsRename(string from, string to) => FileBackend.Rename(from, to);
+    private static bool FsDelete(string path) => FileBackend.Delete(path);
 
     /// <summary>本地 → 远端（scp；远端路径用 /C:/ 形式）</summary>
     private static bool FsUpload(string localPath, string remotePath)
@@ -1012,8 +953,9 @@ public partial class MainWindow : Window
         // 6) 地图图片与缩略图
         Run("地图图片", () =>
         {
-            var pngs = FsList(MapRemoteDir).Where(e => !e.IsDir && e.Name.EndsWith(".png", StringComparison.OrdinalIgnoreCase)).ToList();
-            if (pngs.Count == 0) { return (false, MapRemoteDir + " 下没有 png（可用 GenerateMap 插件生成）"); }
+            string mapDir = UseRemote ? MapRemoteDir : MapLocalDir;
+            var pngs = FsList(mapDir).Where(e => !e.IsDir && e.Name.EndsWith(".png", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (pngs.Count == 0) { return (false, mapDir + " 下没有 png（可用 GenerateMap 插件生成）"); }
             int thumbs = pngs.Count(e => e.Name.EndsWith(".thumb.png", StringComparison.OrdinalIgnoreCase));
             return (true, $"{pngs.Count - thumbs} 张原图 / {thumbs} 张缩略图（缩略图命中则地图秒开）");
         });
@@ -1049,11 +991,11 @@ public partial class MainWindow : Window
             string remote = Path.Combine(RemoteDir, "selfcheck_probe.bin");
             try
             {
-                if (!FsUpload(up, remote)) { return (false, "上传失败"); }
+                if (!FileBackend.Upload(up, remote)) { return (false, "上传失败"); }
                 long rsize = FsList(RemoteDir).Where(e => e.Name == "selfcheck_probe.bin").Select(e => e.Size).FirstOrDefault();
                 string back = Path.Combine(Path.GetTempPath(), "utsl_sc_down.bin");
                 if (File.Exists(back)) { File.Delete(back); }
-                bool down = FsDownload(remote, back);
+                bool down = FileBackend.Download(remote, back);
                 bool same = down && File.Exists(back) && File.ReadAllBytes(back).SequenceEqual(payload);
                 FsDelete(remote);
                 bool gone = !FsList(RemoteDir).Any(e => e.Name == "selfcheck_probe.bin");
@@ -1076,7 +1018,7 @@ public partial class MainWindow : Window
             string local = Path.Combine(MapCacheDir, "selfcheck_full.png");
             Directory.CreateDirectory(MapCacheDir);
             if (File.Exists(local)) { File.Delete(local); }
-            bool ok = FsDownload(Path.Combine(dir, png.Name), local);
+            bool ok = FileBackend.Download(Path.Combine(dir, png.Name), local);
             long sz = ok && File.Exists(local) ? new FileInfo(local).Length : 0;
             if (ok && sz == png.Size) { try { File.Delete(local); } catch { } }
             return (ok && sz == png.Size, $"{png.Name}：{png.Size / 1048576.0:F2} MB，下载 {(ok ? "成功" : "失败")}，大小{(sz == png.Size ? "一致" : "不一致")}");
@@ -1933,7 +1875,7 @@ public partial class MainWindow : Window
                 Directory.CreateDirectory(localDir);
                 string localZip = Path.Combine(localDir, "backup_" + stamp + ".zip");
                 ERR("远端打包完成，正在下载到本机 backup/ …");
-                bool ok = await Task.Run(() => FsDownload(remoteZip, localZip));
+                bool ok = await Task.Run(() => FileBackend.Download(remoteZip, localZip));
                 ERR(ok
                     ? ("远端备份完成并已下载: " + Path.GetFileName(localZip))
                     : ("远端备份已生成（" + remoteZip + "），但下载到本机失败（文件仍留在远端）"));
@@ -2059,8 +2001,8 @@ public partial class MainWindow : Window
                 CreateDirectory = p => FsMkdir(p),
                 Rename = (from, to) => FsRename(from, to),
                 Delete = p => FsDelete(p),
-                Upload = (local, remote) => FsUpload(local, remote),
-                Download = (remote, local) => FsDownload(remote, local),
+                Upload = (local, remote) => FileBackend.Upload(local, remote),
+                Download = (remote, local) => FileBackend.Download(remote, local),
                 InvalidateFileCache = FsInvalidate,
                 RunCommand = (ps, ms) => SshRun(ps, ms),
                 AfterLoad = RebuildPluginMenu,
@@ -3050,7 +2992,6 @@ public partial class MainWindow : Window
     private string fileCwd = "";
 
 
-    private static bool CopyLocal(string src, string dst) { try { File.Copy(src, dst, true); return true; } catch { return false; } }
 
     private void OnFileCancelTransfer(object? sender, RoutedEventArgs e) { CancelTransfer(); ERR("已请求取消传输…"); }
 
@@ -3155,7 +3096,7 @@ public partial class MainWindow : Window
                 }
             }
             ERR("正在下载 " + name + " …（进度见下方状态栏，可随时取消）");
-            bool ok = await Task.Run(() => UseRemote ? FsDownload(full, local, knownSize) : CopyLocal(full, local));
+            bool ok = await Task.Run(() => FileBackend.Download(full, local, knownSize));
             ERR(ok ? ("已下载到 " + local) : ("下载失败: " + name));
         }
         catch (Exception ex) { ERR("下载失败: " + ex.Message); }
@@ -3192,7 +3133,7 @@ public partial class MainWindow : Window
             string name = Path.GetFileName(local);
             string remote = Path.Combine(fileCwd, name);
             ERR("正在上传 " + name + " …");
-            bool ok = await Task.Run(() => UseRemote ? FsUpload(local, remote) : CopyLocal(local, remote));
+            bool ok = await Task.Run(() => FileBackend.Upload(local, remote));
             ERR(ok ? ("已上传 " + name) : ("上传失败: " + name));
             ShowFiles();
         }
@@ -3250,7 +3191,7 @@ public partial class MainWindow : Window
             string root2 = FsRoot;
             string rel = fileCwd.StartsWith(root2, StringComparison.OrdinalIgnoreCase)
                 ? fileCwd.Substring(root2.Length).TrimStart('\\', '/') : fileCwd;
-            FilePathText.Text = (UseRemote ? "远端 " + root2 : root2) + "\\" + rel;
+            FilePathText.Text = (FileBackend.IsRemote ? "远端 " + root2 : root2) + "\\" + rel;
             // ★ 远端模式下 FsList 是 SSH 调用，必须离开 UI 线程，否则窗口会「未响应」
             var entries = await Task.Run(() => FsList(fileCwd));
             PluginList.Children.Clear();   // 数据到手才替换
@@ -3458,13 +3399,13 @@ public partial class MainWindow : Window
             Directory.CreateDirectory(MapCacheDir);
             if (full)
             {
-                if (!File.Exists(localPath) && !FsDownload(remoteFull, localPath)) { return null; }
+                if (!File.Exists(localPath) && !FileBackend.Download(remoteFull, localPath)) { return null; }
             }
             else
             {
                 string r = EnsureRemoteThumb(remoteFull);
-                if (r.Contains("ok")) { FsDownload(remoteFull + ".thumb.png", localPath); }
-                else if (!FsDownload(remoteFull, localPath)) { return null; }   // 缩略图生成失败 → 回退原图
+                if (r.Contains("ok")) { FileBackend.Download(remoteFull + ".thumb.png", localPath); }
+                else if (!FileBackend.Download(remoteFull, localPath)) { return null; }   // 缩略图生成失败 → 回退原图
             }
         }
         var fi = new FileInfo(localPath);
