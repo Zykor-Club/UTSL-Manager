@@ -340,45 +340,27 @@ public partial class MainWindow : Window
                     int left = (int)((watchdogProtectUntilMs - Environment.TickCount64) / 1000);
                     ERR($"看门狗：进程不在，但仍在启动/换图保护窗口内（剩余约 {left} 秒），暂不自动重启");
                 }
-                else if (UseRemote && TargetIsLocal == false)
-                {
-                    // ★ 远端也能自动恢复了（以前只警告不重启；现在启停链路已打通）
-                    watchdogFailures++;
-                    if (watchdogFailures >= 3)
-                    {
-                        ChkWatchdog!.IsChecked = false;
-                        watchdogFailures = 0;
-                        ERR("⚠ 看门狗熔断：连续 3 次远端自动重启后进程仍未存活，已停止重试（请手动检查）");
-                    }
-                    else
-                    {
-                        ERR($"看门狗：远端服务端进程消失，正在自动重启…（第 {watchdogFailures}/3 次）");
-                        ProtectWatchdog(600, "watchdog-remote");
-                        _ = Task.Run(() =>
-                        {
-                            try
-                            {
-                                string r = SshRun(RemoteStartScript(), 60000);
-                                Dispatcher.UIThread.Post(() => ERR("看门狗：远端重启指令已下发"));
-                            }
-                            catch (Exception ex) { Dispatcher.UIThread.Post(() => ERR("看门狗：远端重启失败 " + ex.Message)); }
-                        });
-                    }
-                }
                 else
                 {
+                    // 看门狗只决定"要不要重启"（保护窗口与熔断）；重启动作交给进程后端
                     watchdogFailures++;
                     if (watchdogFailures >= 3)
                     {
-                        // 连续 3 次拉起失败 → 熔断：停止重试并告警（移植自 TSManager 的看门狗策略）
                         ChkWatchdog!.IsChecked = false;
                         watchdogFailures = 0;
-                        ERR("⚠ 看门狗熔断：连续 3 次自动重启后服务端仍未存活，已停止重试（请手动检查并发起）");
+                        ERR("⚠ 看门狗熔断：连续 3 次自动重启后服务端仍未存活，已停止重试（请手动检查）");
                     }
                     else
                     {
-                        ERR($"看门狗：检测到服务端退出，正在自动重启…（第 {watchdogFailures}/3 次）");
-                        OnStartServer(null, new RoutedEventArgs());
+                        ERR(ProcessBackend.IsRemote
+                            ? $"看门狗：远端服务端进程消失，正在自动重启…（第 {watchdogFailures}/3 次）"
+                            : $"看门狗：检测到服务端退出，正在自动重启…（第 {watchdogFailures}/3 次）");
+                        ProtectWatchdog(600, "watchdog");
+                        _ = Task.Run(async () =>
+                        {
+                            ProcessResult r = await ProcessBackend.StartAsync();
+                            if (!r.Ok) { Dispatcher.UIThread.Post(() => ERR("看门狗：" + r.Message)); }
+                        });
                     }
                 }
             }
@@ -456,6 +438,25 @@ public partial class MainWindow : Window
                 _fileBackend = b;
             }
             return b;
+        }
+    }
+
+    private static IProcessBackend? _proc;
+
+    /// <summary>服务端进程操作；本机/远端切换时自动重建。</summary>
+    private static IProcessBackend ProcessBackend
+    {
+        get
+        {
+            var p = _proc;
+            if (p is null || p.IsRemote != UseRemote)
+            {
+                p = UseRemote
+                    ? new RemoteProcessBackend(new UtslSshTransport(), RemoteStartScript, RemoteStopScript)
+                    : new LocalProcessBackend(ServerExe, ServerDir);
+                _proc = p;
+            }
+            return p;
         }
     }
 
@@ -1406,7 +1407,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>远端启动脚本：先清旧进程，再用 WMI 创建「控制台启动器」（脱离 SSH 会话，断开不会被回收）。</summary>
-    private string RemoteStartScript()
+    private static string RemoteStartScript()
     {
         string cmd = RemoteDotnet + " " + RemoteLauncher + " " + RemoteDir + " " + RemoteDir + "\\UnifierTSL.exe -joinserver first -logmode txt";
         return "$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
@@ -1827,45 +1828,13 @@ public partial class MainWindow : Window
     }
 
     // ===== 内存压缩（移植自 TSManager 的"空服压缩工作集"）=====
-    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool SetProcessWorkingSetSize(IntPtr hProcess, IntPtr min, IntPtr max);
 
     private async void OnTrimMemory(object? sender, RoutedEventArgs e)
     {
-        if (UseRemote)
-        {
-            // ★ 远端模式：要压缩的是【远端】服务端的工作集。原实现读本机进程 —— 在远端模式下毫无意义
-            //   （本机根本没有被管的那个进程），这正是"没定向到远端"的典型遗漏。
-            try
-            {
-                ERR("正在压缩远端服务端的工作集…");
-                string ps = @"$sig='[DllImport(""psapi.dll"")] public static extern bool EmptyWorkingSet(IntPtr hProcess);'; " +
-                            "$t=Add-Type -MemberDefinition $sig -Name E -Namespace W -PassThru; $o=@(); " +
-                            "foreach($p in Get-Process UnifierTSL -ErrorAction SilentlyContinue){ $b=$p.WorkingSet64; " +
-                            "$null=$t::EmptyWorkingSet($p.Handle); Start-Sleep -Milliseconds 250; $p.Refresh(); " +
-                            "$o += ([string][math]::Round($b/1MB) + ' -> ' + [string][math]::Round($p.WorkingSet64/1MB) + ' MB') }; " +
-                            "if($o.Count -eq 0){'NORUN'} else {$o -join ' ; '}";
-                string r = await Task.Run(() => SshRun(ps, 90000));
-                if (r.Trim() == "NORUN") { ERR("远端服务端没在运行"); return; }
-                ERR("远端工作集已压缩: " + r.Trim() + " —— 注意：私有提交(commit)不变 ✗ 世界尺寸上限不会因此提高 ✓ 真正用途是【重操作前腾物理内存】✓");
-            }
-            catch (Exception ex) { ERR("远端压缩失败: " + ex.Message); }
-            return;
-        }
         try
         {
-            var list = System.Diagnostics.Process.GetProcessesByName("UnifierTSL");
-            if (list.Length == 0) { ERR("服务端没在运行"); return; }
-            var parts = new List<string>();
-            foreach (var pr in list)
-            {
-                long before = pr.WorkingSet64;
-                SetProcessWorkingSetSize(pr.Handle, new IntPtr(-1), new IntPtr(-1));
-                pr.Refresh();
-                long after = pr.WorkingSet64;
-                parts.Add($"{before / 1048576} → {after / 1048576} MB");
-            }
-            ERR("已把物理内存标记为可回收: " + string.Join("；", parts) + " —— 注意：私有提交(commit)不变 ✗ 世界尺寸上限不会因此提高 ✓ 真正用途是【重操作前腾物理内存】✓");
+            ERR("正在压缩服务端工作集…");
+            ERR(await Task.Run(() => ProcessBackend.TrimMemory()));
         }
         catch (Exception ex) { ERR("压缩失败: " + ex.Message); }
     }
@@ -1937,42 +1906,7 @@ public partial class MainWindow : Window
 
     // ===== 隐藏 UTSL 子世界控制台窗口（用户反馈：不想看到弹出的三个悬浮窗）=====
     //   背景：UTSL 为每个子世界创建独立控制台 ✗ 管理器无法阻止它创建 ✗
-    //   实测把子世界改成 Headless 会让服务端 20~40 秒后崩溃 ✗（CreateSurfaceConsole 内部机制）
-    //   → 折中方案：枚举 UTSL 进程的窗口并隐藏 ✓ 效果上等于"不弹" ✓
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool IsWindowVisible(IntPtr hWnd);
-
-    private static int HideUtslWindows(bool hide)
-    {
-        // ★ 远端模式：被管的是远端服务端（headless，无窗口）；绝不去动本机可能存在的 UnifierTSL 窗口
-        if (UseRemote) { return 0; }
-        int n = 0;
-        try
-        {
-            var procs = System.Diagnostics.Process.GetProcessesByName("UnifierTSL");
-            var pids = procs.Select(p => (uint)p.Id).ToHashSet();
-            if (pids.Count == 0) { return 0; }
-            EnumWindows((h, _) =>
-            {
-                GetWindowThreadProcessId(h, out uint pid);
-                if (pids.Contains(pid) && IsWindowVisible(h))
-                {
-                    ShowWindow(h, hide ? 0 : 9);   // 0=SW_HIDE  9=SW_RESTORE
-                    n++;
-                }
-                return true;
-            }, IntPtr.Zero);
-        }
-        catch { }
-        return n;
-    }
+    private static int HideUtslWindows(bool hide) => ProcessBackend.HideWindows(hide);
 
     private void ApplyHideWorlds()
     {
@@ -3615,54 +3549,39 @@ public partial class MainWindow : Window
 
     private async void OnStartServer(object? sender, RoutedEventArgs e)
     {
-        if (UseRemote)
+        bool remote = ProcessBackend.IsRemote;
+        if (remote)
         {
-            try
-            {
-                ProtectWatchdog(600, "remote-start");   // ★ 启动后 10 分钟内看门狗不介入（世界加载可能很久）
-                Term("--- 远端启动中（SSH + WMI + 控制台启动器），请稍候 ---", "#79C0FF");
-                ErrText.Text = "远端启动中…";
-                string r = await Task.Run(() => SshRun(RemoteStartScript(), 60000));
-                Term(r, PickColor(r));
-                ErrText.Text = "远端启动指令已下发";
-            }
-            catch (Exception ex) { ErrText.Text = "远端启动失败: " + ex.Message; }
-            return;
+            ProtectWatchdog(600, "remote-start");   // 启动后 10 分钟内看门狗不介入（世界加载可能很久）
+            Term("--- 远端启动中（SSH + WMI + 控制台启动器），请稍候 ---", "#79C0FF");
+            ErrText.Text = "远端启动中…";
         }
-        if (ServerRunning) { return; }
-        ProtectWatchdog(600, "local-start");   // ★ 启动后 10 分钟内看门狗不介入
-        try
+        else
         {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(ServerExe)
-            {
-                WorkingDirectory = ServerDir,
-                Arguments = "-joinserver first -logmode txt",
-            });
+            if (ServerRunning) { return; }
+            ProtectWatchdog(600, "local-start");
         }
-        catch (Exception ex) { ErrText.Text = "启动失败: " + ex.Message; }
+        ProcessResult r = await ProcessBackend.StartAsync();
+        if (!remote) { if (!r.Ok) { ErrText.Text = r.Message; } return; }
+        Term(r.Message, PickColor(r.Message));
+        ErrText.Text = r.Ok ? "远端启动指令已下发" : r.Message;
     }
 
     private async void OnStopServer(object? sender, RoutedEventArgs e)
     {
-        if (UseRemote)
+        bool remote = ProcessBackend.IsRemote;
+        if (remote)
         {
-            try
-            {
-                Term("--- 远端停止中（只杀 UTSL，不动机器人）---", "#79C0FF");
-                ErrText.Text = "远端停止中…";
-                string r = await Task.Run(() => SshRun(RemoteStopScript(), 40000));
-                Term(r, PickColor(r));
-                ErrText.Text = "远端停止指令已下发";
-            }
-            catch (Exception ex) { ErrText.Text = "远端停止失败: " + ex.Message; }
-            NotifyServerState(false);
-            return;
+            Term("--- 远端停止中（只杀 UTSL，不动机器人）---", "#79C0FF");
+            ErrText.Text = "远端停止中…";
         }
-        try
+        ProcessResult r = await ProcessBackend.StopAsync();
+        if (remote)
         {
-            foreach (var p in System.Diagnostics.Process.GetProcessesByName("UnifierTSL")) { p.Kill(); }
+            Term(r.Message, PickColor(r.Message));
+            ErrText.Text = r.Ok ? "远端停止指令已下发" : r.Message;
         }
-        catch (Exception ex) { ErrText.Text = "停止失败: " + ex.Message; }
+        else if (!r.Ok) { ErrText.Text = r.Message; }
         NotifyServerState(false);
     }
 
