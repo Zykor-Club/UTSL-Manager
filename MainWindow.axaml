@@ -168,7 +168,7 @@
             <Border DockPanel.Dock="Bottom" BorderBrush="#2A2A30" BorderThickness="0,1,0,0" Padding="12,9,12,11" Background="#101013">
               <Grid ColumnDefinitions="Auto,*,Auto">
                 <TextBlock Grid.Column="0" x:Name="PromptText" Text="@ 全部世界" FontSize="11.5" FontWeight="SemiBold" Foreground="#0A84FF" VerticalAlignment="Center" Margin="0,0,9,0" FontFamily="Cascadia Mono,Consolas,monospace"/>
-                <TextBox Grid.Column="1" x:Name="CmdBox" Watermark="输入指令回车执行：@Dev /save · @2 /save · 不写前缀 = 全部世界" FontSize="12" CornerRadius="8" FontFamily="Cascadia Mono,Consolas,monospace"/>
+                <TextBox Grid.Column="1" x:Name="CmdBox" Watermark="输入指令回车执行：@Dev /save · @2 /save · 不写前缀 = 全部世界 · 以 &gt; 开头 = 服务端控制台口径（输出显示在上方日志流）" FontSize="12" CornerRadius="8" FontFamily="Cascadia Mono,Consolas,monospace"/>
                 <Button Grid.Column="2" x:Name="SendBtn" Content="发送" Margin="9,0,0,0" CornerRadius="8"/>
               </Grid>
             </Border>

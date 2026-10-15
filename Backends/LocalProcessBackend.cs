@@ -12,6 +12,12 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
 
     public bool IsAlive() => Process.GetProcessesByName(ProcName).Length > 0;
 
+    // ★ 不要给服务端做 stdin/stdout 重定向（实测过，会把它弄坏）：
+    //   UTSL 启动时要拿控制台缓冲（ConsolePal.GetBufferInfo / WindowHeight），
+    //   一旦没有真实控制台，ServerContext 的 ServerSurfaceConsole 构造就抛 IOException，
+    //   导致 TShock 静态构造失败 → 20 个插件里 16 个初始化失败（VirtualWorldCore / 尘歌壶全挂）。
+    //   所以"管理器接管控制台（MCSManager 那种喂 stdin）"这条路在当前 UTSL 上不可用，
+    //   除非先让 UTSL 容忍没有控制台缓冲的环境。详见开发文档 §32。
     public Task<ProcessResult> StartAsync()
     {
         if (IsAlive()) { return Task.FromResult(new ProcessResult(true, "")); }

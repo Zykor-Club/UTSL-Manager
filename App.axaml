@@ -7,14 +7,79 @@
     <mac:DevolutionsMacOsTheme />
     <mac:DevolutionsMacOsThemeGlobalStyles />
 
-    <!-- ★ 滚动槽位「上下封顶」：主题自带的槽位是贴边拉伸的，端点被裁掉；缩进 6px 让圆角端点露出来 -->
-    <Style Selector="ScrollBar:vertical">
-      <Setter Property="Margin" Value="0,6,2,6" />
-    </Style>
-    <Style Selector="ScrollBar:horizontal">
-      <Setter Property="Margin" Value="6,0,6,2" />
-    </Style>
+    <!--
+      ★ 全局滚动条：**只留滑块，不要轨道**。
+        主题自带的滚动槽位是一条贴边拉伸的长条（上下端点被裁掉，看着像"没闭口"）；
+        之前是靠给 ScrollBar 加 Margin 把端点让出来，现在直接把轨道去掉，只留滑块。
 
+      做法：替换掉 ScrollBar 的 ControlTheme（Track 是 Control 基类、没有 Background 属性，
+      所以没法只把轨道刷透明，只能换模板）。模板里只留一个名为 PART_Track 的 Track：
+        · Track 自身不画任何背景 → 视觉上只剩 Thumb
+        · 翻页按钮保留（否则点空白处翻页失效），但透明无边框
+        · 滑块常态半透明，悬停/按下变亮
+
+      ★ 放在 Styles.Resources 里（ControlTheme 不能直接进 Application.Styles）。
+      ★ 以后新增的滚动区域自动就是这个观感，不用逐个改。
+    -->
+    <!--
+      说明：这里那个"长条"其实是主题在 ScrollViewer 模板里给 ScrollBar 设的**局部值** Background，
+      局部值优先级高于 Style / ControlTheme，所以覆盖它必须写代码 —— 见 App.axaml.cs 的类处理器。
+    -->
+    <Styles>
+      <Styles.Resources>
+        <ControlTheme x:Key="{x:Type ScrollBar}" TargetType="ScrollBar">
+          <Setter Property="Background" Value="Transparent" />
+          <!-- 保持常显：替换 ControlTheme 会丢掉主题里这条设置，所以显式补上 -->
+          <Setter Property="AllowAutoHide" Value="False" />
+          <Setter Property="Template">
+            <ControlTemplate>
+              <!-- ★ 必须把 ScrollBar 的 Minimum/Maximum/Value/ViewportSize 绑到 Track 上：
+                 不绑的话 Track 一直是默认的 0~100，滑块的位置和长度都不会跟着内容走（实测回归）。
+                 ViewportSize 决定滑块长度比例，Value 决定滑块位置。 -->
+              <Track Name="PART_Track"
+                     Orientation="{TemplateBinding Orientation}"
+                     Minimum="{TemplateBinding Minimum}"
+                     Maximum="{TemplateBinding Maximum}"
+                     Value="{Binding Value, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
+                     ViewportSize="{TemplateBinding ViewportSize}">
+                <Track.DecreaseButton>
+                  <Button Name="PART_LineUpButton" Background="Transparent" BorderThickness="0"
+                          Focusable="False" IsTabStop="False" />
+                </Track.DecreaseButton>
+                <Track.Thumb>
+                  <Thumb Name="PART_Thumb" MinWidth="16" MinHeight="16" Background="#5AFFFFFF">
+                    <Thumb.Template>
+                      <ControlTemplate>
+                        <Border Background="{TemplateBinding Background}" CornerRadius="5" Margin="2" />
+                      </ControlTemplate>
+                    </Thumb.Template>
+                  </Thumb>
+                </Track.Thumb>
+                <Track.IncreaseButton>
+                  <Button Name="PART_LineDownButton" Background="Transparent" BorderThickness="0"
+                          Focusable="False" IsTabStop="False" />
+                </Track.IncreaseButton>
+              </Track>
+            </ControlTemplate>
+          </Setter>
+
+          <Style Selector="^:vertical">
+            <Setter Property="Width" Value="12" />
+            <Setter Property="MinWidth" Value="12" />
+          </Style>
+          <Style Selector="^:horizontal">
+            <Setter Property="Height" Value="12" />
+            <Setter Property="MinHeight" Value="12" />
+          </Style>
+          <Style Selector="^:pointerover /template/ Thumb">
+            <Setter Property="Background" Value="#9AFFFFFF" />
+          </Style>
+          <Style Selector="^:pressed /template/ Thumb">
+            <Setter Property="Background" Value="#C4FFFFFF" />
+          </Style>
+        </ControlTheme>
+      </Styles.Resources>
+    </Styles>
 
   </Application.Styles>
 </Application>

@@ -1516,6 +1516,20 @@ public partial class MainWindow : Window
         string text = raw;
         var m = System.Text.RegularExpressions.Regex.Match(raw, @"^@(\S+)\s+([\s\S]*)$");
         if (m.Success) { world = m.Groups[1].Value; text = m.Groups[2].Value; }
+        // ★ 指定了 @世界 时若正文还以 > 开头，把 > 剥掉：> 是"控制台口径"标记，
+        //   与 @世界 同时出现会拼出 "/>/help" 这种垃圾（@世界 优先，语义按世界走）
+        if (m.Success && text.StartsWith('>')) { text = text[1..].Trim(); }
+        if (text.Length == 0) { CmdBox.Text = ""; return; }
+        // ★ 输入以 ">" 开头 = 走【服务端控制台口径】（scope=console）：以服务端控制台身份执行，
+        //   输出会写进服务端日志 → 显现在上面的日志流里。这是看到 /help、老式指令输出的唯一办法。
+        //   不加 ">" 时语义与从前完全一致（@世界 / 不写前缀=全部世界）。
+        bool consoleScope = false;
+        if (!m.Success && raw.StartsWith('>'))
+        {
+            consoleScope = true;
+            text = raw[1..].Trim();
+            if (text.Length == 0) { return; }
+        }
 
         // 插件命令（P1-6）：以 ! 开头 → 交给插件宿主，不发给服务端
         if (text.StartsWith('!'))
@@ -1525,12 +1539,13 @@ public partial class MainWindow : Window
             return;
         }
 
+        // ★ 回显在发请求【之前】打：否则指令输出（日志流）可能先到、回显排到下面；请求失败时也会没回显。
+        Term("> " + (consoleScope ? "> " : "") + (world.Length == 0 ? "" : "@" + world + " ") + text, "#79C0FF");
         try
         {
-            string url = Rest + "/world/command?token=" + Uri.EscapeDataString(Token) + "&world=" + Uri.EscapeDataString(world) + "&cmd=" + Uri.EscapeDataString(text);
+            string url = Rest + "/world/command?token=" + Uri.EscapeDataString(Token) + "&world=" + Uri.EscapeDataString(world) + "&cmd=" + Uri.EscapeDataString(text) + "&scope=" + (consoleScope ? "console" : "world");
             string res = await Http.GetStringAsync(url);
             using var doc = JsonDocument.Parse(res);
-            Term("> " + (world.Length == 0 ? "" : "@" + world + " ") + text, "#79C0FF");
             if (doc.RootElement.TryGetProperty("response", out var arr))
             {
                 foreach (var it in arr.EnumerateArray()) { Term("  " + (it.GetString() ?? ""), "#7EE787"); }
@@ -3987,11 +4002,6 @@ public partial class MainWindow : Window
         if (mapZoom > fit * 1.15) { FitMap(); }
         else { ZoomAt(e.GetPosition(MapCard), Math.Min(fit * 2.0, 4.0)); }
         e.Handled = true;
-    }
-
-    private async Task SendAsyncOld()
-    {
-        await Task.CompletedTask;
     }
 
     // ===== 从备份恢复    // ===== 从备份恢复（二次确认）=====
