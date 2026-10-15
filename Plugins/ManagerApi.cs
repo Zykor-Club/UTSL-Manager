@@ -10,7 +10,7 @@ namespace UTSLManager.Plugins;
 public static class ManagerApi
 {
     /// <summary>宿主当前实现的插件 API 版本。</summary>
-    public const int Version = 3;
+    public const int Version = 4;
 
     /// <summary>v1：Name / Icon / Description / Author / OnLoad / CreateView。</summary>
     public const int V1 = 1;
@@ -21,6 +21,12 @@ public static class ManagerApi
     /// <summary>v3：新增统一远端文件 API（FilesRoot/ListFiles/ReadText/WriteText/CreateDirectory/Rename/Delete/Upload/Download，
     /// 远端模式走 SSH、本机模式直接读盘）、RunCommand（远端命令，exec 权限）、HttpGet/HttpPost（net 权限）、InvalidateFileCache。</summary>
     public const int V3 = 3;
+
+    /// <summary>v4：新增**地图页贡献点** —— 插件（额外实现 <see cref="IMapContributionPlugin"/>）可以往内置
+    /// 「地图预览」页注入工具栏按钮，并读取当前视图状态（<see cref="MapViewState"/>，纯数据）与图格选区
+    /// （<see cref="MapSelection"/>）。地图页本身仍是管理器内置的；插件只在其上挂按钮，
+    /// 需要渲染/裁切/模板编码时直接调用 UTSLManager.Maps.* 的公开 API（宿主已带好 TEdit/SkiaSharp）。</summary>
+    public const int V4 = 4;
 }
 
 /// <summary>部署目录里的一个文件/文件夹（v3 起提供给插件）。</summary>

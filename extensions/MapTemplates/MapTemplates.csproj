@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    MapTemplates —— 建筑区块模板（地图页上的 框选 / 导出 / 浏览）。
+    ★ 它是管理器「地图预览」页的**扩展插件**：只有装了本插件，地图页上才会出现这些按钮。
+      地图查看器本身仍是管理器内置的（所有人都要），本插件只通过 v4 的**地图页贡献点**挂 UI。
+    ★ 渲染/裁切/编解码全部在宿主里（UTSLManager.Maps.*）：所以本插件不重复带 TEdit/SkiaSharp，
+      只是编译期引用一下类型，运行时由宿主提供（Private=false）—— 插件本体只有几十 KB。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>MapTemplates</AssemblyName>
+    <RootNamespace>MapTemplates</RootNamespace>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ManagerDir Condition="'$(ManagerDir)' == '' And Exists('$(MSBuildThisFileDirectory)..\..\..\..\AvaloniaUTSL\UTSLManager.dll')">$(MSBuildThisFileDirectory)..\..\..\..\AvaloniaUTSL</ManagerDir>
+    <ManagerDir Condition="'$(ManagerDir)' == '' And Exists('$(MSBuildThisFileDirectory)..\..\bin\$(Configuration)\net10.0\UTSLManager.dll')">$(MSBuildThisFileDirectory)..\..\bin\$(Configuration)\net10.0</ManagerDir>
+    <ManagerDir Condition="'$(ManagerDir)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\AvaloniaUTSL</ManagerDir>
+    <PluginDeployDir Condition="'$(PluginDeployDir)' == ''">$(ManagerDir)\plugins</PluginDeployDir>
+    <PluginManifestSource>$(MSBuildThisFileDirectory)manifest.json</PluginManifestSource>
+  </PropertyGroup>
+  <Target Name="CheckManagerExists" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(ManagerDir)\UTSLManager.dll')" Text="找不到 $(ManagerDir)\UTSLManager.dll —— 请用 -p:ManagerDir=&lt;目录&gt; 指定。" />
+    <Error Condition="!Exists('$(ManagerDir)\TEdit.Terraria.dll')" Text="找不到 $(ManagerDir)\TEdit.Terraria.dll —— 该版本的管理器还没把 TEdit 编进本体。" />
+  </Target>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.2"><ExcludeAssets>runtime</ExcludeAssets></PackageReference>
+    <Reference Include="UTSLManager">
+      <HintPath>$(ManagerDir)\UTSLManager.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- 只为用到 World 类型：编译期引用，运行时由宿主提供，不随插件部署 -->
+    <Reference Include="TEdit.Terraria">
+      <HintPath>$(ManagerDir)\TEdit.Terraria.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+  <Target Name="DeployToManager" AfterTargets="Build">
+    <MakeDir Directories="$(PluginDeployDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDeployDir)" ContinueOnError="true" />
+    <Copy SourceFiles="$(PluginManifestSource)" DestinationFiles="$(PluginDeployDir)\$(AssemblyName).manifest.json" Condition="Exists('$(PluginManifestSource)')" ContinueOnError="true" />
+    <Message Importance="high" Text="[MapTemplates] 部署目标：$(PluginDeployDir)" />
+  </Target>
+</Project>

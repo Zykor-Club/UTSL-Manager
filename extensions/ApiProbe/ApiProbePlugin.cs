@@ -33,10 +33,10 @@ public sealed class ApiProbePlugin : IManagerPlugin
             string report = await RunAllAsync(ctx);
             try
             {
-                File.WriteAllText(Path.Combine(Path.GetTempPath(), "utsl-api-probe.txt"), report, new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(ctx.DataDir, "utsl-api-probe.txt"), report, new UTF8Encoding(false));
             }
             catch { }
-            ctx.Log("[API 探针] 报告已写入 " + Path.Combine(Path.GetTempPath(), "utsl-api-probe.txt"));
+            ctx.Log("[API 探针] 报告已写入 " + Path.Combine(ctx.DataDir, "utsl-api-probe.txt"));
         }, "api-probe");
     }
 
@@ -105,12 +105,12 @@ public sealed class ApiProbePlugin : IManagerPlugin
         });
         await Check("Upload/Download 往返比对", () =>
         {
-            string up = Path.Combine(Path.GetTempPath(), "apiprobe_up.bin");
+            string up = Path.Combine(ctx.DataDir, "apiprobe_up.bin");
             byte[] buf = new byte[64 * 1024];
             new Random(20251011).NextBytes(buf);
             File.WriteAllBytes(up, buf);
             bool u = ctx.Upload(up, "api_probe_bin.dat");
-            string down = Path.Combine(Path.GetTempPath(), "apiprobe_down.bin");
+            string down = Path.Combine(ctx.DataDir, "apiprobe_down.bin");
             if (File.Exists(down)) { File.Delete(down); }
             bool d = ctx.Download("api_probe_bin.dat", down);
             bool same = d && File.Exists(down) && File.ReadAllBytes(down).SequenceEqual(buf);

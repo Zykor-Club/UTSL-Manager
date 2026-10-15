@@ -6,6 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+    <!-- 地图渲染要走指针直写像素缓冲 + 按行并行（见 Maps\WorldMapRenderer.cs） -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>UTSLManager</RootNamespace>
     <AssemblyName>UTSLManager</AssemblyName>
     <!-- 发布输出目录：默认取仓库上两级的 AvaloniaUTSL\（本机即 桌面\AvaloniaUTSL\，与过去位置一致）；
@@ -24,6 +26,31 @@
     <EmbeddedResource Remove="extensions\**" />
     <AvaloniaResource Remove="extensions\**" />
   </ItemGroup>
+  <!-- third_party/ 是外部依赖源码（TEdit，见 scripts\get-tedit.ps1）：它有自己的一堆工程（含测试工程），
+       绝不能被主工程的默认通配符编进来（否则 5000+ 编译错误） -->
+  <ItemGroup>
+    <Compile Remove="third_party\**" />
+    <None Remove="third_party\**" />
+    <EmbeddedResource Remove="third_party\**" />
+    <AvaloniaResource Remove="third_party\**" />
+    <!-- ★ 还要排掉 XAML：Avalonia SDK 会把 **/*.axaml 收成 AvaloniaXaml，
+         TEdit5 里有一堆 .axaml（App/Views/Styles），不排掉会报 AVLN2000 -->
+    <AvaloniaXaml Remove="third_party\**" />
+  </ItemGroup>
+  <!--
+    ★ 世界地图：把 .wld 解析/渲染直接编进管理器本体（不再做成扩展插件）。
+    TEdit 的渲染核心在 TEdit5（一个 WinExe 工程）里，不能引用，所以从源码里只挑需要的文件编进来；
+    TEdit.Terraria / TEdit.Common 是普通库工程，直接 ProjectReference（源码见 scripts\get-tedit.ps1）。
+    SkiaSharp 对齐 Avalonia 自带版本，避免同进程里出现两个 SkiaSharp。
+  -->
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp" Version="3.119.4" />
+    <PackageReference Include="ReactiveUI" Version="24.3.0" />
+    <ProjectReference Include="third_party\TEdit\src\TEdit.Terraria\TEdit.Terraria.csproj" />
+    <Compile Include="third_party\TEdit\src\TEdit5\Controls\PixelMap.cs" Link="TEdit5\PixelMap.cs" />
+    <Compile Include="third_party\TEdit\src\TEdit5\Controls\WorldRenderEngine\SkiaTEditExtensions.cs" Link="TEdit5\SkiaTEditExtensions.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.1.2" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />

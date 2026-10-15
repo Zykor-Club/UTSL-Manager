@@ -363,29 +363,50 @@
       </Grid>
 
       <!-- 地图预览视图（切换而非弹窗） -->
-      <Grid x:Name="MapView" IsVisible="False" RowDefinitions="Auto,*">
-        <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="0,4,0,12">
+      <Grid x:Name="MapView" IsVisible="False" RowDefinitions="Auto,Auto,*,Auto">
+        <!-- 行 0：标题 + 状态 + 返回。工具栏不挤在这一行，让它有整行宽度好自动换行 -->
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,4,0,8">
           <StackPanel Grid.Column="0" VerticalAlignment="Center">
             <TextBlock Text="地图预览" FontSize="19" FontWeight="SemiBold" Foreground="#F2F2F5"/>
             <TextBlock x:Name="MapInfo" Text="—" FontSize="11" Foreground="#7C7C82" Margin="0,3,0,0"/>
           </StackPanel>
-          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Margin="0,0,8,0">
-            <ComboBox x:Name="MapPicker" FontSize="11.5" Width="170" SelectionChanged="OnMapPickChanged"/>
-            <Button Content="适应" FontSize="11.5" Padding="10,5" CornerRadius="9" Click="OnMapFit"/>
-            <Button Content="1:1" FontSize="11.5" Padding="10,5" CornerRadius="9" Click="OnMapActual"/>
-            <Button Content="−" FontSize="11.5" Width="32" Padding="0,5" CornerRadius="9" Click="OnMapZoomOut"/>
-            <Button Content="+" FontSize="11.5" Width="32" Padding="0,5" CornerRadius="9" Click="OnMapZoomIn"/>
-            <Button Content="刷新" FontSize="11.5" Padding="10,5" CornerRadius="9" Click="OnRefreshMap"/>
-            <Button x:Name="BtnMapFull" Content="载入原图" FontSize="11.5" Padding="10,5" CornerRadius="9" Click="OnMapLoadFull" ToolTip.Tip="默认只下载约 1/16 大小的缩略图（秒开）；需要看清细节时再载入 9MB 原图"/>
-          </StackPanel>
-          <Button Grid.Column="2" Content="← 返回控制台" FontSize="11.5" Padding="12,5" CornerRadius="9" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="← 返回控制台" FontSize="11.5" Padding="12,5" CornerRadius="9"
+                  VerticalAlignment="Center" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" ClipToBounds="True" PointerWheelChanged="OnMapWheel">
-          <ScrollViewer ScrollViewer.AllowAutoHide="False" x:Name="MapScroll" Padding="0,0,12,0" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-            <Image x:Name="MapImage" Stretch="Fill" Margin="10"/>
-          </ScrollViewer>
+        <!-- 行 1：工具栏。★ 用 WrapPanel 而非 StackPanel：控件多（宿主 6 个 + 插件若干）时窄窗口能自动换行，
+             否则会被挤出可视区。v4 的插件贡献点也把控件追加到这个面板里（MapPluginBar 就是它本身）。 -->
+        <WrapPanel Grid.Row="1" x:Name="MapPluginBar" Orientation="Horizontal" Margin="0,0,0,10">
+          <ComboBox x:Name="MapPicker" FontSize="11.5" Width="170" Margin="0,0,6,6" SelectionChanged="OnMapPickChanged"/>
+          <Button Content="适应" FontSize="11.5" Padding="10,5" CornerRadius="9" Margin="0,0,6,6" Click="OnMapFit"/>
+          <Button Content="1:1" FontSize="11.5" Padding="10,5" CornerRadius="9" Margin="0,0,6,6" Click="OnMapActual"/>
+          <Button Content="−" FontSize="11.5" Width="32" Padding="0,5" CornerRadius="9" Margin="0,0,6,6" Click="OnMapZoomOut"/>
+          <Button Content="+" FontSize="11.5" Width="32" Padding="0,5" CornerRadius="9" Margin="0,0,6,6" Click="OnMapZoomIn"/>
+          <Button Content="刷新" FontSize="11.5" Padding="10,5" CornerRadius="9" Margin="0,0,6,6" Click="OnRefreshMap"/>
+        </WrapPanel>
+        <Border Grid.Row="2" x:Name="MapCard" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" ClipToBounds="True"
+                Cursor="Hand" PointerWheelChanged="OnMapWheel"
+                PointerPressed="OnMapPointerPressed" PointerMoved="OnMapPointerMoved"
+                PointerReleased="OnMapPointerReleased" DoubleTapped="OnMapDoubleTapped">
+          <!-- 地图视口：用 RenderTransform 缩放/平移（不触发布局，缩放与位移同帧生效，
+               避免"新尺寸 + 旧偏移"渲染出的一帧错位/闪烁） -->
+          <!-- ★ 必须用 Canvas：Panel 会把子元素的排列矩形夹到视口大小，
+               Stretch=None 时就只画左上角一块（实测 Panel 下 Bounds=1440x1100，Canvas 下=12000x2400） -->
+          <Canvas x:Name="MapSurface" ClipToBounds="True">
+            <Image x:Name="MapImage" Stretch="None" HorizontalAlignment="Left" VerticalAlignment="Top" PointerWheelChanged="OnMapWheel"/>
+            <Rectangle x:Name="MapSelectRect" IsVisible="False" IsHitTestVisible="False"
+                       Fill="#3366CCFF" Stroke="#66CCFF" StrokeThickness="1.5"/>
+          </Canvas>
         </Border>
-
+        <!-- 卡片下方的加载进度条（渲染/解码时显示；浅蓝取管理器强调色 #66CCFF） -->
+        <ProgressBar Grid.Row="3" x:Name="MapProgress" Minimum="0" Maximum="1" Height="4" Margin="2,10,2,0"
+                     Foreground="#66CCFF" Background="#1E1E24" IsVisible="False">
+          <!-- 0.25s 过渡：进度值变化时是"滑过去"而不是"跳过去" -->
+          <ProgressBar.Transitions>
+            <Transitions>
+              <DoubleTransition Property="Value" Duration="0:0:0.25"/>
+            </Transitions>
+          </ProgressBar.Transitions>
+        </ProgressBar>
       </Grid>
 
       </Panel>

@@ -27,6 +27,19 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Cache TEdit source
+        uses: actions/cache@v4
+        with:
+          path: third_party/TEdit
+          # 缓存键只用脚本哈希：钉死的 commit 写在脚本里，改脚本自然会换键
+          key: tedit-${{ hashFiles('scripts/get-tedit.ps1') }}
+
+      - name: Fetch TEdit source (地图渲染依赖，钉死 commit)
+        shell: pwsh
+        # 管理器本体直接编译 TEdit 渲染核心（Maps\WorldMapRenderer.cs）：源码不入库
+        # （third_party/ 已 gitignore），构建前必须先按脚本里钉死的 commit 取下来。
+        run: ./scripts/get-tedit.ps1
+
       # 解析版本：标签触发用标签名；手动触发用输入值；都没有就直接失败（避免建出空 tag）
       - name: Resolve version
         id: ver
@@ -47,15 +60,21 @@ jobs:
           dotnet build extensions/PacketInspector/PacketInspector.csproj -c Release -p:ManagerDir=${{ github.workspace }}/publish
           dotnet build extensions/RuYouMusicPanel/RuYouMusicPanel.csproj -c Release -p:ManagerDir=${{ github.workspace }}/publish
           dotnet build extensions/ApiProbe/ApiProbe.csproj -c Release -p:ManagerDir=${{ github.workspace }}/publish
+          dotnet build extensions/MapTemplates/MapTemplates.csproj -c Release -p:ManagerDir=${{ github.workspace }}/publish
 
       - name: Sanity check (产物必须完整)
         shell: pwsh
         run: |
           if (-not (Test-Path publish/UTSLManager.exe)) { throw 'publish/UTSLManager.exe 不存在' }
           if (-not (Test-Path publish/UTSLManager.dll)) { throw 'publish/UTSLManager.dll 不存在' }
+          # 地图渲染已编进管理器本体，缺了这两个说明 TEdit 依赖没打进去
+          if (-not (Test-Path publish/TEdit.Terraria.dll)) { throw 'publish/TEdit.Terraria.dll 不存在（TEdit 依赖没打进去）' }
+          if (-not (Test-Path publish/SkiaSharp.dll)) { throw 'publish/SkiaSharp.dll 不存在' }
           $plugins = Get-ChildItem publish/plugins -Filter *.dll -ErrorAction SilentlyContinue
           Write-Host ("插件 dll：" + (($plugins | ForEach-Object { $_.BaseName }) -join ', '))
-          if (($plugins | Measure-Object).Count -lt 3) { throw 'publish/plugins 下的扩展 dll 少于 3 个' }
+          # 官方扩展：ApiProbe / PacketInspector / RuYouMusicPanel / MapTemplates
+          if (($plugins | Measure-Object).Count -lt 4) { throw 'publish/plugins 下的扩展 dll 少于 4 个' }
+          if (-not (Test-Path publish/plugins/MapTemplates.dll)) { throw 'publish/plugins/MapTemplates.dll 不存在' }
 
       - name: Package
         shell: pwsh

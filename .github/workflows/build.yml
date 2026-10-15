@@ -19,6 +19,19 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Cache TEdit source
+        uses: actions/cache@v4
+        with:
+          path: third_party/TEdit
+          # 缓存键只用脚本哈希：钉死的 commit 写在脚本里，改脚本自然会换键
+          key: tedit-${{ hashFiles('scripts/get-tedit.ps1') }}
+
+      - name: Fetch TEdit source (地图渲染依赖，钉死 commit)
+        shell: pwsh
+        # 管理器本体直接编译 TEdit 渲染核心（Maps\WorldMapRenderer.cs）：源码不入库
+        # （third_party/ 已 gitignore），构建前必须先按脚本里钉死的 commit 取下来。
+        run: ./scripts/get-tedit.ps1
+
       - name: Restore
         run: dotnet restore UTSLManager.Avalonia.csproj
 
@@ -35,6 +48,7 @@ jobs:
           dotnet build extensions/PacketInspector/PacketInspector.csproj -c Release -p:ManagerDir=${{ github.workspace }}/publish
           dotnet build extensions/RuYouMusicPanel/RuYouMusicPanel.csproj -c Release -p:ManagerDir=${{ github.workspace }}/publish
           dotnet build extensions/ApiProbe/ApiProbe.csproj -c Release -p:ManagerDir=${{ github.workspace }}/publish
+          dotnet build extensions/MapTemplates/MapTemplates.csproj -c Release -p:ManagerDir=${{ github.workspace }}/publish
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

@@ -1,0 +1,11 @@
+{
+  "name": "建筑模板",
+  "version": "0.1.0",
+  "author": "Zykor-Club",
+  "description": "在地图上框选并导出 .utpl 建筑模板；浏览服务端已有模板（服务端需装 VirtualWorldCore）",
+  "entry": "MapTemplates.MapTemplatesPlugin",
+  "type": "view",
+  "apiVersion": 4,
+  "permissions": ["fs", "config"],
+  "dependencies": []
+}
