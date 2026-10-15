@@ -1834,18 +1834,27 @@ public partial class MainWindow : Window
             });
         }
 
-        // X 轴时间标签：取样下标与横向位置共用 XFor（都是"窗口内第 i 个样本"）
+        // X 轴时间标签：★ 必须与**实际画出来的样本**同一套索引 ——
+        //   曾经按"60 格固定窗口"取样：刚启动只有 20 个样本时，曲线占左边 1/3，
+        //   而唯一的时间标签却贴在最右边（看着像 X 轴反了）。
+        //   现在在【已有时段】内等分：times[j] 与第 j 个数据点同索引、同 XFor。
         int n = times.Count;
-        for (int k = 0; k < 4; k++)
+        int shown = Math.Min(n, MaxSamples);
+        if (shown >= 2)
         {
-            int i = (int)Math.Round(k / 3.0 * (MaxSamples - 1));
-            int idx = n - MaxSamples + i;
-            if (idx < 0 || idx >= n) { continue; }
-            var lab = new TextBlock { Text = times[idx].ToString("HH:mm:ss"), FontSize = 8.5, Foreground = axisBrush };
-            lab.Measure(Avalonia.Size.Infinity);
-            double x = XFor(i, w);
-            Canvas.SetLeft(lab, Math.Clamp(x - lab.DesiredSize.Width / 2, 0, Math.Max(0, w - lab.DesiredSize.Width)));
-            xLabels.Children.Add(lab);
+            double lastRight = double.NegativeInfinity;
+            for (int k = 0; k < 4; k++)
+            {
+                int j = Math.Clamp((int)Math.Round(k / 3.0 * (shown - 1)), 0, n - 1);
+                var lab = new TextBlock { Text = times[j].ToString("HH:mm:ss"), FontSize = 8.5, Foreground = axisBrush };
+                lab.Measure(Avalonia.Size.Infinity);
+                double x = XFor(j, w);
+                double lx = Math.Clamp(x - lab.DesiredSize.Width / 2, 0, Math.Max(0, w - lab.DesiredSize.Width));
+                if (lx < lastRight + 6) { continue; }        // 与上一个标签挤在一起就跳过（曲线短时最容易发生）
+                lastRight = lx + lab.DesiredSize.Width;
+                Canvas.SetLeft(lab, lx);
+                xLabels.Children.Add(lab);
+            }
         }
     }    /// <summary>把轴最大值抬到 1/2/5 × 10^n 的"顺眼"刻度。</summary>
     private static double NiceMax(double v)
