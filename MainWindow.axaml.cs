@@ -1728,27 +1728,44 @@ public partial class MainWindow : Window
 
         // ★ 图表：控制台可见 且 窗口在前台 才重绘。
         //   数值采样不受前台与否影响（所以仪表盘不会"冻结"），只有重绘被节流。
-        double m1 = 0, m2 = 0, m3 = 0;
         if (ConsoleView.IsVisible && IsActive)
         {
-            m1 = DrawChart(CpuChart, [cpuHist], ["#0A84FF"]);
-            m2 = DrawChart(MemChart, [memHist], ["#30D158"]);
-            m3 = DrawChart(NetChart, [upHist, downHist], ["#FF9F0A", "#BF5AF2"]);
+            DrawChart(CpuChart, CpuYLabels, CpuXLabels, [cpuHist], ["#0A84FF"], "cpu", timeHist);
+            DrawChart(MemChart, MemYLabels, MemXLabels, [memHist], ["#30D158"], "mem", timeHist);
+            DrawChart(NetChart, NetYLabels, NetXLabels, [upHist, downHist], ["#FF9F0A", "#BF5AF2"], "net", timeHist);
         }
-        UpdateAxes([CpuY0, CpuY1, CpuY2, CpuY3], [MemY0, MemY1, MemY2, MemY3], [NetY0, NetY1, NetY2, NetY3],
-                    [CpuX0, CpuX1, CpuX2, CpuX3], [MemX0, MemX1, MemX2, MemX3], [NetX0, NetX1, NetX2, NetX3],
-                    m1, m2, m3);
     }
 
-    private void UpdateAxes(TextBlock[] cy, TextBlock[] my, TextBlock[] ny, TextBlock[] cx, TextBlock[] mx, TextBlock[] nx, double m1, double m2, double m3)
+    // ===== 图表几何：**只在这里定义一套映射**，网格线 / 数据 / Y 标签 / X 标签全用它 =====
+    //   之前是两套：网格线按 4+gi*(h-8)/4 画，Y 标签却靠 XAML 的 5 行等分网格摆 —— 行模型 vs 连续像素，
+    //   永远对不齐；X 标签又是 4 等分列而取样按 1/3 切 → 文字与它所在位置的时间对不上。用户实测看出"没对齐"。
+    private const double PlotPadY = 8;        // 绘图区上下留白（像素）：要容得下首/末 Y 标签的一半高度，否则会被裁
+    private const int PlotDivisions = 4;      // 纵向分 4 段 → 5 条参考线
+
+    private static double PlotTop(double h) => PlotPadY;
+    private static double PlotBottom(double h) => h - PlotPadY;
+
+    /// <summary>值 → 纵向像素（上下翻转：值越大越靠上，并夹进绘图区）。</summary>
+    private static double YFor(double v, double scale, double h)
     {
-        SetY(cy, m1, "cpu");
-        SetY(my, m2, "mem");
-        SetY(ny, m3, "net");
-        SetX(cx); SetX(mx); SetX(nx);
+        double top = PlotTop(h), bottom = PlotBottom(h);
+        double r = scale <= 0 ? 0 : Math.Clamp(v / scale, 0, 1);
+        return bottom - r * (bottom - top);
     }
 
-    /// <summary>Y 轴标签：带单位、短数字（避免出现 18823250 这种把轴挤爆的值）。</summary>
+    /// <summary>样本序号 → 横向像素。**右对齐**：最新样本永远贴右边，样本不足时左边留空 ——
+    /// 这样三张图（样本数可能不同，例如服务端重启会让某一路清零）也一定对齐。</summary>
+    private static double XFor(int i, int count, double w)
+    {
+        double left = 1, right = w - 1;
+        double step = (right - left) / (MaxSamples - 1);
+        return right - (count - 1 - i) * step;
+    }
+
+    private static double CanvasW(Canvas c) => !double.IsNaN(c.Width) && c.Width > 0 ? c.Width : c.Bounds.Width;
+    private static double CanvasH(Canvas c) => !double.IsNaN(c.Height) && c.Height > 0 ? c.Height : c.Bounds.Height;
+
+    /// <summary>Y 轴标签：带单位、短数字（避免 18823250 这种把轴挤爆的值）。</summary>
     private static string FmtAxis(double v, string kind)
     {
         if (kind == "cpu") { return v.ToString("F0") + "%"; }
@@ -1758,48 +1775,38 @@ public partial class MainWindow : Window
         return v.ToString(v >= 100 ? "F0" : v >= 10 ? "F1" : "F2") + " KB/s";
     }
 
-    private static void SetY(TextBlock[] labels, double max, string kind)
-    {
-        double[] ratios = [1.0, 0.75, 0.5, 0.25];
-        for (int i = 0; i < labels.Length && i < ratios.Length; i++)
-        {
-            labels[i].Text = FmtAxis(max * ratios[i], kind);
-        }
-    }
-
-    private void SetX(TextBlock[] labels)
-    {
-        if (timeHist.Count == 0) { return; }
-        int n = timeHist.Count;
-        int[] idx = [0, n / 3, n * 2 / 3, n - 1];
-        for (int i = 0; i < labels.Length && i < idx.Length; i++)
-        {
-            int k = Math.Clamp(idx[i], 0, n - 1);
-            labels[i].Text = timeHist[k].ToString("HH:mm:ss");
-        }
-    }
-
-    private static double DrawChart(Canvas canvas, List<double>[] series, string[] colors)
+    private static void DrawChart(Canvas canvas, Canvas yLabels, Canvas xLabels, List<double>[] series, string[] colors, string kind, IReadOnlyList<DateTime> times)
     {
         canvas.Children.Clear();
-        double w = canvas.Bounds.Width, h = canvas.Bounds.Height;
-        if (w < 12 || h < 12) { return 0; }
+        yLabels.Children.Clear();
+        xLabels.Children.Clear();
+        double w = CanvasW(canvas), h = CanvasH(canvas);
+        if (w < 12 || h < 12) { return; }
+
         double max = 0.0001;
         foreach (var s in series) { foreach (var v in s) { if (v > max) { max = v; } } }
-        // ★ 轴取"顺眼"刻度（1/2/5 × 10^n）：数字短、刻度整，避免天文数字把 Y 轴挤爆
-        double scale = NiceMax(max);
+        double scale = NiceMax(max);   // 轴取"顺眼"刻度（1/2/5 × 10^n）
 
-        // 网格线（4 条水平参考线，模仿示例卡片）
-        for (int gi = 0; gi <= 4; gi++)
+        var gridBrush = new SolidColorBrush(Color.Parse("#242429"));
+        var axisBrush = new SolidColorBrush(Color.Parse("#55555E"));
+
+        // 参考线 + Y 轴标签：位置都来自 YFor，标签在参考线上垂直居中
+        for (int gi = 0; gi <= PlotDivisions; gi++)
         {
-            double gy = 4 + gi * (h - 8) / 4.0;
+            double v = scale * gi / PlotDivisions;
+            double y = YFor(v, scale, h);
             canvas.Children.Add(new Avalonia.Controls.Shapes.Line
             {
-                StartPoint = new Avalonia.Point(0, gy),
-                EndPoint = new Avalonia.Point(w, gy),
-                Stroke = new SolidColorBrush(Color.Parse("#242429")),
+                StartPoint = new Avalonia.Point(0, y),
+                EndPoint = new Avalonia.Point(w, y),
+                Stroke = gridBrush,
                 StrokeThickness = 1,
             });
+            var lab = new TextBlock { Text = FmtAxis(v, kind), FontSize = 9, Foreground = axisBrush };
+            lab.Measure(Avalonia.Size.Infinity);
+            Canvas.SetLeft(lab, 52 - 7 - lab.DesiredSize.Width);      // 右对齐，与图表留 7px 间隙
+            Canvas.SetTop(lab, y - lab.DesiredSize.Height / 2);       // ★ 垂直居中在参考线上
+            yLabels.Children.Add(lab);
         }
 
         for (int si = 0; si < series.Length; si++)
@@ -1807,17 +1814,9 @@ public partial class MainWindow : Window
             var s = series[si];
             if (s.Count == 0) { continue; }
             var pts = new List<Avalonia.Point>();
-            for (int i = 0; i < s.Count; i++)
-            {
-                double x = 1 + i * (w - 2) / (MaxSamples - 1);
-                double y = h - 2 - (s[i] / scale) * (h - 8);
-                pts.Add(new Avalonia.Point(x, y));
-            }
+            for (int i = 0; i < s.Count; i++) { pts.Add(new Avalonia.Point(XFor(i, s.Count, w), YFor(s[i], scale, h))); }
             var brush = new SolidColorBrush(Color.Parse(colors[si]));
-            var areaPts = new List<Avalonia.Point>();
-            foreach (var p in pts) { areaPts.Add(p); }
-            areaPts.Add(new Avalonia.Point(pts[pts.Count - 1].X, h));
-            areaPts.Add(new Avalonia.Point(pts[0].X, h));
+            var areaPts = new List<Avalonia.Point>(pts) { new(pts[^1].X, PlotBottom(h)), new(pts[0].X, PlotBottom(h)) };
             canvas.Children.Add(new Avalonia.Controls.Shapes.Polygon { Points = areaPts, Fill = new SolidColorBrush(Color.Parse(colors[si]), 0.18) });
             canvas.Children.Add(new Avalonia.Controls.Shapes.Polyline
             {
@@ -1827,10 +1826,21 @@ public partial class MainWindow : Window
                 StrokeJoin = Avalonia.Media.PenLineJoin.Round,
             });
         }
-        return scale;
-    }
 
-    /// <summary>把轴最大值抬到 1/2/5 × 10^n 的"顺眼"刻度。</summary>
+        // X 轴时间标签：取样下标与横向位置共用 XFor（都是"窗口内第 i 个样本"）
+        int n = times.Count;
+        for (int k = 0; k < 4; k++)
+        {
+            int i = (int)Math.Round(k / 3.0 * (MaxSamples - 1));
+            int idx = n - MaxSamples + i;
+            if (idx < 0 || idx >= n) { continue; }
+            var lab = new TextBlock { Text = times[idx].ToString("HH:mm:ss"), FontSize = 8.5, Foreground = axisBrush };
+            lab.Measure(Avalonia.Size.Infinity);
+            double x = XFor(i, MaxSamples, w);
+            Canvas.SetLeft(lab, Math.Clamp(x - lab.DesiredSize.Width / 2, 0, Math.Max(0, w - lab.DesiredSize.Width)));
+            xLabels.Children.Add(lab);
+        }
+    }    /// <summary>把轴最大值抬到 1/2/5 × 10^n 的"顺眼"刻度。</summary>
     private static double NiceMax(double v)
     {
         if (v <= 0) { return 1; }
