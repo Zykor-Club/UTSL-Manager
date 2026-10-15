@@ -77,6 +77,7 @@ public partial class MainWindow : Window
             if (o["paths"] is JsonObject pj)
             {
                 LocalDir = pj["localDir"]?.ToString() ?? LocalDir;
+                WatchdogEnabled = pj["watchdog"] is not { } wv || wv.GetValue<bool>();
                 // （模板功能开关已移到扩展插件自己的配置里，宿主不再关心）
             }
             // ★ 全部字段读完后再迁移明文 token（避免把未加载的字段写成空）
@@ -98,7 +99,7 @@ public partial class MainWindow : Window
                     ["host"] = SshHost, ["port"] = SshPort, ["user"] = SshUser, ["key"] = SshKey,
                     ["dir"] = RemoteDir, ["dotnet"] = RemoteDotnet, ["launcher"] = RemoteLauncher, ["restPort"] = RemoteRestPort
                 },
-                ["paths"] = new JsonObject { ["localDir"] = LocalDir }
+                ["paths"] = new JsonObject { ["localDir"] = LocalDir, ["watchdog"] = WatchdogEnabled }
             };
             // ★ 安全（对标 MCSManager CVE-2025-50691 的教训）：token 用 DPAPI 加密后再落盘，
             //   同机其它用户即使读到 connection.json 也解不开；只有加密不可用时才退回明文。
@@ -113,6 +114,8 @@ public partial class MainWindow : Window
     // 原来全是硬编码的 C:\Users\星梦\... ✗ —— 别人装了用不了。改为可在 connection.json 的 paths.localDir 里改，
     // 默认取「当前用户桌面\utsl-deploy」。
     private static string LocalDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "utsl-deploy");
+    /// <summary>掉线自启（看门狗）：服务端进程消失时自动拉起。默认开，可关并记住。</summary>
+    private static bool WatchdogEnabled = true;
     private static string Logs => Path.Combine(LocalDir, "logs");
     private static int RemoteRestPort = 7878;    // 远端 TShock REST 端口（隧道另一端）
     private static int TunnelPid;                 // 隧道 ssh 进程（避免重复启动）
@@ -176,6 +179,16 @@ public partial class MainWindow : Window
         };
 
         SendBtn.Click += async (_, _) => await SendAsync();
+        if (ChkWatchdog is not null)
+        {
+            ChkWatchdog.IsChecked = WatchdogEnabled;
+            ChkWatchdog.IsCheckedChanged += (_, _) =>
+            {
+                WatchdogEnabled = ChkWatchdog.IsChecked == true;
+                try { SaveConn(); } catch { }
+                ERR(WatchdogEnabled ? "掉线自启：已开启（并记住）" : "掉线自启：已关闭（并记住）");
+            };
+        }
         CmdBox.KeyDown += async (_, e) =>
         {
             if (e.Key == Avalonia.Input.Key.Enter) { await SendAsync(); e.Handled = true; return; }
@@ -245,14 +258,6 @@ public partial class MainWindow : Window
         chainTimer.Start();
         RefreshChain();
 
-        if (ChkHideWorlds is not null)
-        {
-            ChkHideWorlds.IsCheckedChanged += (_, _) => ApplyHideWorlds();
-        }
-        // 服务端重启/新世界加载会重新弹窗 ✗ → 每 5 秒复查一次（仅在勾选时）
-        var hideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-        hideTimer.Tick += (_, _) => { if (ChkHideWorlds?.IsChecked == true) { HideUtslWindows(true); } };
-        hideTimer.Start();
 
         InitPluginHost();
         ApplyStartupArgs();
@@ -334,7 +339,7 @@ public partial class MainWindow : Window
             {
                 downTicks = 0;      // 进程还在 → 只是 REST 未就绪（加载中），看门狗不介入
             }
-            else if (ChkWatchdog?.IsChecked == true && serverWasUp && downTicks >= 2)
+            else if (WatchdogEnabled && serverWasUp && downTicks >= 2)
             {
                 downTicks = 0;
                 // ★ 换图保护窗口：刚启动/重启/整链重置后，世界加载需要时间（大图可达数分钟），期间不自动重启
@@ -1661,7 +1666,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            var srv = System.Diagnostics.Process.GetProcessesByName("UnifierTSL").FirstOrDefault();
+            var srv = System.Diagnostics.Process.GetProcessesByName("UnifierTSL").FirstOrDefault(p => { try { return !p.HasExited; } catch { return false; } });   // ★ 排除僵尸条目，否则监控读到 0
             if (srv is not null)
             {
                 try
@@ -1911,24 +1916,6 @@ public partial class MainWindow : Window
             ERR($"备份完成: {Path.GetFileName(zipPath)}（{n} 个文件" + (skip > 0 ? $"，{skip} 个被占用跳过" : "") + "）");
         }
         catch (Exception ex) { ERR("备份失败: " + ex.Message); }
-    }
-
-    // ===== 隐藏 UTSL 子世界控制台窗口（用户反馈：不想看到弹出的三个悬浮窗）=====
-    //   背景：UTSL 为每个子世界创建独立控制台 ✗ 管理器无法阻止它创建 ✗
-    private static int HideUtslWindows(bool hide) => ProcessBackend.HideWindows(hide);
-
-    private void ApplyHideWorlds()
-    {
-        try
-        {
-            bool hide = ChkHideWorlds?.IsChecked == true;
-            int n = HideUtslWindows(hide);
-            ERR(n == 0
-                ? "没找到 UTSL 的窗口（服务端没在运行？）"
-                : (hide ? $"已隐藏 {n} 个 UTSL 窗口（服务端重启后会再弹一次，届时会自动再隐藏）"
-                        : $"已恢复显示 {n} 个 UTSL 窗口"));
-        }
-        catch (Exception ex) { ERR("操作失败: " + ex.Message); }
     }
 
     // ===== 管理器插件系统 v2（宿主：加载/重载/命令/指标/事件/配置/权限/i18n）=====
@@ -4126,7 +4113,7 @@ public partial class MainWindow : Window
     private static string ServerDir => LocalDir;
     private static string ServerExe => Path.Combine(LocalDir, "UnifierTSL.exe");
 
-    private static bool ServerRunning => System.Diagnostics.Process.GetProcessesByName("UnifierTSL").Length > 0;
+    private static bool ServerRunning => LocalProcessBackend.AnyAlive();   // ★ 用 !HasExited 判，别按名字判（僵尸条目会让看门狗失效）
 
     private async void OnStartServer(object? sender, RoutedEventArgs e)
     {

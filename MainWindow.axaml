@@ -445,7 +445,6 @@
           </Grid>
           <Button x:Name="BtnRestart" Content="⟳  重启服务端" FontSize="11.5" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,6" CornerRadius="8" Click="OnRestartServer"/>
           <CheckBox x:Name="ChkWatchdog" Content="掉线自启" FontSize="11.5" Margin="4,2,0,0"/>
-          <CheckBox x:Name="ChkHideWorlds" Content="隐藏子世界窗口" FontSize="11.5" Margin="4,2,0,0" ToolTip.Tip="UTSL 为每个子世界开的控制台窗口，勾选后自动隐藏（窗口仍存在，只是看不见）"/>
           <TextBlock x:Name="PluginMetricsHeader" Text="插件指标" FontSize="11" FontWeight="SemiBold" Foreground="#7C7C82" Margin="4,14,0,6" IsVisible="False"/>
           <StackPanel x:Name="PluginMetricsHost" Spacing="4"/>
           <TextBlock Text="功能" FontSize="11" FontWeight="SemiBold" Foreground="#7C7C82" Margin="4,14,0,6"/>

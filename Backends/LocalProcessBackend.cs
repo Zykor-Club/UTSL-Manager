@@ -10,7 +10,21 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
 
     public bool IsRemote => false;
 
-    public bool IsAlive() => Process.GetProcessesByName(ProcName).Length > 0;
+    /// <summary>
+    /// 有没有【活着】的服务端进程。
+    /// ★ 不能只看"名字在不在进程列表里"：这台机器上被杀掉的进程会留下工作集 0、线程 0 的
+    ///   僵尸条目（实测 HasExited=True），按名字判会以为服务端还活着 —— 看门狗因此永远不触发。
+    /// </summary>
+    public static bool AnyAlive()
+    {
+        foreach (Process p in Process.GetProcessesByName(ProcName))
+        {
+            try { if (!p.HasExited) { return true; } } catch { }   // 取不到句柄的条目按"不活"算
+        }
+        return false;
+    }
+
+    public bool IsAlive() => AnyAlive();
 
     // ★ 不要给服务端做 stdin/stdout 重定向（实测过，会把它弄坏）：
     //   UTSL 启动时要拿控制台缓冲（ConsolePal.GetBufferInfo / WindowHeight），
@@ -59,38 +73,5 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
             parts.Add($"{before / 1048576} → {pr.WorkingSet64 / 1048576} MB");
         }
         return "已把物理内存标记为可回收: " + string.Join("；", parts) + " —— 注意：私有提交(commit)不变 ✗ 世界尺寸上限不会因此提高 ✓ 真正用途是【重操作前腾物理内存】✓";
-    }
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-    [DllImport("user32.dll")]
-    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    [DllImport("user32.dll")]
-    private static extern bool IsWindowVisible(IntPtr hWnd);
-
-    // 不把子世界改成 Headless：实测那样服务端 20~40 秒后会崩溃；隐藏窗口的效果等同"不弹"
-    public int HideWindows(bool hide)
-    {
-        int n = 0;
-        try
-        {
-            var pids = Process.GetProcessesByName(ProcName).Select(p => (uint)p.Id).ToHashSet();
-            if (pids.Count == 0) { return 0; }
-            EnumWindows((h, _) =>
-            {
-                GetWindowThreadProcessId(h, out uint pid);
-                if (pids.Contains(pid) && IsWindowVisible(h))
-                {
-                    ShowWindow(h, hide ? 0 : 9);   // 0=SW_HIDE  9=SW_RESTORE
-                    n++;
-                }
-                return true;
-            }, IntPtr.Zero);
-        }
-        catch { }
-        return n;
     }
 }

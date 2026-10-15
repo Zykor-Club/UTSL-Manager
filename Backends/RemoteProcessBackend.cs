@@ -33,6 +33,4 @@ public sealed class RemoteProcessBackend(ISshTransport ssh, Func<string> startSc
         return "远端工作集已压缩: " + r.Trim() + " —— 注意：私有提交(commit)不变 ✗ 世界尺寸上限不会因此提高 ✓ 真正用途是【重操作前腾物理内存】✓";
     }
 
-    /// <summary>远端服务端是 headless，没有窗口可隐藏。</summary>
-    public int HideWindows(bool hide) => 0;
 }

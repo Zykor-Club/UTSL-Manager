@@ -71,6 +71,14 @@
             <Setter Property="Height" Value="12" />
             <Setter Property="MinHeight" Value="12" />
           </Style>
+          <!-- 方向：竖排滚动条的 Track 必须 IsDirectionReversed=True（Value 增大 → 滑块向下），
+               横排为 False。Track 默认 False，漏了就会"滑块方向与实际滚动相反"（实测踩过）。 -->
+          <Style Selector="^:vertical /template/ Track">
+            <Setter Property="IsDirectionReversed" Value="True" />
+          </Style>
+          <Style Selector="^:horizontal /template/ Track">
+            <Setter Property="IsDirectionReversed" Value="False" />
+          </Style>
           <Style Selector="^:pointerover /template/ Thumb">
             <Setter Property="Background" Value="#9AFFFFFF" />
           </Style>

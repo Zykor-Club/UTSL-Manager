@@ -17,6 +17,4 @@ public interface IProcessBackend
     /// <summary>压缩服务端工作集；返回可直接显示的结果文案。</summary>
     string TrimMemory();
 
-    /// <summary>隐藏 / 恢复服务端窗口，返回处理的数量。</summary>
-    int HideWindows(bool hide);
 }
