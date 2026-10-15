@@ -1597,6 +1597,11 @@ public partial class MainWindow : Window
         if (list.Count > MaxSamples) { list.RemoveAt(0); }
     }
 
+    /// <summary>四路序列必须**每拍各补一次**样本：值未知时沿用上一次（首次为 0）。
+    /// 否则某一路（如进程消失时的内存、没装 metrics 插件时的内存）会漏拍 → 长度不一致 →
+    /// 三张图的填充宽度就不齐（这是之前"看起来没对齐"的另一半原因）。</summary>
+    private static void PushCarry(List<double> list, double? v)
+        => Push(list, v ?? (list.Count > 0 ? list[^1] : 0));
     private void SampleMetrics()
     {
         var now = DateTime.Now;
@@ -1629,9 +1634,9 @@ public partial class MainWindow : Window
                 memVal = MetricsPrivateMB / 1024.0;
                 up = MetricsUpKbps;
                 down = MetricsDownKbps;
-                Push(cpuHist, cpuVal);
-                Push(memHist, memVal);
-                Push(upHist, up); Push(downHist, down);
+                PushCarry(cpuHist, cpuVal);
+                PushCarry(memHist, memVal);
+                PushCarry(upHist, up); PushCarry(downHist, down);
                 CpuNow.Text = $"{cpuVal:F2}%";
                 MemNow.Text = $"{memVal:F2} GB";
                 NetNow.Text = up >= 1024 || down >= 1024
@@ -1647,10 +1652,11 @@ public partial class MainWindow : Window
                 memVal = SnapMemBytes / 1073741824.0;
                 up = SnapUpKbps;
                 down = SnapDownKbps;
-                Push(cpuHist, cpuVal);
+                PushCarry(cpuHist, cpuVal);
                 CpuNow.Text = $"{cpuVal:F2}%";
-                if (SnapMemBytes > 0) { Push(memHist, memVal); MemNow.Text = $"{memVal:F2} GB"; } else { MemNow.Text = "—"; }
-                Push(upHist, up); Push(downHist, down);
+                PushCarry(memHist, SnapMemBytes > 0 ? memVal : null);
+                MemNow.Text = SnapMemBytes > 0 ? $"{memVal:F2} GB" : "—";
+                PushCarry(upHist, up); PushCarry(downHist, down);
                 NetNow.Text = up >= 1024 || down >= 1024
                     ? $"↑ {up / 1024.0:F2}  ↓ {down / 1024.0:F2} MB/s"
                     : $"↑ {up:F2}  ↓ {down:F2} KB/s";
@@ -1677,12 +1683,12 @@ public partial class MainWindow : Window
                     {
                         double cpu = (srv.TotalProcessorTime - lastCpuTime).TotalMilliseconds / (secs * 1000) * 100.0;
                         cpuVal = Math.Max(0, Math.Min(Environment.ProcessorCount * 100.0, cpu));   // 上限=核数×100（本机核数）
-                        Push(cpuHist, cpuVal);
+                        PushCarry(cpuHist, cpuVal);
                     }
                     lastCpuTime = srv.TotalProcessorTime;
                     CpuNow.Text = $"{cpuVal:F2}%";
                     memVal = srv.PrivateMemorySize64 / 1073741824.0;
-                    Push(memHist, memVal);
+                    PushCarry(memHist, memVal);
                     MemNow.Text = $"{memVal:F2} GB";
                 }
                 catch { }
@@ -1691,7 +1697,7 @@ public partial class MainWindow : Window
             {
                 // 进程没了就显示 —（旧实现会一直留着上一次的读数，看着像还在跑）
                 CpuNow.Text = "—"; MemNow.Text = "—";
-                if (samplesSeen > 0) { Push(cpuHist, 0); }
+                if (samplesSeen > 0) { PushCarry(cpuHist, 0); PushCarry(memHist, null); PushCarry(upHist, null); PushCarry(downHist, null); }
             }
 
             long sent = 0, recv = 0;
@@ -1711,7 +1717,7 @@ public partial class MainWindow : Window
             {
                 up = Math.Max(0, (sent - lastBytesSent) / 1024.0 / secs);
                 down = Math.Max(0, (recv - lastBytesRecv) / 1024.0 / secs);
-                Push(upHist, up); Push(downHist, down);
+                PushCarry(upHist, up); PushCarry(downHist, down);
                 NetNow.Text = $"↑ {up:F2}  ↓ {down:F2} KB/s";
             }
             else { NetNow.Text = "—"; }
@@ -1753,13 +1759,14 @@ public partial class MainWindow : Window
         return bottom - r * (bottom - top);
     }
 
-    /// <summary>样本序号 → 横向像素。**右对齐**：最新样本永远贴右边，样本不足时左边留空 ——
-    /// 这样三张图（样本数可能不同，例如服务端重启会让某一路清零）也一定对齐。</summary>
-    private static double XFor(int i, int count, double w)
+    /// <summary>样本序号 → 横向像素。**左对齐**：最老的贴左边、新的往右长；缓冲满了以后最新样本正好在右边缘。
+    /// （曾经为"三张图填充宽度一致"改成右对齐 —— 结果变成从右往左长，方向反了；
+    ///   正确做法是让四路序列每拍都各补一次样本、长度始终一致，见 PushCarry。）</summary>
+    private static double XFor(int i, double w)
     {
         double left = 1, right = w - 1;
         double step = (right - left) / (MaxSamples - 1);
-        return right - (count - 1 - i) * step;
+        return left + i * step;
     }
 
     private static double CanvasW(Canvas c) => !double.IsNaN(c.Width) && c.Width > 0 ? c.Width : c.Bounds.Width;
@@ -1814,7 +1821,7 @@ public partial class MainWindow : Window
             var s = series[si];
             if (s.Count == 0) { continue; }
             var pts = new List<Avalonia.Point>();
-            for (int i = 0; i < s.Count; i++) { pts.Add(new Avalonia.Point(XFor(i, s.Count, w), YFor(s[i], scale, h))); }
+            for (int i = 0; i < s.Count; i++) { pts.Add(new Avalonia.Point(XFor(i, w), YFor(s[i], scale, h))); }
             var brush = new SolidColorBrush(Color.Parse(colors[si]));
             var areaPts = new List<Avalonia.Point>(pts) { new(pts[^1].X, PlotBottom(h)), new(pts[0].X, PlotBottom(h)) };
             canvas.Children.Add(new Avalonia.Controls.Shapes.Polygon { Points = areaPts, Fill = new SolidColorBrush(Color.Parse(colors[si]), 0.18) });
@@ -1836,7 +1843,7 @@ public partial class MainWindow : Window
             if (idx < 0 || idx >= n) { continue; }
             var lab = new TextBlock { Text = times[idx].ToString("HH:mm:ss"), FontSize = 8.5, Foreground = axisBrush };
             lab.Measure(Avalonia.Size.Infinity);
-            double x = XFor(i, MaxSamples, w);
+            double x = XFor(i, w);
             Canvas.SetLeft(lab, Math.Clamp(x - lab.DesiredSize.Width / 2, 0, Math.Max(0, w - lab.DesiredSize.Width)));
             xLabels.Children.Add(lab);
         }
