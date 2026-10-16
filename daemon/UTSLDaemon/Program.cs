@@ -430,9 +430,13 @@ bool ResolveSafe(string rel, out string full, out string err)
     full = ""; err = "";
     try
     {
-        string r = Path.GetFullPath(root);
+        // ★ 必须先规范成"带尾分隔符的目录前缀"再比较：否则 C:\utsl-deploy 会把兄弟目录
+        //   C:\utsl-deploy-backup\... 判成"在根内"（实测 StartsWith 返回 true），
+        //   而 agent 是以 SYSTEM 运行的、/files/delete 还是递归删除 —— 等于把部署根之外的读写删全放开。
+        string r = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         string f = Path.GetFullPath(Path.Combine(r, rel ?? ""));
-        if (!f.StartsWith(r, StringComparison.OrdinalIgnoreCase)) { err = "路径越界（只允许部署根之内）"; return false; }
+        if (!f.Equals(r, StringComparison.OrdinalIgnoreCase)
+            && !f.StartsWith(r + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) { err = "路径越界（只允许部署根之内）"; return false; }
         full = f; return true;
     }
     catch (Exception ex) { err = ex.Message; return false; }

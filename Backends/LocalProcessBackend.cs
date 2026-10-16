@@ -19,7 +19,7 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
     {
         foreach (Process p in Process.GetProcessesByName(ProcName))
         {
-            try { if (!p.HasExited) { return true; } } catch { }   // 取不到句柄的条目按"不活"算
+            using (p) { try { if (!p.HasExited) { return true; } } catch { } }   // 取不到句柄的条目按"不活"算
         }
         return false;
     }
@@ -49,11 +49,22 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
 
     public Task<ProcessResult> StopAsync()
     {
-        try
+        // ★ 逐个进程独立 try/catch：这台机器上被杀进程会留 HasExited=True 的僵尸条目，
+        //   对僵尸 Kill() 会抛 —— 原来整个循环共用一个 try，一个条目抛异常后【后面的活进程就都不杀了】，
+        //   同时返回"停止失败"，上层对服务端状态的判断随之出错。
+        int killed = 0, failed = 0;
+        foreach (Process p in Process.GetProcessesByName(ProcName))
         {
-            foreach (var p in Process.GetProcessesByName(ProcName)) { p.Kill(); }
-            return Task.FromResult(new ProcessResult(true, ""));
+            using (p)
+            {
+                try
+                {
+                    if (!p.HasExited) { p.Kill(); p.WaitForExit(3000); killed++; }
+                }
+                catch { failed++; }
+            }
         }
+        try { return Task.FromResult(new ProcessResult(failed == 0, $"已停止 {killed} 个" + (failed > 0 ? $"，{failed} 个未能停止" : ""))); }
         catch (Exception ex) { return Task.FromResult(new ProcessResult(false, "停止失败: " + ex.Message)); }
     }
 

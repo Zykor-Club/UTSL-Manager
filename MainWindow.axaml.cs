@@ -3626,7 +3626,7 @@ public partial class MainWindow : Window
     private const string BaselineMarker = "世界基线：";   // _vwc_templates 下的整世界模板
 
     /// <summary>服务端真正加载的世界（以 config.json 的 autoStartServers 为准；读不到就退回世界列表）。</summary>
-    private List<string> ServerWorldNames()
+    private List<string> ServerWorldNames(IReadOnlyList<string>? fallbackNames = null)
     {
         var names = new List<string>();
         try
@@ -3644,7 +3644,10 @@ public partial class MainWindow : Window
         catch { }
         if (names.Count == 0)
         {
-            foreach (var r in rows) { if (r.Name != "全部世界") { names.Add(r.Name); } }
+            // ★ 不能用 rows（UI 绑定的 ObservableCollection）：本方法会被 RefreshMapPickerAsync 在
+            //   后台线程调用，而 2 秒定时器会在 UI 线程 Clear/Add 它 → 数据竞态。
+            //   调用方在 UI 线程先做快照传进来；没传就退化为空（读不到 config 时才需要它）。
+            foreach (string n in fallbackNames ?? []) { if (n != "全部世界") { names.Add(n); } }
         }
         return names;
     }
@@ -3669,11 +3672,13 @@ public partial class MainWindow : Window
     {
         if (MapPicker is null) { return; }
         string sel = MapPicker.SelectedItem as string ?? "";
+        // ★ 在 UI 线程先快照世界名：ServerWorldNames 原本会枚举 UI 绑定的 rows，放到后台线程就是竞态
+        List<string> nameSnap = rows.Where(r => r.Name != "全部世界").Select(r => r.Name).ToList();
         List<string> items = await Task.Run(() =>
         {
             var list = new List<string> { "全部（拼接图）" };
             void Add(string s) { if (s.Length > 0 && !list.Contains(s, StringComparer.OrdinalIgnoreCase)) { list.Add(s); } }
-            foreach (var n in ServerWorldNames()) { Add(n); }
+            foreach (var n in ServerWorldNames(nameSnap)) { Add(n); }
             foreach (var n in WorldFilesIn(""))
             {
                 // 尘歌壶等虚拟世界单独标注，其余按普通世界列（磁盘上有就列出来）
@@ -3818,8 +3823,16 @@ public partial class MainWindow : Window
 
     private void ClearMapPluginBar()
     {
+        // ★ 只移除【插件加进来的】控件。MapPluginBar（MainWindow.axaml:345）里还有宿主自己的
+        //   MapPicker + 6 个内置按钮（适应/1:1/±/刷新），直接 Children.Clear() 会把它们一起抹掉 ——
+        //   实测后果：插件一加载（启动即执行），地图页就再也选不了世界，且 MapPicker 停在默认项
+        //   导致"框选"永远被拒。
+        foreach ((Button btn, _) in mapPluginButtons.ToArray())
+        {
+            try { MapPluginBar?.Children.Remove(btn); } catch { }
+        }
         mapPluginButtons.Clear();
-        try { MapPluginBar?.Children.Clear(); } catch { }
+        MapViewChanged = null;      // ★ 一并清掉插件的事件订阅，否则旧插件实例被永久引用（热重载 ALC 收不回）
     }
 
     /// <summary>插件加载完成后调用：让实现 IMapContributionPlugin 的插件往地图页注入界面。</summary>

@@ -16,7 +16,12 @@ public sealed class RemoteProcessBackend(ISshTransport ssh, Func<string> startSc
             string r = AgentClient.StartServer();
             if (r.Contains("✓")) { return new ProcessResult(true, r); }
         }
-        try { return new ProcessResult(true, ssh.Run(startScript(), 60000)); }
+        try
+        {
+            string r = ssh.Run(startScript(), 60000);
+            // ★ 启动脚本回的是 'wmi rc=N pid=M'：只有 rc==0 才算成功（原来无条件 Ok=true，WMI 失败也报成功）
+            return new ProcessResult(r.Contains("rc=0"), r);
+        }
         catch (Exception ex) { return new ProcessResult(false, "远端启动失败: " + ex.Message); }
     });
 
@@ -27,7 +32,12 @@ public sealed class RemoteProcessBackend(ISshTransport ssh, Func<string> startSc
             string r = AgentClient.StopServer();
             if (r.Contains("✓")) { return new ProcessResult(true, r); }
         }
-        try { return new ProcessResult(true, ssh.Run(stopScript(), 40000)); }
+        try
+        {
+            string r = ssh.Run(stopScript(), 40000);
+            // ★ 停止脚本回 'remaining=N'：只有 remaining=0 才算停干净
+            return new ProcessResult(r.Contains("remaining=0"), r);
+        }
         catch (Exception ex) { return new ProcessResult(false, "远端停止失败: " + ex.Message); }
     });
 
