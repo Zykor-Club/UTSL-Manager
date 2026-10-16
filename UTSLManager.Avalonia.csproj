@@ -73,6 +73,9 @@
     <PackageReference Include="Devolutions.AvaloniaTheme.MacOS" Version="*" />
     <!-- P2-12：.csx 脚本插件（Roslyn） -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.9.0" />
+    <!-- v6：Lua 插件（社区里有 Lua 作者）。实测 2.0.0 在 net10.0 可还原/可运行，体积仅 349KB；
+         用官方软沙箱预设，并额外剔除 os/package（实测软沙箱仍保留这两个）。 -->
+    <PackageReference Include="MoonSharp" Version="2.0.0" />
   </ItemGroup>
   <!-- daemon/ 是独立工程（UTSLDaemon），别被管理器的 SDK 通配顺手编进来 -->
   <ItemGroup>

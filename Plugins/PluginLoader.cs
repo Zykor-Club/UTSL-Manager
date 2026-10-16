@@ -52,8 +52,47 @@ internal static class PluginLoader
             if (depFailures.Any(f => f.DllPath == d.DllPath)) { failedKeys.Add(d.Key); }
         }
 
+        // ★ v6：登记一个已实例化的插件。C# 程序集路径与 Lua 路径【共用这一段】，
+        //   所以两者在权限上下文、加载报告、命令、热重载、停用方面的行为完全一致。
+        bool RegisterInstance(PluginDescriptor d, IManagerPlugin inst)
+        {
+            if (inst.RequiredApiVersion > ManagerApi.Version)
+            {
+                report.Failed.Add(new FailedPlugin(d.DllPath, $"{inst.Name} 需要 API v{inst.RequiredApiVersion} > v{ManagerApi.Version}"));
+                return false;
+            }
+            var pctx = new PluginContext(host, d, inst);
+            var lp = new LoadedPlugin { Instance = inst, Descriptor = d, Ctx = pctx };
+            inst.OnLoad(pctx);
+            foreach (var kv in pctx.Commands) { lp.Commands[kv.Key] = kv.Value.Description; }
+            host.AddPlugin(lp, pctx);
+            report.Loaded.Add(lp);
+            string author = string.IsNullOrWhiteSpace(inst.Author) ? (d.Author ?? "?") : inst.Author;
+            string kind = string.IsNullOrWhiteSpace(d.Type) ? "" : " [" + d.Type + "]";
+            host.Options.Log($"[插件] 已加载 {inst.Icon} {inst.Name} v{lp.Version}{kind}（{Path.GetFileName(d.DllPath)}，作者 {author}）");
+            return true;
+        }
+
         foreach (var d in ordered)
         {
+            // ★ v6：Lua 插件不走程序集加载，直接造适配器实例（.lua / plugin.lua）
+            if (LuaPluginAdapter.IsLuaFile(d.DllPath))
+            {
+                try
+                {
+                    if (!RegisterInstance(d, new LuaPluginAdapter(d)))
+                    {
+                        failedKeys.Add(d.Key); failedKeys.Add(Path.GetFileNameWithoutExtension(d.DllPath));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    report.Failed.Add(new FailedPlugin(d.DllPath, "Lua 加载失败: " + ex.Message));
+                    failedKeys.Add(d.Key); failedKeys.Add(Path.GetFileNameWithoutExtension(d.DllPath));
+                }
+                continue;
+            }
+
             if (d.ApiVersion > ManagerApi.Version)
             {
                 report.Failed.Add(new FailedPlugin(d.DllPath, $"需要 API v{d.ApiVersion}，本管理器支持到 v{ManagerApi.Version}（请更新管理器）"));
@@ -94,23 +133,7 @@ internal static class PluginLoader
                     try
                     {
                         if (Activator.CreateInstance(t) is not IManagerPlugin inst) { continue; }
-                        if (inst.RequiredApiVersion > ManagerApi.Version)
-                        {
-                            report.Failed.Add(new FailedPlugin(d.DllPath, $"{t.Name} 需要 API v{inst.RequiredApiVersion} > v{ManagerApi.Version}"));
-                            continue;
-                        }
-
-                        var pctx = new PluginContext(host, d, inst);
-                        var lp = new LoadedPlugin { Instance = inst, Descriptor = d, Ctx = pctx };
-                        inst.OnLoad(pctx);
-                        foreach (var kv in pctx.Commands) { lp.Commands[kv.Key] = kv.Value.Description; }
-                        host.AddPlugin(lp, pctx);
-                        report.Loaded.Add(lp);
-                        ok++;
-
-                        string author = string.IsNullOrWhiteSpace(inst.Author) ? (d.Author ?? "?") : inst.Author;
-                        string kind = string.IsNullOrWhiteSpace(d.Type) ? "" : " [" + d.Type + "]";
-                        host.Options.Log($"[插件] 已加载 {inst.Icon} {inst.Name} v{lp.Version}{kind}（{dllName}，作者 {author}）");
+                        if (RegisterInstance(d, inst)) { ok++; }
                     }
                     catch (Exception ex)
                     {
@@ -154,8 +177,10 @@ internal static class PluginLoader
                 string name = Path.GetFileName(sub);
                 string preferredDll = Path.Combine(sub, name + ".dll");
                 string preferredCsx = Path.Combine(sub, name + ".csx");
+                string preferredLua = Path.Combine(sub, "plugin.lua");
                 if (File.Exists(preferredDll)) { list.Add(preferredDll); continue; }
                 if (File.Exists(preferredCsx)) { list.Add(preferredCsx); continue; }
+                if (File.Exists(preferredLua)) { list.Add(preferredLua); continue; }   // v6：一插件一目录的 Lua 布局
 
                 // 退而求其次：目录里有清单的插件文件；再没有就取第一个
                 var withManifest = Directory.GetFiles(sub)
@@ -243,7 +268,8 @@ internal static class PluginLoader
     // ===== 加载 =====
 
     private static bool IsPluginFile(string path) =>
-        path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".csx", StringComparison.OrdinalIgnoreCase);
+        path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".csx", StringComparison.OrdinalIgnoreCase)
+        || path.EndsWith(".lua", StringComparison.OrdinalIgnoreCase);   // v6：Lua 插件
 
     private static bool IsScript(string path) => path.EndsWith(".csx", StringComparison.OrdinalIgnoreCase);
 
