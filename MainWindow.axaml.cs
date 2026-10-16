@@ -159,7 +159,6 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        RemoteShell.Report = (msg) => { try { Dispatcher.UIThread.Post(() => Term(msg, "#8A8A90")); } catch { } };   // 通道状态显示在终端，便于排障
         // ★ 传输进度显示在底部状态栏（后台线程调用 → Post 回 UI）
         TransferStatus = (msg) =>
         {
@@ -552,11 +551,11 @@ public partial class MainWindow : Window
     private static bool SnapHasRate;
     private static int samplesSeen;                   // 本机模式：首帧只记基线，避免"开机至今总CPU"假尖峰
     // ★ 服务端 /metrics 插件（MetricsChannel）—— 远端模式的实时指标来源（实测单次 98~147ms，可 2 秒级）
-    private static double MetricsCpuPct, MetricsUpKbps, MetricsDownKbps, MetricsPrivateMB, MetricsGcMB;
-    private static int MetricsLogicalCpu = 1, MetricsThreads, MetricsPlayers, MetricsWorlds;
+    private static double MetricsCpuPct, MetricsUpKbps, MetricsDownKbps, MetricsPrivateMB;
+    // （原来还声明了 MetricsGcMB / MetricsLogicalCpu / MetricsThreads / MetricsPlayers / MetricsWorlds，
+    //   全仓只有赋值、没有读取 —— 已删，报表里那几行的解析也一并去掉）
     private static long MetricsAtMs;                  // 最近一次成功取值的时间
     private static bool MetricsFetching;              // 防重入
-    private static bool MetricsPluginOk;              // 最近一次是否成功（仅用于显示提示）
     private static long MetricsNextTryMs;             // 失败后的下次重试时间（退避，避免每 2 秒猛打）
     private static int SnapshotProcs;                 // 快照里的服务端进程数
     private static string SnapshotListen = "";        // 快照里的监听端口
@@ -1119,17 +1118,12 @@ public partial class MainWindow : Window
                 MetricsUpKbps = Num(o["upKbps"]);
                 MetricsDownKbps = Num(o["downKbps"]);
                 MetricsPrivateMB = Num(o["privateMB"]);
-                MetricsGcMB = Num(o["gcHeapMB"]);
-                MetricsLogicalCpu = Math.Max(1, (int)Num(o["logicalCpu"]));
-                MetricsThreads = (int)Num(o["threads"]);
-                MetricsPlayers = (int)Num(o["players"]);
-                MetricsWorlds = (int)Num(o["worlds"]);
                 MetricsAtMs = Environment.TickCount64;
-                MetricsPluginOk = true;
+                // （原来这里还解析 gcHeapMB/logicalCpu/threads/players/worlds 并赋值给仅写不读的静态字段 —— 已删）
                 MetricsNextTryMs = 0;
             }
         }
-        catch { MetricsPluginOk = false; MetricsNextTryMs = Environment.TickCount64 + 10000; }   // 失败 10 秒后重试（服务端重启期间就是这条）
+        catch { MetricsNextTryMs = Environment.TickCount64 + 10000; }   // 失败 10 秒后重试（服务端重启期间就是这条）
         finally { MetricsFetching = false; }
     }
 
@@ -1145,12 +1139,14 @@ public partial class MainWindow : Window
         try
         {
             bool tunnel = TunnelAlive;
-            bool shell = RemoteShell.Status.StartsWith("就绪", StringComparison.Ordinal);
+            // ★ 原来这里读的是 RemoteShell.Status（那个常驻通道早已停用、Status 恒为"未启用"）→
+            //   远端模式下这盏灯永远橙色，让人以为通道坏了。改用真实的 ssh 健康度（最近一次调用是否失败）。
+            bool sshOk = HasSsh && LastSshError.Length == 0;
             bool rest = RestAlive;
-            if (dotsInit && tunnel == lastDotTunnel && shell == lastDotShell && rest == lastDotRest) { return; }
-            dotsInit = true; lastDotTunnel = tunnel; lastDotShell = shell; lastDotRest = rest;
+            if (dotsInit && tunnel == lastDotTunnel && sshOk == lastDotShell && rest == lastDotRest) { return; }
+            dotsInit = true; lastDotTunnel = tunnel; lastDotShell = sshOk; lastDotRest = rest;
             SetDot(DotTunnel, !HasSsh ? "#6B6B70" : tunnel ? "#30D158" : "#FF9F0A");
-            SetDot(DotShell, !HasSsh ? "#6B6B70" : shell ? "#30D158" : "#FF9F0A");
+            SetDot(DotShell, !HasSsh ? "#6B6B70" : sshOk ? "#30D158" : "#FF9F0A");
             SetDot(DotRest, rest ? "#30D158" : "#FF9F0A");
         }
         catch { }
@@ -1170,7 +1166,6 @@ public partial class MainWindow : Window
     private const int AgentLocalPort = 17879;    // 本机隧道入口
     private const int AgentRemotePort = 7879;    // 远端 agent 端口（只绑回环）
     private static bool AgentAlive;
-    private static long AgentProbedMs;
     // agent 指标（远端没装 MetricsChannel 插件时的 2 秒级来源；网络是累计字节，速率由管理器差分）
     private static double AgentCpuPct, AgentPrivateMB;
     private static long AgentSentBytes = -1, AgentRecvBytes = -1, AgentMetricsAtMs;
@@ -1191,10 +1186,9 @@ public partial class MainWindow : Window
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
             string s = await http.GetStringAsync(baseUrl + "/ping");
             bool ok = s.Contains("\"ok\":true");
-            AgentProbedMs = Environment.TickCount64;
             return ok;
         }
-        catch (Exception ex) { AgentProbedMs = Environment.TickCount64; AgentProbeErr = ex.GetType().Name + ": " + ex.Message; return false; }
+        catch (Exception ex) { AgentProbeErr = ex.GetType().Name + ": " + ex.Message; return false; }
     }
 
     /// <summary>刷新连接设置页的 agent 状态灯（UI 线程调用）。</summary>
@@ -1434,174 +1428,6 @@ public partial class MainWindow : Window
     /// 三重保险：① StandardInput 显式不带 BOM（否则远端取 id 会带上 BOM → 永远收不到回包，这就是上一版失败的原因）；
     /// ② 建连后自检，6 秒内必须收到 ##E 帧；③ 任何异常/超时立即标记不可用并永久回退一次性 ssh。
     /// 生命周期：管理器退出时 stdin 关闭 → 远端 ReadLine 返回 null → 循环退出 → 本机 ssh 退出（自清理，不留孤儿）。
-    /// </summary>
-    private static class RemoteShell
-    {
-        private static System.Diagnostics.Process? _proc;
-        private static readonly object _gate = new();
-        private static int _seq;
-        private static bool _broken;
-        private static int _strikes;      // 连续超时计数：2 次才判死
-        private static bool _warm;        // 是否已成功跑过一次（冷启动那次给足时间且不计失败）
-        // ★ 关键修复：ReadLineAsync().Wait(超时) 在超时后会留下"进行中的读"，
-        //   下一次读直接抛 "stream is currently in use" → 通道被永久废弃 → 全部回退（实测 7~11 秒/次）。
-        //   正确做法：后台线程阻塞式读入队列，调用方从队列带超时取，绝不放弃进行中的读。
-        private static System.Collections.Concurrent.BlockingCollection<string>? _outQ;
-        public static string Status = "未启用";
-        private static bool _reported;
-        public static Action<string>? Report;
-
-        private static void Say()
-        {
-            if (_reported) { return; }
-            _reported = true;
-            try { Report?.Invoke("远端命令通道: " + Status); } catch { }
-        }
-
-        /// <summary>★ 关键修复：ReadLine() **没有超时**，远端一旦不返回就会永久阻塞
-        ///   （实测导致自检进程卡死数分钟、ssh 堆积，"一直读取中"也是它）。这里改成带超时的异步读。</summary>
-        private static string? ReadLineTimed(int ms)
-        {
-            try
-            {
-                var q = _outQ;
-                if (q is null) { return null; }
-                if (q.TryTake(out string? line, ms)) { return line; }
-                if (q.IsCompleted) { return null; }     // 队列已结束 = 通道断了
-                return null;                            // 超时（注意：这不影响后台的读，绝不会留下"进行中的读"）
-            }
-            catch { return null; }
-        }
-
-        private static bool Ensure()
-        {
-            if (_broken) { return false; }
-            if (_proc is not null && !_proc.HasExited) { return true; }
-            try { _proc?.Kill(true); } catch { }
-            try { _proc?.Dispose(); } catch { }
-            _proc = null;
-            try
-            {
-                var psi = new System.Diagnostics.ProcessStartInfo("ssh")
-                {
-                    RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-                    UseShellExecute = false, CreateNoWindow = true,
-                    StandardOutputEncoding = System.Text.Encoding.UTF8,
-                    StandardErrorEncoding = System.Text.Encoding.UTF8,
-                    StandardInputEncoding = new System.Text.UTF8Encoding(false),   // ★ 关键：不能带 BOM
-                };
-                psi.ArgumentList.Add("-i"); psi.ArgumentList.Add(SshKey);
-                psi.ArgumentList.Add("-p"); psi.ArgumentList.Add(SshPort.ToString());
-                psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("BatchMode=yes");
-                psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("ServerAliveInterval=30");
-                psi.ArgumentList.Add(SshUser + "@" + SshHost);
-                string loop =
-                    "$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8;" +
-                    "while($true){$line=[Console]::In.ReadLine();if($null -eq $line){break};if($line -eq '__EXIT__'){break};" +
-                    "$id=$line.Substring(0,8);$b64=$line.Substring(8);" +
-                    "$code=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($b64));" +
-                    "try{$out=(& ([ScriptBlock]::Create($code)) 2>&1 | Out-String)}catch{$out='ERR: '+$_.Exception.Message};" +
-                    "[Console]::Out.WriteLine('##B'+$id);[Console]::Out.Write($out);[Console]::Out.WriteLine();[Console]::Out.WriteLine('##E'+$id);[Console]::Out.Flush()}";
-                psi.ArgumentList.Add("powershell -NoProfile -EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(loop)));
-                _proc = System.Diagnostics.Process.Start(psi);
-                if (_proc is null) { _broken = true; Status = "启动失败（已回退一次性 ssh）"; Say(); return false; }
-                var proc = _proc;
-                _outQ = new System.Collections.Concurrent.BlockingCollection<string>();
-                var q = _outQ;
-                _ = Task.Run(() =>
-                {
-                    try { string? l; while ((l = proc.StandardOutput.ReadLine()) is not null) { q.Add(l); } }
-                    catch { }
-                    finally { try { q.CompleteAdding(); } catch { } }
-                });
-                _ = Task.Run(() => { try { while (proc.StandardError.ReadLine() is not null) { } } catch { } });   // 排空 stderr，避免管道填满阻塞远端
-                if (!SelfTest())
-                {
-                    _broken = true; Status = "自检失败（已回退一次性 ssh）"; Say();
-                    try { _proc.Kill(true); } catch { }
-                    _proc = null;
-                    return false;
-                }
-                Status = "就绪（每次请求约 0.1 秒）"; Say();
-                _warm = false;   // 新建的通道还没跑过真实命令，第一次要给足时间
-                return true;
-            }
-            catch
-            {
-                _broken = true; Status = "异常（已回退一次性 ssh）"; Say();
-                _proc = null; return false;
-            }
-        }
-
-        private static bool SelfTest()
-        {
-            try
-            {
-                if (_proc is null) { return false; }
-                const string id = "99999999";
-                _proc.StandardInput.WriteLine(id + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes("'ok'")));
-                _proc.StandardInput.Flush();
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-                while (sw.ElapsedMilliseconds < 6000)
-                {
-                    string? ln = ReadLineTimed(2000);      // ★ 每次读最多等 2 秒，绝不无限阻塞
-                    if (ln is null) { return false; }
-                    if (ln == "##E" + id) { return true; }
-                }
-                return false;
-            }
-            catch { return false; }
-        }
-
-        public static string? Run(string psScript, int timeoutMs)
-        {
-            lock (_gate)
-            {
-                if (_broken) { return null; }
-                if (!Ensure() || _proc is null) { return null; }
-                try
-                {
-                    string id = (++_seq % 100000000).ToString("D8");
-                    _proc.StandardInput.WriteLine(id + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(psScript)));
-                    _proc.StandardInput.Flush();
-                    var sb = new System.Text.StringBuilder();
-                    string end = "##E" + id;
-                    var sw = System.Diagnostics.Stopwatch.StartNew();
-                    // ★ 冷启动第一次要等远端 PowerShell 起来（实测 7~12 秒），给 25 秒且失败不计 strike；
-                    //   预热成功后每次只给 8 秒，超时才计数（否则一次慢请求就把通道废掉 → 全部回退，实测就是这个现象）。
-                    int budget = _warm ? Math.Min(timeoutMs, 8000) : Math.Min(timeoutMs, 25000);
-                    bool first = !_warm;
-                    while (sw.ElapsedMilliseconds < budget)
-                    {
-                        string? ln = ReadLineTimed(2000);   // ★ 带超时，绝不无限阻塞
-                        if (ln is null) { break; }
-                        if (ln == end) { _strikes = 0; _warm = true; return sb.ToString(); }
-                        if (ln.StartsWith("##B", StringComparison.Ordinal)) { continue; }
-                        sb.AppendLine(ln);
-                    }
-                    // 冷启动那次超时不计数（远端 PowerShell 刚起来本来就慢）
-                    if (!first) { _strikes++; }
-                    if (_strikes < 2)
-                    {
-                        try { _proc.Kill(true); } catch { }
-                        _proc = null;
-                        return null;            // 本次先回退，下次仍会尝试通道
-                    }
-                    _broken = true; Status = "连续超时（已回退一次性 ssh）"; Say();
-                    try { _proc.Kill(true); } catch { }
-                    _proc = null;
-                    return null;
-                }
-                catch
-                {
-                    _broken = true; Status = "异常（已回退一次性 ssh）"; Say();
-                    try { _proc?.Kill(true); } catch { }
-                    _proc = null; return null;
-                }
-            }
-        }
-    }
-
     // ★ 实测：单次 ssh 握手 ~1.5 秒；但并发堆到 40 个时单次会变成 14 秒（互相拖慢）。
     //   用信号量限制并发（最多 2 个）。
     //   ★ 改动：原来「最多等 15 秒就放行」——等不到许可照样起 ssh，等于并发上限名存实亡
@@ -1614,6 +1440,7 @@ public partial class MainWindow : Window
 
     private static string SshRun(string psScript, int timeoutMs = 30000)
     {
+        LastSshError = "";        // 每次调用重新计健康度（状态灯据此显示）
         if (!SshGate.Wait(60000))
         {
             LastSshError = "等待 ssh 通道超时（60 秒）—— 远端可能异常繁忙或卡住";
@@ -1745,7 +1572,9 @@ public partial class MainWindow : Window
             return;
         }
         var lines = outp.Split('\n').Select(x => x.TrimEnd('\r')).ToList();
-        if (lines.Count == 0) { return; }
+        // ★ 原来是 if (lines.Count == 0)："" .Split 永远返回 1 个元素 → 这个护栏【永不成立】。
+        //   真正该拦的是 SshRun 失败返回空串（远端脚本失败/超时），那种情况要能看出来。
+        if (outp.Trim().Length == 0) { return; }
         string header = lines[0].StartsWith("###") ? lines[0][3..] : "";
         if (header.Length > 0 && header != lastLogFile)
         {
@@ -2876,7 +2705,6 @@ public partial class MainWindow : Window
         ShowView("chain");
         try
         {
-            if (ChainInfo is not null) { ChainInfo.Text = "读取中…（上次结果保留）"; }
             ChainInfo.Text = "读取中…（上次结果保留）";
             // ★ 流畅性：不先 Clear，等数据到手再重建
             // 读 EdgeStitch 配置
@@ -4513,7 +4341,6 @@ public partial class MainWindow : Window
     private bool serverWasUp;
     private int downTicks;
     private int watchdogFailures;
-    private bool warnedRemoteWatchdog;
     // ★ 换图/启动保护窗口（移植 PGame 的 watchdogWorldBuildSuppress 思路）：
     //   世界加载期间 REST 本来就不通，若用"REST 通不通"当存活判据会误判掉线 → 重启循环。
     private static long watchdogProtectUntilMs;

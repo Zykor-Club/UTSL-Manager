@@ -84,7 +84,10 @@ public static class AgentClient
             {
                 if (l.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase) && long.TryParse(l[15..].Trim(), out long cl)) { total = cl; }
             }
-            Directory.CreateDirectory(Path.GetDirectoryName(localPath) ?? ".");
+            // ★ 原来写 GetDirectoryName(localPath) ?? "."：对不带目录的文件名它返回【空串】而不是 null，
+            //   ?? 永不生效 → CreateDirectory("") 抛 ArgumentException（被外层 catch 变成"下载失败"）。
+            string? dir = Path.GetDirectoryName(localPath);
+            if (!string.IsNullOrEmpty(dir)) { Directory.CreateDirectory(dir); }
             var buf = new byte[256 * 1024];
             long got = 0;
             var sw = System.Diagnostics.Stopwatch.StartNew();
