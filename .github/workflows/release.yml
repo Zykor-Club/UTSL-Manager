@@ -55,6 +55,10 @@ jobs:
         # 不用仓库默认 PublishDir（会输出到仓库外）
         run: dotnet publish UTSLManager.Avalonia.csproj -c Release -p:PublishDir=${{ github.workspace }}/publish/
 
+      - name: Publish agent (UTSLDaemon → publish/agent/)
+        shell: pwsh
+        # 「安装/更新云端 agent」按钮用的就是 publish/agent/UTSLDaemon.exe（自包含单文件）
+        run: ./scripts/publish-agent.ps1 -ManagerDir "${{ github.workspace }}/publish"
       - name: Build extensions (官方扩展插件)
         run: |
           dotnet build extensions/PacketInspector/PacketInspector.csproj -c Release -p:ManagerDir=${{ github.workspace }}/publish
@@ -75,6 +79,7 @@ jobs:
           # 官方扩展：ApiProbe / PacketInspector / RuYouMusicPanel / MapTemplates
           if (($plugins | Measure-Object).Count -lt 4) { throw 'publish/plugins 下的扩展 dll 少于 4 个' }
           if (-not (Test-Path publish/plugins/MapTemplates.dll)) { throw 'publish/plugins/MapTemplates.dll 不存在' }
+          if (-not (Test-Path publish/agent/UTSLDaemon.exe)) { throw 'publish/agent/UTSLDaemon.exe 不存在（云端 agent 安装包没打进产物）' }
 
       - name: Package
         shell: pwsh

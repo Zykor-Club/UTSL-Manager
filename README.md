@@ -22,6 +22,7 @@
 | 文件 | 浏览（表格式）、下载 / 上传 / 删除、插件 `.dll` 一键启用停用、**传输进度与取消** |
 | 配置 | 启动器 `config.json` 与 `EdgeStitch.json` 结构化编辑、保存自动 `.bak`、原子写 |
 | 监控 | 控制台仪表盘：CPU（**单核 %**）/ 内存（**私有**）/ 网络；装了服务端 `MetricsChannel` 插件时经现有 REST 隧道 **2 秒级实时**（实测单次 98~147 ms），否则回退到每 45 秒的 SSH 合并快照。速率均为**滚动 5 秒窗口** |
+| 云端 agent | 装在**被管机器**上的只读 agent（daemon/UTSLDaemon，只绑回环、走已有的 SSH 隧道）：日志 **SSE 推送**（实测 154 ms，对比轮询 12 s 限流）、指标 **2 秒级**（不要求服务端装 MetricsChannel 插件）。连接设置页有状态灯 + **一键安装/更新**按钮 |
 | 备份 | 远端打包 `Worlds`+`config` 并 **scp 下载到本机**形成离机副本 |
 | 其它 | 世界链可视化、**自检入口**、插件系统（含插件管理页）、凭据 DPAPI 加密 |
 
@@ -69,6 +70,8 @@
 实现：`TcpListener` 手写极简 HTTP/1.1（不用 `HttpListener`，避开需要管理员权限的 URL ACL）；
 日志只把完整行计入已消费位置；自带 `--selftest`（进程内起监听并自己连自己量延迟，用系统分配的空闲端口）。
 
+**部署**：管理器「连接设置」页有 **安装 / 更新云端 agent** 按钮（内部流程：先停旧进程 → scp 推送 → 重建计划任务 → 重探）。也可以手工执行：
+
 **部署（远端没有 .NET 10 时用自包含单文件）**：
 
 ```powershell
@@ -89,6 +92,7 @@ schtasks /Run /TN UTSLAgent
 | 经隧道 SSE 端到端 | 远端写入 → 本机收到 **1 行命中** ✓ |
 | 自包含 agent 体积 | 单文件 **35.9 MB**（远端只有 .NET 9，实测可跑） |
 | 部署同步 186 MB | scp **2.7 MB/s** / 68.9 s；远端解压 428 文件 407.6 MB 用 2 s |
+| 指标轮询周期（远端） | 90~100 秒窗口实测 **平均 2.4 秒**（原为 45 秒快照） |
 
 对比现状：远端日志靠 **12 s 限流**的 ssh 轮询、指标靠 **45 s** 合并快照 → 推送 **154 ms**。
 
@@ -122,6 +126,10 @@ dotnet build extensions/ApiProbe/ApiProbe.csproj -c Release
 dotnet build extensions/MapTemplates/MapTemplates.csproj -c Release
 #   管理器不在默认目录时：加 -p:ManagerDir=D:\path\to\AvaloniaUTSL
 
+# 2.5) 打包云端 agent（自包含单文件 → <管理器目录>\agent\UTSLDaemon.exe）
+#      「安装/更新云端 agent」按钮用的就是它；被管机器通常没有 .NET 10，所以必须自包含。
+#      ⚠ 本机若禁止执行脚本，需要 -ExecutionPolicy Bypass
+powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/publish-agent.ps1
 # 3) 运行
 .\..\..\AvaloniaUTSL\UTSLManager.exe
 ```
@@ -237,7 +245,9 @@ git push origin v1.0.0     # 推送标签后，release 工作流自动产出 Rel
 │   └─ ServerCapabilities.cs   服务端"有没有模板能力"的探测
 ├─ Plugins/                    管理器插件系统（**API v4**：IManagerPlugin / IMapContributionPlugin / IManagerContext / PluginHost…）
 ├─ extensions/                 官方扩展源码（数据包查看器、点歌机面板、API 探针、**建筑模板**）
+├─ daemon/UTSLDaemon/          云端 agent 源码（只读：日志 SSE 推送 + 指标；只绑回环，走 SSH 隧道）
 ├─ scripts/get-tedit.ps1       取 TEdit 源码（固定提交 + CI 缓存）
+├─ scripts/publish-agent.ps1   把 agent 发布成自包含单文件放进 <管理器目录>\agent\（安装按钮的源）
 └─ PLUGINS.md                  插件开发指南
 ```
 
