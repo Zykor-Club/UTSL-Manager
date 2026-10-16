@@ -10,12 +10,23 @@ public sealed class RemoteProcessBackend(ISshTransport ssh, Func<string> startSc
 
     public Task<ProcessResult> StartAsync() => Task.Run(() =>
     {
+        // ★ agent 在线就走它：无窗口启动 + stdout 可抓（不再需要控制台启动器）
+        if (AgentClient.Alive)
+        {
+            string r = AgentClient.StartServer();
+            if (r.Contains("✓")) { return new ProcessResult(true, r); }
+        }
         try { return new ProcessResult(true, ssh.Run(startScript(), 60000)); }
         catch (Exception ex) { return new ProcessResult(false, "远端启动失败: " + ex.Message); }
     });
 
     public Task<ProcessResult> StopAsync() => Task.Run(() =>
     {
+        if (AgentClient.Alive)
+        {
+            string r = AgentClient.StopServer();
+            if (r.Contains("✓")) { return new ProcessResult(true, r); }
+        }
         try { return new ProcessResult(true, ssh.Run(stopScript(), 40000)); }
         catch (Exception ex) { return new ProcessResult(false, "远端停止失败: " + ex.Message); }
     });

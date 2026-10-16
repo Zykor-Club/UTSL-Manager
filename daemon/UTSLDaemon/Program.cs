@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -19,6 +20,10 @@ Dictionary<int, TimeSpan> _prevCpu = [];
 DateTime _prevAt = DateTime.UtcNow;
 long _prevSent = -1, _prevRecv = -1;
 int BoundPort = 0;
+// 进程托管状态（P2）：必须声明在所有用到它的局部函数【之前】，否则顶层语句会报"未赋值"
+Process? serverProc = null;
+var stdoutRing = new ConcurrentQueue<string>();
+const int StdoutRingMax = 4000;
 long metricsCalls = 0;
 long pingCalls = 0;
 long lastPingLog = 0;        // 实际绑定到的端口（--selftest 用 0 让系统分配，避免撞上别的程序）
@@ -92,6 +97,18 @@ async Task HandleAsync(TcpClient client)
                 case "/metrics":
                     Interlocked.Increment(ref metricsCalls);
                     await WriteJsonAsync(ns, CollectMetrics());
+                    return;
+                case "/proc/start":
+                    await ProcStartAsync(ns);
+                    return;
+                case "/proc/stop":
+                    await ProcStopAsync(ns);
+                    return;
+                case "/proc/status":
+                    await WriteJsonAsync(ns, ProcStatus());
+                    return;
+                case "/stream/stdout":
+                    await StreamStdoutAsync(ns);
                     return;
                 case "/files/get":
                     await SendFileAsync(ns, QueryValue(pathRaw, "path"));
@@ -289,6 +306,107 @@ async Task EmitLineAsync(NetworkStream ns, List<byte> raw)
     string line = Encoding.UTF8.GetString(arr).TrimEnd('\r');
     if (line.Length == 0) { return; }
     await WriteAsync(ns, "data: " + line + "\n\n");
+}
+
+// ================= 进程托管（P2：agent 拥有服务端进程，直接抓 stdout）=================
+//   前提：UnifierTSL 已能在【无控制台 + 重定向 stdout】下启动（补丁在 lib\UnifierTSL.dll —— 注意根目录那份不被加载）。
+//   这样控制台就能拿到服务端**真正的 stdout**（含 /help 这类只写控制台、不进日志的输出），不再只依赖日志流。
+
+string ServerExePath() => Path.Combine(root, "UnifierTSL.exe");
+
+object ProcStatus()
+{
+    var p = serverProc;
+    bool running = false; int pid = 0; long privMB = 0;
+    try
+    {
+        if (p is not null && !p.HasExited) { p.Refresh(); running = true; pid = p.Id; privMB = p.PrivateMemorySize64 / 1048576; }
+    }
+    catch { }
+    return new { ok = true, running, pid, privateMB = privMB, exe = ServerExePath(), ring = stdoutRing.Count };
+}
+
+async Task ProcStartAsync(NetworkStream ns)
+{
+    try
+    {
+        if (serverProc is not null && !serverProc.HasExited)
+        {
+            await WriteJsonAsync(ns, new { ok = true, already = true, pid = serverProc.Id });
+            return;
+        }
+        if (!File.Exists(ServerExePath())) { await WriteJsonAsync(ns, new { ok = false, error = "找不到 " + ServerExePath() }); return; }
+        stdoutRing.Clear();
+        var psi = new ProcessStartInfo(ServerExePath())
+        {
+            WorkingDirectory = root,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        psi.ArgumentList.Add("-joinserver");
+        psi.ArgumentList.Add("first");
+        psi.ArgumentList.Add("-logmode");
+        psi.ArgumentList.Add("txt");
+        var p = Process.Start(psi);
+        if (p is null) { await WriteJsonAsync(ns, new { ok = false, error = "启动失败" }); return; }
+        serverProc = p;
+        _ = Task.Run(() => PumpAsync(p.StandardOutput, "[out] "));
+        _ = Task.Run(() => PumpAsync(p.StandardError, "[err] "));
+        Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] agent 拉起服务端 pid=" + p.Id + "（无控制台 + 重定向 stdout）");
+        await WriteJsonAsync(ns, new { ok = true, pid = p.Id });
+    }
+    catch (Exception ex) { await WriteJsonAsync(ns, new { ok = false, error = ex.Message }); }
+}
+
+async Task PumpAsync(StreamReader reader, string prefix)
+{
+    try
+    {
+        string? line;
+        while ((line = await reader.ReadLineAsync()) is not null)
+        {
+            stdoutRing.Enqueue(prefix + line);
+            while (stdoutRing.Count > StdoutRingMax) { stdoutRing.TryDequeue(out _); }
+        }
+    }
+    catch { }
+}
+
+async Task ProcStopAsync(NetworkStream ns)
+{
+    int killed = 0;
+    try
+    {
+        var p = serverProc;
+        if (p is not null && !p.HasExited) { p.Kill(entireProcessTree: true); killed++; }
+        // 子世界控制台客户端也要收掉
+        foreach (var c in Process.GetProcessesByName("UnifierTSL.ConsoleClient")) { try { c.Kill(); killed++; } catch { } }
+        await WriteJsonAsync(ns, new { ok = true, killed });
+    }
+    catch (Exception ex) { await WriteJsonAsync(ns, new { ok = false, error = ex.Message }); }
+}
+
+async Task StreamStdoutAsync(NetworkStream ns)
+{
+    await WriteRawAsync(ns, "HTTP/1.1 200 OK", "text/event-stream", [], keepAlive: true, extraHeaders: "Cache-Control: no-cache\r\nX-Accel-Buffering: no\r\n");
+    // 先回放环形缓冲（给上下文），再持续跟随
+    foreach (string s in stdoutRing.ToArray())
+    {
+        await WriteAsync(ns, "data: " + s + "\n\n");
+    }
+    long lastBeat = Environment.TickCount64;
+    int sent = stdoutRing.Count;
+    while (true)
+    {
+        var all = stdoutRing.ToArray();
+        if (all.Length < sent) { sent = all.Length; }         // 被环形覆盖了，重新对齐
+        for (int i = sent; i < all.Length; i++) { await WriteAsync(ns, "data: " + all[i] + "\n\n"); }
+        sent = all.Length;
+        if (Environment.TickCount64 - lastBeat > 15000) { await WriteAsync(ns, ": beat\n\n"); lastBeat = Environment.TickCount64; }
+        await Task.Delay(200);
+    }
 }
 
 // ================= 文件接口（P1：走 agent 取代 scp，进度=真实字节数）=================

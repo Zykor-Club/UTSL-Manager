@@ -113,6 +113,30 @@ public static class AgentClient
         catch (Exception ex) { progress?.Invoke("下载失败: " + ex.Message); return false; }
     }
 
+    /// <summary>让 agent 拉起服务端（无窗口 + 重定向 stdout，输出可用 /stream/stdout 抓）。</summary>
+    public static string StartServer()
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+            string s = http.PostAsync(Base + "/proc/start", null).GetAwaiter().GetResult().Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            return s.Contains("\"ok\":true") ? ("agent 已拉起服务端 ✓ " + s) : ("agent 启动失败 ✗ " + s);
+        }
+        catch (Exception ex) { return "agent 启动失败 ✗ " + ex.Message; }
+    }
+
+    /// <summary>让 agent 停掉服务端（含子世界控制台客户端）。</summary>
+    public static string StopServer()
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+            string s = http.PostAsync(Base + "/proc/stop", null).GetAwaiter().GetResult().Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            return s.Contains("\"ok\":true") ? ("agent 已停止服务端 ✓ " + s) : ("agent 停止失败 ✗ " + s);
+        }
+        catch (Exception ex) { return "agent 停止失败 ✗ " + ex.Message; }
+    }
+
     static string ReadResponseLine(NetworkStream ns)
     {
         var sb = new System.Text.StringBuilder();

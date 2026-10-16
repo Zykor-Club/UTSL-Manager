@@ -1286,6 +1286,43 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 订阅 agent 的 /stream/stdout：服务端**进程自己的标准输出**（agent 托管进程时才有）。
+    /// 与日志流互补 —— /help 这类只写控制台、不写日志的输出只有这条路能看到。
+    /// </summary>
+    private async Task AgentStdoutLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+                using var resp = await http.GetAsync(AgentBaseUsed + "/stream/stdout", HttpCompletionOption.ResponseHeadersRead, ct);
+                resp.EnsureSuccessStatusCode();
+                using var stream = await resp.Content.ReadAsStreamAsync(ct);
+                using var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+                while (!ct.IsCancellationRequested)
+                {
+                    string? line = await reader.ReadLineAsync(ct);
+                    if (line is null) { break; }
+                    if (line.StartsWith("data: "))
+                    {
+                        string text = line.Substring(6);
+                        bool err = text.StartsWith("[err]");
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            if (!ConsoleView.IsVisible) { return; }
+                            Term(text, err ? "#FF7B72" : "#8B949E");
+                        });
+                    }
+                }
+            }
+            catch (OperationCanceledException) { break; }
+            catch { }
+            try { await Task.Delay(2000, ct); } catch { break; }
+        }
+    }
+
     /// <summary>订阅 agent 的 SSE 日志流，把行投到控制台；断开则退避重连。AgentAlive=false 时不再重连。</summary>
     private async Task AgentLogLoopAsync(CancellationToken ct)
     {
@@ -1339,6 +1376,7 @@ public partial class MainWindow : Window
             agentLogCts = new CancellationTokenSource();
             lastAgentSent = -1; lastAgentRecv = -1; AgentMetricsAtMs = 0;    // ★ 新连接：速率基准重置
             _ = Task.Run(() => AgentLogLoopAsync(agentLogCts.Token));
+            _ = Task.Run(() => AgentStdoutLoopAsync(agentLogCts.Token));   // P2：服务端真正的 stdout（含 /help 这类只写控制台的输出）
             _ = Task.Run(() => AgentMetricsLoopAsync(agentLogCts.Token));
         }
         else
