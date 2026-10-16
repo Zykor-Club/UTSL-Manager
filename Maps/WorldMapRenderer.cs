@@ -33,6 +33,21 @@ public sealed record MapRenderStats(
 /// </summary>
 public static class WorldMapRenderer
 {
+    /// <summary>
+    /// 兜底初始化 ReactiveUI。
+    /// ★ 实测踩到：TEdit.Terraria.World 的构造函数走 ReactiveUI 的属性变更机制，
+    ///   若没有先初始化就会抛 "ReactiveUI has not been initialized. You must initialize ReactiveUI using the builder pattern."，
+    ///   而异常发生在 World.LoadWorld 深处 —— 排查成本很高。
+    ///   在管理器进程里 Avalonia/ReactiveUI 的 App 已经初始化，这里是幂等的兜底；
+    ///   但对**独立调用**（外部工具、探针、将来可能的 CLI，以及文档承诺"插件可直接调 UTSLManager.Maps.*"的场景）
+    ///   这一步是必需的。已初始化时 BuildApp 可能抛，所以吞掉异常。
+    /// </summary>
+    static WorldMapRenderer()
+    {
+        try { ReactiveUI.Builder.RxAppBuilder.CreateReactiveUIBuilder().WithCoreServices().BuildApp(); }
+        catch { /* 已经初始化过就会抛，忽略 */ }
+    }
+
     private static readonly object Gate = new();
     private static bool _ready;
     private static string _info = "未初始化";
