@@ -85,7 +85,10 @@ public partial class MainWindow
         ["Punctuation"] = "#8FA3BF",   // 标点/分隔符：纯黑换成蓝灰（用户明确反馈"标点看不见"）
         ["Comment"] = "#6B7A99",       // 注释要"退后"
         ["String"] = "#9ECE6A", ["Char"] = "#9ECE6A", ["XmlString"] = "#9ECE6A",
-        ["NumberLiteral"] = "#FF9E64",
+        ["NumberLiteral"] = "#FF9E64", ["Number"] = "#FF9E64",   // JSON 定义里用的是 Number（不是 NumberLiteral）
+        ["Bool"] = "#BB9AF7",                                        // JSON 定义里用的是 Bool（不是 Keyword）
+        ["AttributeName"] = "#BB9AF7", ["StringInterpolation"] = "#8FA3BF",
+        ["CData"] = "#8FA3BF", ["DocType"] = "#8FA3BF", ["XmlDeclaration"] = "#8FA3BF", ["XmlComment"] = "#6B7A99",
         ["Null"] = "#BB9AF7", ["Keyword"] = "#BB9AF7", ["Preprocessor"] = "#BB9AF7",
         ["Loop"] = "#BB9AF7", ["Jump"] = "#BB9AF7", ["Check"] = "#BB9AF7", ["Goto"] = "#BB9AF7",
         ["Label"] = "#BB9AF7", ["Cast"] = "#BB9AF7", ["ExternAlias"] = "#BB9AF7", ["Using"] = "#BB9AF7",
@@ -108,14 +111,15 @@ public partial class MainWindow
         int mn = Math.Min(c.R, Math.Min(c.G, c.B));
         // 兜底①：近灰色（多半还是标点/分隔符）→ 蓝灰
         if (mx - mn <= 26) { return Color.Parse("#8FA3BF"); }
-        double lum = (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B) / 255.0;
-        if (lum >= 0.5) { return c; }
-        // 兜底②：先降饱和（向该色自身的灰度靠 30%），再整体提亮到 0.5 附近 —— 避免"提亮 = 变霓虹"
+        // 兜底②：先降饱和（向该色自身的灰度靠 30%），再保证"最亮通道 ≥ 190"。
+        //   ★ 这里刻意用最亮通道而不是亮度公式：亮度公式对蓝色权重极低（0.0722），
+        //     实测纯蓝 #0000FF 的"亮度 0.5"仍然暗得看不清；用最亮通道才符合肉眼观感。
         byte grey = (byte)((c.R + c.G + c.B) / 3);
         byte Mix(byte v) => (byte)Math.Clamp(v * 0.7 + grey * 0.3, 0, 255);
         byte r = Mix(c.R), g = Mix(c.G), b = Mix(c.B);
-        double lum2 = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
-        double k = 0.5 / Math.Max(0.06, lum2);
+        int mx2 = Math.Max(r, Math.Max(g, b));
+        if (mx2 >= 190) { return Color.FromArgb(c.A, r, g, b); }
+        double k = 190.0 / Math.Max(40.0, mx2);
         byte Up(byte v) => (byte)Math.Clamp(v * k, 0, 255);
         return Color.FromArgb(c.A, Up(r), Up(g), Up(b));
     }
