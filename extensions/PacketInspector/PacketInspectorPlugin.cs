@@ -782,7 +782,7 @@ public sealed class PacketInspectorPlugin : IManagerPlugin
                           + " trackedPlayers=" + (r.TryGetProperty("trackedPlayers", out JsonElement tp) ? tp.GetInt32() : 0)
                           + " buffered=" + (r.TryGetProperty("buffered", out JsonElement b) ? b.GetInt32() : 0);
             ctx.Log(text);
-            SetStatusText(text, Body);
+            SetStatus(text, Body);      // ★ 走 SetStatus（内部 Dispatcher.Post）：原来直接 SetStatusText，是在后台线程改控件
         }
         catch (Exception ex) { ctx.Log("[数据包查看器] 读取状态失败: " + ex.Message); }
     }
@@ -970,11 +970,13 @@ public sealed class PacketInspectorPlugin : IManagerPlugin
         return g;
     }
 
-    private void ClearList()
+    // ★ 命令处理器跑在线程池线程（PluginHost.cs:159 用 Task.Run），而 Avalonia 控件有线程亲和性：
+    //   原来这里直接改 Children/Text，与 UI 线程的 AppendLines 并发 → 轻则丢行，重则设 AvaloniaProperty 时抛异常。
+    private void ClearList() => Dispatcher.UIThread.Post(() =>
     {
         if (_listHost is not null) { _listHost.Children.Clear(); }
         if (_stats is not null) { _stats.Text = "—"; }
-    }
+    });
 
     private void AppendLines(List<string> lines, List<IBrush> brushes)
     {

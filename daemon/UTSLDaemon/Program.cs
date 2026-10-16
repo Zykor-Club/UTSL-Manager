@@ -24,6 +24,9 @@ int BoundPort = 0;
 Process? serverProc = null;
 var stdoutRing = new ConcurrentQueue<string>();
 const int StdoutRingMax = 4000;
+// ★ 入队总序号（绝对游标）。环形缓冲满时从队首丢弃；若消费者用数组下标当游标，
+//   长度恒为 4000 → 下标永远追不上 → stdout 流会永久静默。序号才是可靠的进度标识。
+long stdoutSeq = 0;
 long metricsCalls = 0;
 long pingCalls = 0;
 long lastPingLog = 0;        // 实际绑定到的端口（--selftest 用 0 让系统分配，避免撞上别的程序）
@@ -368,6 +371,7 @@ async Task PumpAsync(StreamReader reader, string prefix)
         while ((line = await reader.ReadLineAsync()) is not null)
         {
             stdoutRing.Enqueue(prefix + line);
+            System.Threading.Interlocked.Increment(ref stdoutSeq);
             while (stdoutRing.Count > StdoutRingMax) { stdoutRing.TryDequeue(out _); }
         }
     }
@@ -397,13 +401,21 @@ async Task StreamStdoutAsync(NetworkStream ns)
         await WriteAsync(ns, "data: " + s + "\n\n");
     }
     long lastBeat = Environment.TickCount64;
-    int sent = stdoutRing.Count;
+    // ★★ 游标必须是绝对序号而不是数组下标。原来 sent 是下标，而环形满时队列从队首丢弃：
+    //   all.Length 恒等于 4000 == sent → all.Length < sent 永不成立 → for 循环空转 →
+    //   服务端 stdout 的前 4000 行之后永久不再推送，连接也不关（控制台 stdout 页永久冻住）。
+    long nextSeq = System.Threading.Volatile.Read(ref stdoutSeq) - stdoutRing.Count;
+    if (nextSeq < 0) { nextSeq = 0; }
     while (true)
     {
         var all = stdoutRing.ToArray();
-        if (all.Length < sent) { sent = all.Length; }         // 被环形覆盖了，重新对齐
-        for (int i = sent; i < all.Length; i++) { await WriteAsync(ns, "data: " + all[i] + "\n\n"); }
-        sent = all.Length;
+        long seqBase = System.Threading.Volatile.Read(ref stdoutSeq) - all.Length;   // all[0] 的绝对序号
+        if (nextSeq < seqBase) { nextSeq = seqBase; }        // 落后太多（已被覆盖），从现存最老的开始
+        for (long q = nextSeq; q < seqBase + all.Length; q++)
+        {
+            await WriteAsync(ns, "data: " + all[(int)(q - seqBase)] + "\n\n");
+        }
+        nextSeq = seqBase + all.Length;
         if (Environment.TickCount64 - lastBeat > 15000) { await WriteAsync(ns, ": beat\n\n"); lastBeat = Environment.TickCount64; }
         await Task.Delay(200);
     }
@@ -463,18 +475,37 @@ async Task ReceiveFileAsync(NetworkStream ns, string rel, Dictionary<string, str
     Directory.CreateDirectory(Path.GetDirectoryName(full) ?? root);
     long got = 0;
     byte[] buf = new byte[1 << 20];
-    using (var fs = new FileStream(full, FileMode.Create, FileAccess.Write, FileShare.None))
+    // ★ 写 .part 再改名：原来直接 FileMode.Create 写最终路径，断连/重启会在原处留下
+    //   被截断或写了一半的 .wld/.utpl/.dll —— 服务端可能直接加载坏文件（是数据损坏，不只是失败）。
+    string part = full + ".part";
+    try
     {
-        while (got < len)
+        using (var fs = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None))
         {
-            int n = await ns.ReadAsync(buf, 0, (int)Math.Min(buf.Length, len - got));
-            if (n <= 0) { break; }
-            fs.Write(buf, 0, n);
-            got += n;
+            while (got < len)
+            {
+                int n = await ns.ReadAsync(buf, 0, (int)Math.Min(buf.Length, len - got));
+                if (n <= 0) { break; }
+                fs.Write(buf, 0, n);
+                got += n;
+            }
+            fs.Flush(true);
         }
-        fs.Flush();
     }
-    await WriteJsonAsync(ns, new { ok = got == len, bytes = got, path = rel });
+    catch (Exception ex)
+    {
+        try { File.Delete(part); } catch { }
+        await WriteJsonAsync(ns, new { ok = false, error = ex.Message });
+        return;
+    }
+    if (got != len)
+    {
+        try { File.Delete(part); } catch { }
+        await WriteJsonAsync(ns, new { ok = false, bytes = got, error = "传输未完成（连接中断？），已丢弃半截文件" });
+        return;
+    }
+    File.Move(part, full, overwrite: true);      // 同卷原子替换
+    await WriteJsonAsync(ns, new { ok = true, bytes = got, path = rel });
 }
 
 async Task ListFilesAsync(NetworkStream ns, string rel)

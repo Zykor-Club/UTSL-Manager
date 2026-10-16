@@ -81,6 +81,7 @@ public sealed class RuYouMusicPanelPlugin : IManagerPlugin
     private TextBox? _searchBox;
     private TextBlock? _busy;
     private DispatcherTimer? _busyTimer;
+    private DispatcherTimer? _lyricTimer;      // 歌词插值定时器（原来存局部变量，OnUnload 时无法停止）
     private Control? _root;      // ★ 用于判断面板是否可见
     private int _spinFrame;
     private static readonly string[] Spin = { "◐", "◓", "◑", "◒" };   // 圆形 spinner（Segoe UI Symbol 里有这些字形）
@@ -109,7 +110,9 @@ public sealed class RuYouMusicPanelPlugin : IManagerPlugin
         ctx.RunBackground(PollLoopAsync, "点歌机轮询");
     }
 
-    public void OnUnload() { _ctx = null; }
+    // ★ 两个 UI 定时器必须停：DispatcherTimer 强引用 Tick 委托 → 委托指向插件实例 →
+    //   alc.Unload() 收不回 ALC（热重载内存泄漏），而且卸载后还每 250ms 空转。
+    public void OnUnload() { _ctx = null; _lyricTimer?.Stop(); _busyTimer?.Stop(); }
 
     public Control? CreateView(IManagerContext ctx)
     {
@@ -218,10 +221,10 @@ public sealed class RuYouMusicPanelPlugin : IManagerPlugin
         root.Children.Add(_statusText);
 
         // 歌词高亮用的插值定时器（UI 线程）
-        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _lyricTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         // ★ 性能：面板不可见就不做歌词插值（原来隐藏时也每秒 4 次重排 UI）
-        t.Tick += (_, _) => { if (_root?.IsEffectivelyVisible == true) { UpdateHighlight(); } };
-        t.Start();
+        _lyricTimer.Tick += (_, _) => { if (_root?.IsEffectivelyVisible == true) { UpdateHighlight(); } };
+        _lyricTimer.Start();
 
         return root;
     }
