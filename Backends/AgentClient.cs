@@ -160,6 +160,64 @@ public static class AgentClient
         catch (Exception ex) { return "agent 停止失败 ✗ " + ex.Message; }
     }
 
+
+    // ===== 直连（无 SSH）模式需要的原语 =====
+
+    /// <summary>对 agent 发一个 GET 并取回响应体（带认证头）。失败/非 2xx 返回 null。</summary>
+    public static string? GetText(string path)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, Base + path);
+            if (Token.Length > 0) { req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", Token); }
+            using var resp = LocalHttp.Send(req);
+            if (!resp.IsSuccessStatusCode) { return null; }
+            return resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        }
+        catch { return null; }
+    }
+
+    /// <summary>把内存里的字节 PUT 到 agent 的 /files/put（直连模式下没有 scp，小文件走这个）。</summary>
+    public static bool PutBytes(byte[] data, string remoteRel)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Put, Base + "/files/put?path=" + Uri.EscapeDataString(remoteRel));
+            if (Token.Length > 0) { req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", Token); }
+            req.Content = new ByteArrayContent(data);
+            using var resp = LocalHttp.Send(req);
+            string s = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            return s.Contains("\"ok\":true");
+        }
+        catch { return false; }
+    }
+
+    static string _root = "";
+
+    /// <summary>agent 的部署根（直连模式下它就是文件路径的基准）。带缓存，从 /ping 取（认证后才有）。</summary>
+    public static string RemoteRoot
+    {
+        get
+        {
+            if (_root.Length > 0) { return _root; }
+            try
+            {
+                string? s = GetText("/ping");
+                if (s is null) { return ""; }
+                using var doc = System.Text.Json.JsonDocument.Parse(s);
+                _root = doc.RootElement.TryGetProperty("root", out var r) ? (r.GetString() ?? "") : "";
+            }
+            catch { }
+            return _root;
+        }
+    }
+
+    /// <summary>切换 base 时清掉根缓存（换机器了）。</summary>
+    public static void ResetRoot() => _root = "";
+
+    /// <summary>让 agent 压缩服务端工作集（替代 ssh 里每次重新 Add-Type 的方案）。</summary>
+    public static string? TrimServerMemory() => GetText("/proc/trim");
+
     static string ReadResponseLine(NetworkStream ns)
     {
         var sb = new System.Text.StringBuilder();

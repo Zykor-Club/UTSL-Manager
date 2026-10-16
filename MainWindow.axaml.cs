@@ -73,6 +73,13 @@ public partial class MainWindow : Window
                 RemoteDotnet = s["dotnet"]?.ToString() ?? RemoteDotnet;
                 RemoteLauncher = s["launcher"]?.ToString() ?? RemoteLauncher;
                 if (int.TryParse(s["restPort"]?.ToString(), out int rp) && rp > 0) { RemoteRestPort = rp; }
+                // 直连（面板）模式
+                DirectMode = s["direct"]?.GetValue<bool>() ?? false;
+                DirectHost = s["directHost"]?.ToString() ?? DirectHost;
+                if (int.TryParse(s["directPort"]?.ToString(), out int dp) && dp > 0) { DirectPort = dp; }
+                string encDT = s["directTokenEnc"]?.ToString() ?? "";
+                if (encDT.Length > 0) { string d = DpapiUnprotect(encDT); if (d.Length > 0) { DirectToken = d; } }
+                else { DirectToken = s["directToken"]?.ToString() ?? DirectToken; }
             }
             if (o["paths"] is JsonObject pj)
             {
@@ -98,7 +105,10 @@ public partial class MainWindow : Window
                 ["ssh"] = new JsonObject
                 {
                     ["host"] = SshHost, ["port"] = SshPort, ["user"] = SshUser, ["key"] = SshKey,
-                    ["dir"] = RemoteDir, ["dotnet"] = RemoteDotnet, ["launcher"] = RemoteLauncher, ["restPort"] = RemoteRestPort
+                    ["dir"] = RemoteDir, ["dotnet"] = RemoteDotnet, ["launcher"] = RemoteLauncher, ["restPort"] = RemoteRestPort,
+                    // 直连（面板）模式：令牌同样 DPAPI 加密后再落盘
+                    ["direct"] = DirectMode, ["directHost"] = DirectHost, ["directPort"] = DirectPort,
+                    ["directTokenEnc"] = DpapiProtect(DirectToken)
                 },
                 ["paths"] = new JsonObject { ["localDir"] = LocalDir, ["watchdog"] = WatchdogEnabled, ["forceLocal"] = ForceLocal }
             };
@@ -132,12 +142,22 @@ public partial class MainWindow : Window
     private static string RemoteDir = @"C:\utsl-deploy";
     private static string RemoteDotnet = @"C:\dotnet\dotnet.exe";
     private static string RemoteLauncher = @"C:\utsl-launch\utsl-launch.dll";
+    // ===== 直连（面板）模式：agent 直接暴露在网络上、用令牌认证，不经 SSH 隧道 =====
+    //   适合"我就想 MCSM 面板那样直连"的用户；安全由 agent 侧的令牌 + 绑定红线保证。
+    private static bool DirectMode;                 // 用户勾选
+    private static string DirectHost = "";          // 例：1.2.3.4 或域名
+    private static int DirectPort = 7879;
+    private static string DirectToken = "";
+    /// <summary>直连是否真的可用（勾了 + 地址与令牌都齐）。</summary>
+    private static bool DirectReady => DirectMode && DirectHost.Length > 0 && DirectToken.Length > 0;
+
     private static bool HasSsh => SshHost.Length > 0 && SshKey.Length > 0;
     /// <summary>连接设置页的「本机管理 / 远端管理」开关：勾到本机时即便填了 SSH 也按本机跑（不丢配置）。</summary>
     private static bool ForceLocal;
     // ★ 注意：管理器是经 SSH 隧道连远端的，ConnHost 就是 127.0.0.1 —— 所以不能用 TargetIsLocal 判定，
     //   只认「connection.json 里配了 ssh 段 + 没被开关强制成本机」。
-    private static bool UseRemote => HasSsh && !ForceLocal;
+    //   直连模式同样算"远端"（进程/文件都走 agent，而不是本机）
+    private static bool UseRemote => (HasSsh || DirectReady) && !ForceLocal;
 
     /// <summary>
     /// 管理器自己的 HTTP 客户端：对 127.0.0.1（本机 REST / SSH 隧道 / agent）【必须禁用代理】。
@@ -351,7 +371,8 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             // ★ 远端模式必须用【远端】存活判据，否则会被本机进程误导成"未运行"
-            bool aliveNow = UseRemote ? SnapshotProcs > 0 : ServerRunning;
+            // 直连模式没有 ssh 快照，存活判据用 agent 的 /metrics；否则远端看快照、本机看进程
+            bool aliveNow = DirectReady ? AgentServerRunning : UseRemote ? SnapshotProcs > 0 : ServerRunning;
             ConnState.Text = aliveNow ? "REST 无响应" : "未运行";
             if (SrvDot is not null) { SrvDot.Background = new SolidColorBrush(Color.Parse(aliveNow ? "#FEBC2E" : "#6B6B70")); }
             // 看门狗：本来在跑 → 现在没了 → 自动拉起
@@ -462,16 +483,21 @@ public partial class MainWindow : Window
     {
         get
         {
-            string root = UseRemote ? RemoteDir : LocalDir;
+            // 直连模式：文件操作全走 agent 的 HTTP 端点（没有 ssh）；根取 agent 的部署根
+            bool direct = DirectReady;
+            string root = direct ? AgentClient.RemoteRoot : UseRemote ? RemoteDir : LocalDir;
             var b = _fileBackend;
-            if (b is null || b.IsRemote != UseRemote || b.Root != root)
+            if (b is null || b.IsRemote != (UseRemote || direct) || b.Root != root || _lastDirect != direct)
             {
-                b = new CachedFileBackend(UseRemote ? new RemoteFileBackend(new UtslSshTransport(), root) : new LocalFileBackend(root));
-                _fileBackend = b;
+                b = new CachedFileBackend(direct ? new AgentFileBackend(root)
+                    : UseRemote ? new RemoteFileBackend(new UtslSshTransport(), root) : new LocalFileBackend(root));
+                _fileBackend = b; _lastDirect = direct;
             }
             return b;
         }
     }
+
+    private static bool _lastDirect;        // 上次 FileBackend 是否按直连模式构建（模式变了要重建）
 
     private static IProcessBackend? _proc;
 
@@ -1188,8 +1214,12 @@ public partial class MainWindow : Window
     private static string lastAgentScpErr = "";
     private static string AgentBaseUsed = "";
     private static string AgentProbeErr = "";   // 最近一次探测失败原因（排查用，显示在连接设置页）   // ★ 当前流连的是哪个 base（本机 7879 / 远端 17879）；切换时必须重连
+    private static bool AgentServerRunning;     // 直连模式下用 /metrics 的 server.running 当存活判据（没有 ssh 快照）
     private static CancellationTokenSource? agentLogCts;
-    private static string AgentBase => UseRemote ? "http://127.0.0.1:" + AgentLocalPort : "http://127.0.0.1:" + AgentRemotePort;
+    //   三种情况：直连（面板，公网地址+令牌）> 远端（SSH 隧道本地端）> 本机（agent 只绑回环 7879）
+    private static string AgentBase => DirectReady
+        ? "http://" + DirectHost + ":" + DirectPort
+        : UseRemote ? "http://127.0.0.1:" + AgentLocalPort : "http://127.0.0.1:" + AgentRemotePort;
 
     /// <summary>探测 agent 是否可用（2 秒超时；不可用不抛异常）。</summary>
     private static async Task<bool> ProbeAgentAsync(string baseUrl)
@@ -1233,7 +1263,8 @@ public partial class MainWindow : Window
     /// </summary>
     private async Task InstallAgentAsync(TextBlock status)
     {
-        if (!HasSsh) { status.Text = "云端 agent：需要先填好 SSH 主机与密钥（远端模式）"; return; }
+        // 安装必须经 SSH 推一次（把 exe 送上去）；装好之后可以切到「直连模式」不用 SSH。
+        if (!HasSsh) { status.Text = "云端 agent：安装需要先填好 SSH 主机与密钥（推一次即可）；装好后可切到直连模式"; return; }
         string exe = Path.Combine(AppContext.BaseDirectory, "agent", "UTSLDaemon.exe");
         if (!File.Exists(exe)) { status.Text = "云端 agent：找不到安装包 " + exe + " —— 先执行 scripts/publish-agent.ps1"; return; }
         // ★ 顺序很重要：运行中的 UTSLDaemon.exe 在 Windows 上被锁，直接覆盖会 scp: dest open ... Failure。
@@ -1270,12 +1301,15 @@ public partial class MainWindow : Window
         if (!ok) { status.Text = "云端 agent：上传失败 ✗ " + lastAgentScpErr + "（若提示 dest open … Failure，说明 exe 仍被占用）"; return; }
 
         status.Text = "云端 agent：正在建计划任务（先停旧的）…";
+        // ★ 直连模式：把绑定与令牌一起写进计划任务参数（否则对外的 agent 起不来 —— 无令牌绑外网会被拒绝）。
+        //   注意：令牌会出现在该机器的计划任务命令行里（同机管理员可见），这是直连模式的固有代价。
+        string directArgs = DirectReady ? " --bind 0.0.0.0 --token " + DirectToken : "";
         string res = await Task.Run(() => SshRun(
             "$ErrorActionPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
             "New-Item -ItemType Directory -Force -Path C:\\utsl-agent | Out-Null; " +
             "schtasks /End /TN UTSLAgent 2>&1 | Out-Null; " +
             "Get-Process UTSLDaemon -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2; " +
-            "$tr='\"C:\\utsl-agent\\UTSLDaemon.exe\" --root " + RemoteDir + " --port 7879'; " +
+            "$tr='\"C:\\utsl-agent\\UTSLDaemon.exe\" --root " + RemoteDir + " --port 7879" + directArgs + "'; " +
             "schtasks /Create /TN UTSLAgent /TR $tr /SC ONSTART /RU SYSTEM /RL HIGHEST /F | Out-Null; " +
             "schtasks /Run /TN UTSLAgent | Out-Null; Start-Sleep -Seconds 3; " +
             "'proc=' + ((Get-Process UTSLDaemon -ErrorAction SilentlyContinue) | Measure-Object).Count", 120000));
@@ -1293,6 +1327,8 @@ public partial class MainWindow : Window
                 string s = await AgentHttp.GetStringAsync(AgentBaseUsed + "/metrics", ct);
                 using var doc = JsonDocument.Parse(s);
                 var srv = doc.RootElement.GetProperty("server");
+                // ★ 直连（无 ssh）模式下没有快照可用，服务端存活改看 agent 的 /metrics（server.running）
+                AgentServerRunning = srv.TryGetProperty("running", out var rn) && rn.GetBoolean();
                 AgentCpuPct = srv.TryGetProperty("cpuSingleCorePct", out var c) ? c.GetDouble() : 0;
                 AgentPrivateMB = srv.TryGetProperty("privateMB", out var m) ? m.GetDouble() : 0;
                 var net = doc.RootElement.GetProperty("net");
@@ -1389,6 +1425,10 @@ public partial class MainWindow : Window
         AgentAlive = ok;
         AgentBaseUsed = want;
         AgentClient.Alive = ok; AgentClient.Base = want;   // ★ 同步给文件通道（P1：上传/下载走 agent，带真实进度）
+        AgentClient.Token = DirectReady ? DirectToken : ""; // 直连模式带上令牌
+        AgentClient.ResetRoot();                            // base 变了 → agent 根缓存失效
+        AgentHttp.DefaultRequestHeaders.Authorization = AgentClient.Token.Length > 0
+            ? new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", AgentClient.Token) : null;
         if (ok)
         {
             Dispatcher.UIThread.Post(() => { ERR("✓ 已连接 UTSLDaemon（云端 agent）—— 控制台日志改为推送，实测延迟约 150 ms；不再轮询日志文件"); RefreshAgentStatus(); });
@@ -2736,6 +2776,17 @@ public partial class MainWindow : Window
             var tbSshDir = Field(bodyRemote, "远端 UTSL 目录:", RemoteDir, 220);
             var tbRestPort = Field(bodyRemote, "远端 REST 端口:", RemoteRestPort.ToString(), 90);
             bodyRemote.Children.Add(Hint("隧道：本地 REST " + ConnPort + " → 远端 127.0.0.1:" + RemoteRestPort + "；agent 另一端走 17879 → 7879。"));
+            // ---- 直连（面板）模式 ----
+            var chkDirect = new CheckBox
+            {
+                Content = "直连模式（面板式：agent 暴露端口 + 令牌认证，不走 SSH 隧道）",
+                IsChecked = DirectMode, FontSize = 11.5, Margin = new Avalonia.Thickness(0, 12, 0, 2),
+            };
+            bodyRemote.Children.Add(chkDirect);
+            var tbDirectHost = Field(bodyRemote, "直连地址:", DirectHost, 220);
+            var tbDirectPort = Field(bodyRemote, "直连端口:", DirectPort.ToString(), 90);
+            var tbDirectTok = Field(bodyRemote, "访问令牌:", DirectToken, 300);
+            bodyRemote.Children.Add(Hint("⚠ 直连会把 agent 暴露到网络（它可写文件、能启停进程）。务必：① 用长随机令牌；② 安全组/防火墙只放行你自己的 IP；③ 有条件就套一层 HTTPS 反向代理。agent 侧没有令牌会拒绝绑定对外地址。"));
             var btnTestSsh = Btn("测试 SSH");
             var btnTunnel = Btn("启动 / 修复隧道");
             var btnAgent = Btn("安装 / 更新云端 agent");
@@ -2766,8 +2817,10 @@ public partial class MainWindow : Window
                 badgeLocal.IsVisible = !remoteOn;
                 badgeRemote.IsVisible = remoteOn;
             }
+            bool suppressMode = false;      // 代码里改开关时不要触发"保存并应用"
             modeSwitch.IsCheckedChanged += (_, _) =>
             {
+                if (suppressMode) { return; }
                 bool remoteOn = modeSwitch.IsChecked == true;
                 ApplyMode();
                 ForceLocal = !remoteOn;
@@ -2812,10 +2865,16 @@ public partial class MainWindow : Window
                 SshKey = (tbSshKey.Text ?? "").Trim();
                 RemoteDir = (tbSshDir.Text ?? "").Trim();
                 RemoteRestPort = int.TryParse(tbRestPort.Text, out int rp) && rp > 0 ? rp : 7878;
-                // 保存后按"开关 + 是否填了 SSH"重新判定模式：开关指向远端但没填全 → 仍是本机，并明确提示
-                bool wantRemote = modeSwitch.IsChecked == true;
+                DirectMode = chkDirect.IsChecked == true;
+                DirectHost = (tbDirectHost.Text ?? "").Trim();
+                DirectPort = int.TryParse(tbDirectPort.Text, out int dtp) && dtp > 0 ? dtp : 7879;
+                DirectToken = (tbDirectTok.Text ?? "").Trim();
+                // 保存后按"开关 + 是否填了 SSH/直连"重新判定模式：开关指向远端但都填不全 → 仍是本机，并明确提示
+                bool wantRemote = modeSwitch.IsChecked == true || DirectReady;
                 bool modeChanged = ForceLocal != !wantRemote || UseRemote != wantRemote;
                 ForceLocal = !wantRemote;
+                // 直连可用时把开关拨到远端（否则界面显示"本机管理"却实际走远端，自相矛盾）
+                if (wantRemote && modeSwitch.IsChecked != true) { suppressMode = true; modeSwitch.IsChecked = true; suppressMode = false; ApplyMode(); }
                 SaveConn();
                 if (UseRemote) { EnsureTunnel(); }
                 ConnInfo.Text = UseRemote

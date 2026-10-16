@@ -43,8 +43,17 @@ public sealed class RemoteProcessBackend(ISshTransport ssh, Func<string> startSc
 
     public string TrimMemory()
     {
-        string ps = @"$sig='[DllImport(""psapi.dll"")] public static extern bool EmptyWorkingSet(IntPtr hProcess);'; " +
-                    "$t=Add-Type -MemberDefinition $sig -Name E -Namespace W -PassThru; $o=@(); " +
+        // ★ agent 在线就走 agent 的 /proc/trim：ssh 每次都起新的 powershell 进程，Add-Type 的类型
+        //   不跨进程存活 → 那个"只编译一次"的守卫在 ssh 路径下其实无效（每次仍重新编译，秒级）。
+        if (AgentClient.Alive)
+        {
+            string? t = AgentClient.TrimServerMemory();
+            if (t is not null && t.Contains("\"ok\":true")) { return t; }
+        }
+        // 回落：ssh + Add-Type（同一会话内仍只编译一次）
+        string ps = @"if (-not ('W.E' -as [type])) { $sig='[DllImport(""psapi.dll"")] public static extern bool EmptyWorkingSet(IntPtr hProcess);'; " +
+                    "Add-Type -MemberDefinition $sig -Name E -Namespace W | Out-Null }; " +
+                    "$t=[W.E]; $o=@(); " +
                     "foreach($p in Get-Process UnifierTSL -ErrorAction SilentlyContinue){ $b=$p.WorkingSet64; " +
                     "$null=$t::EmptyWorkingSet($p.Handle); Start-Sleep -Milliseconds 250; $p.Refresh(); " +
                     "$o += ([string][math]::Round($b/1MB) + ' -> ' + [string][math]::Round($p.WorkingSet64/1MB) + ' MB') }; " +

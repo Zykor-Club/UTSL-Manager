@@ -58,9 +58,16 @@ public static class UtplCodec
     public const byte KindWeaponsRack = 6;
 
     public const int MaxDim = 8192;
-    public const int MaxCells = 4096 * 4096;      // 与服务端一致：防坏文件把内存吃爆
+    // ★ 上限只用于"防坏文件把内存吃爆"，模板实际只有几百格。
+    //   Tile 是约 44 字节的结构体，Read 里的 new Tile[w*h] 直接按格数分配：
+    //   原来的 4096*4096（1677 万格 ≈ 700 MB）形同虚设 —— 一个坏文件就能吃掉几百 MB。
+    //   现在收到 2048*2048（≈420 万格 ≈ 180 MB），并把 extras 字典也一并限制在同一量级内。
+    public const int MaxCells = 2048 * 2048;
     public const int ChestSlots = 40;
-    public const int MaxUnknownSegmentBytes = 256 * 1024 * 1024;
+    // ★ 未知段只是"未来版本多出来的段"，正常文件为 0。上限从 256MB 收到 8MB，
+    //   避免畸形文件用超大长度触发天文数字的读取（而且每次读都要穿过 GZip 解压层）。
+    public const int MaxUnknownSegmentBytes = 8 * 1024 * 1024;
+    private const int SkipChunkBytes = 64 * 1024;   // 跳过未知段用的分块缓冲大小
 
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
@@ -239,7 +246,12 @@ public static class UtplCodec
 
     // ==================== 读（镜像服务端 Read）====================
 
-    public static UtplRegion Read(string path)
+    /// <param name="keepExtras">
+    /// 是否保留服务端独有的额外帧字段（UtplRegion.Extras）。默认 false：
+    /// 渲染等只读用途根本用不到它，省下一整张最多 MaxCells 项的字典；
+    /// 只有"读服务端文件再逐字节写回"的往返验证才需要传 true。
+    /// </param>
+    public static UtplRegion Read(string path, bool keepExtras = false)
     {
         using FileStream fs = File.OpenRead(path);
         using GZipStream gz = new(fs, CompressionMode.Decompress);
@@ -250,15 +262,22 @@ public static class UtplCodec
 
         int w = r.ReadInt32(), h = r.ReadInt32();
         if (w <= 0 || h <= 0 || w > MaxDim || h > MaxDim) { throw new InvalidDataException($"模板尺寸非法: {w}x{h}"); }
-        if ((long)w * h > MaxCells) { throw new InvalidDataException($"模板格数过大: {w}x{h}"); }
+        if ((long)w * h > MaxCells)
+        {
+            throw new InvalidDataException(
+                $"模板格数过大: {w}x{h} = {(long)w * h} 格（上限 {MaxCells} 格 ≈ 2048x2048）；" +
+                "模板通常只有几百格，该文件可能已损坏或不是模板文件");
+        }
 
         var tiles = new Tile[w * h];
-        var extras = new Dictionary<int, (byte, byte, byte, byte)>();
+        // ★ 只有往返写回才需要 extras；渲染路径（keepExtras=false）这里不分配字典，
+        //   省下最多 MaxCells 项的内存。字段仍照常从流里读出来（不能少读一个字节）。
+        var extras = keepExtras ? new Dictionary<int, (byte, byte, byte, byte)>() : null;
         for (int i = 0; i < tiles.Length; i++)
         {
             if (r.ReadByte() == 1) { tiles[i] = default; continue; }
             tiles[i] = ReadTile(r, out var ex);
-            if (ex is not null) { extras[i] = ex.Value; }
+            if (extras is not null && ex is not null) { extras[i] = ex.Value; }
         }
 
         var chests = new List<UtplChest>();
@@ -297,12 +316,37 @@ public static class UtplCodec
                     break;
                 default:
                     int len = r.ReadInt32();
-                    if (len < 0 || len > MaxUnknownSegmentBytes) { throw new InvalidDataException($"未知段 {seg} 长度非法: {len}"); }
-                    for (int i = 0; i < len; i++) { r.ReadByte(); }   // 未知段真读跳过（GZipStream 不可 Seek）
+                    if (len < 0 || len > MaxUnknownSegmentBytes)
+                    {
+                        throw new InvalidDataException(
+                            $"未知段 {seg} 长度非法: {len} 字节（允许 0 ~ {MaxUnknownSegmentBytes} 字节）；" +
+                            "文件可能已损坏或来自不兼容的更新版本");
+                    }
+                    SkipUnknownSegment(r, len, seg);   // 未知段真读跳过（GZipStream 不可 Seek）
                     break;
             }
         }
-        return new UtplRegion { W = w, H = h, Tiles = tiles, Chests = chests, Signs = signs, Entities = ents, Extras = extras };
+        return new UtplRegion
+        {
+            W = w, H = h, Tiles = tiles, Chests = chests, Signs = signs, Entities = ents,
+            Extras = extras ?? new Dictionary<int, (byte, byte, byte, byte)>(),
+        };
+    }
+
+    /// <summary>
+    /// 分块跳过未知段：64KB 缓冲 + Read，比逐字节快两个数量级
+    /// （逐字节要穿过 GZip 解压层，最多能放大成上亿次调用 → "打开模板卡几十秒"）。
+    /// 读到 0 说明文件被截断，抛 EndOfStreamException。
+    /// </summary>
+    private static void SkipUnknownSegment(BinaryReader r, int len, byte seg)
+    {
+        byte[] buf = new byte[SkipChunkBytes];
+        while (len > 0)
+        {
+            int n = r.Read(buf, 0, Math.Min(buf.Length, len));
+            if (n <= 0) { throw new EndOfStreamException($"未知段 {seg} 数据提前结束：还有 {len} 字节未读"); }
+            len -= n;
+        }
     }
 
     private static Tile ReadTile(BinaryReader r, out (byte, byte, byte, byte)? extra)

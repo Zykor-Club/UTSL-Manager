@@ -16,6 +16,16 @@ public static class WorldCropper
         y0 = Math.Clamp(y0, 0, Math.Max(0, world.TilesHigh - 1));
         w = Math.Clamp(w, 1, Math.Min(world.TilesWide - x0, UtplCodec.MaxDim));
         h = Math.Clamp(h, 1, Math.Min(world.TilesHigh - y0, UtplCodec.MaxDim));
+        // ★ 单边受 MaxDim(8192) 限制还不够：UtplCodec.MaxCells 是 2048×2048 ≈ 419 万格，
+        //   否则会裁出"导出成功、却读不回来"的模板（Read 会拒绝，用户白等一场）。
+        //   这里只【截断高度】而不缩放 —— 缩放会改变建筑的实际尺寸，是错的。
+        string limitNote = "";
+        if ((long)w * h > UtplCodec.MaxCells)
+        {
+            int newH = Math.Max(1, (int)(UtplCodec.MaxCells / (long)w));
+            limitNote = $"（选区过大：高度从 {h} 截断到 {newH} 格，模板上限 {UtplCodec.MaxCells} 格）";
+            h = newH;
+        }
 
         var tiles = new Tile[w * h];
         for (int y = 0; y < h; y++)
@@ -56,7 +66,7 @@ public static class WorldCropper
             ents.Add(new UtplEntity(kind.Value, e.PosX - x0, e.PosY - y0, SlotsOf(e, kind.Value), e.On));
         }
 
-        string warning = skipped > 0 ? $"（{skipped} 个 .utpl 不支持的图格实体已跳过）" : "";
+        string warning = (skipped > 0 ? $"（{skipped} 个 .utpl 不支持的图格实体已跳过）" : "") + limitNote;
         // 注意：TEdit 的 TileEntityItem 没有 prefix 字段 → 实体槽位的前缀一律为 0
         return new CropResult(new UtplRegion
         {

@@ -152,6 +152,11 @@ async Task HandleAsync(TcpClient client)
                 case "/proc/status":
                     await WriteJsonAsync(ns, ProcStatus());
                     return;
+                // ★ 压缩服务端工作集。原来管理器走 ssh 里的 Add-Type -MemberDefinition（每次重新编译 C#，秒级），
+                //   而 ssh 每次都起新进程、类型不跨进程存活 —— 所以那个"只编译一次"的守卫实际无效。这里由 agent 直接做。
+                case "/proc/trim":
+                    await WriteJsonAsync(ns, TrimServerMemory());
+                    return;
                 case "/stream/stdout":
                     await StreamStdoutAsync(ns);
                     return;
@@ -163,6 +168,20 @@ async Task HandleAsync(TcpClient client)
                     return;
                 case "/files/list":
                     await ListFilesAsync(ns, QueryValue(pathRaw, "path"));
+                    return;
+                // ★ 直连（无 SSH）模式需要的最小文件原语：读文本 / 判存在 / 建目录 / 改名。
+                //   二进制大文件仍走 /files/get 与 /files/put。
+                case "/fs/read":
+                    await ReadTextAsync(ns, QueryValue(pathRaw, "path"));
+                    return;
+                case "/fs/exists":
+                    await ExistsAsync(ns, QueryValue(pathRaw, "path"));
+                    return;
+                case "/fs/mkdir":
+                    await MkdirAsync(ns, QueryValue(pathRaw, "path"));
+                    return;
+                case "/fs/rename":
+                    await RenameAsync(ns, QueryValue(pathRaw, "path"), QueryValue(pathRaw, "to"));
                     return;
                 case "/files/delete":
                     await DeletePathAsync(ns, QueryValue(pathRaw, "path"));
@@ -548,6 +567,83 @@ async Task ReceiveFileAsync(NetworkStream ns, string rel, Dictionary<string, str
     }
     File.Move(part, full, overwrite: true);      // 同卷原子替换
     await WriteJsonAsync(ns, new { ok = true, bytes = got, path = rel });
+}
+
+/// <summary>读文本（UTF-8）。上限 8MB —— 更大的文件请走 /files/get 二进制通道。</summary>
+async Task ReadTextAsync(NetworkStream ns, string rel)
+{
+    if (!ResolveSafe(rel, out string full, out string err)) { await WriteJsonAsync(ns, new { ok = false, error = err }); return; }
+    try
+    {
+        if (!File.Exists(full)) { await WriteJsonAsync(ns, new { ok = false, error = "文件不存在" }); return; }
+        long len = new FileInfo(full).Length;
+        if (len > 8 * 1024 * 1024) { await WriteJsonAsync(ns, new { ok = false, error = "文件过大（" + (len / 1048576) + " MB > 8 MB），请走 /files/get" }); return; }
+        string text = await File.ReadAllTextAsync(full, Encoding.UTF8);
+        await WriteJsonAsync(ns, new { ok = true, path = rel, bytes = len, text });
+    }
+    catch (Exception ex) { await WriteJsonAsync(ns, new { ok = false, error = ex.Message }); }
+}
+
+/// <summary>压缩 UnifierTSL 进程的工作集（EmptyWorkingSet 等价于任务管理器里"清空工作集"）。</summary>
+Dictionary<string, object> TrimServerMemory()
+{
+    int n = 0;
+    long before = 0, after = 0;
+    foreach (Process p in Process.GetProcessesByName("UnifierTSL"))
+    {
+        using (p)
+        {
+            try
+            {
+                if (p.HasExited) { continue; }
+                before += p.WorkingSet64;
+                NativeMethods.EmptyWorkingSet(p.Handle);
+                p.Refresh();
+                after += p.WorkingSet64;
+                n++;
+            }
+            catch { }
+        }
+    }
+    return new Dictionary<string, object>
+    {
+        ["ok"] = true,
+        ["trimmed"] = n,
+        ["beforeMB"] = Math.Round(before / 1048576.0, 1),
+        ["afterMB"] = Math.Round(after / 1048576.0, 1),
+    };
+}
+
+
+async Task ExistsAsync(NetworkStream ns, string rel)
+{
+    if (!ResolveSafe(rel, out string full, out string err)) { await WriteJsonAsync(ns, new { ok = false, error = err }); return; }
+    await WriteJsonAsync(ns, new { ok = true, path = rel, exists = File.Exists(full) || Directory.Exists(full) });
+}
+
+async Task MkdirAsync(NetworkStream ns, string rel)
+{
+    if (!ResolveSafe(rel, out string full, out string err)) { await WriteJsonAsync(ns, new { ok = false, error = err }); return; }
+    try
+    {
+        Directory.CreateDirectory(full);
+        await WriteJsonAsync(ns, new { ok = true, path = rel });
+    }
+    catch (Exception ex) { await WriteJsonAsync(ns, new { ok = false, error = ex.Message }); }
+}
+
+async Task RenameAsync(NetworkStream ns, string rel, string to)
+{
+    if (!ResolveSafe(rel, out string full, out string err)) { await WriteJsonAsync(ns, new { ok = false, error = err }); return; }
+    if (!ResolveSafe(to, out string dest, out string err2)) { await WriteJsonAsync(ns, new { ok = false, error = err2 }); return; }
+    try
+    {
+        if (!File.Exists(full) && !Directory.Exists(full)) { await WriteJsonAsync(ns, new { ok = false, error = "源不存在" }); return; }
+        bool isDir = Directory.Exists(full);
+        if (isDir) { Directory.Move(full, dest); } else { File.Move(full, dest, overwrite: true); }
+        await WriteJsonAsync(ns, new { ok = true, path = rel, to });
+    }
+    catch (Exception ex) { await WriteJsonAsync(ns, new { ok = false, error = ex.Message }); }
 }
 
 async Task ListFilesAsync(NetworkStream ns, string rel)
