@@ -78,6 +78,7 @@ public partial class MainWindow : Window
             {
                 LocalDir = pj["localDir"]?.ToString() ?? LocalDir;
                 WatchdogEnabled = pj["watchdog"] is not { } wv || wv.GetValue<bool>();
+                ForceLocal = pj["forceLocal"]?.GetValue<bool>() ?? false;      // 「本机管理」开关（默认：填了 SSH 就走远端）
                 // （模板功能开关已移到扩展插件自己的配置里，宿主不再关心）
             }
             // ★ 全部字段读完后再迁移明文 token（避免把未加载的字段写成空）
@@ -99,7 +100,7 @@ public partial class MainWindow : Window
                     ["host"] = SshHost, ["port"] = SshPort, ["user"] = SshUser, ["key"] = SshKey,
                     ["dir"] = RemoteDir, ["dotnet"] = RemoteDotnet, ["launcher"] = RemoteLauncher, ["restPort"] = RemoteRestPort
                 },
-                ["paths"] = new JsonObject { ["localDir"] = LocalDir, ["watchdog"] = WatchdogEnabled }
+                ["paths"] = new JsonObject { ["localDir"] = LocalDir, ["watchdog"] = WatchdogEnabled, ["forceLocal"] = ForceLocal }
             };
             // ★ 安全（对标 MCSManager CVE-2025-50691 的教训）：token 用 DPAPI 加密后再落盘，
             //   同机其它用户即使读到 connection.json 也解不开；只有加密不可用时才退回明文。
@@ -132,9 +133,11 @@ public partial class MainWindow : Window
     private static string RemoteDotnet = @"C:\dotnet\dotnet.exe";
     private static string RemoteLauncher = @"C:\utsl-launch\utsl-launch.dll";
     private static bool HasSsh => SshHost.Length > 0 && SshKey.Length > 0;
+    /// <summary>连接设置页的「本机管理 / 远端管理」开关：勾到本机时即便填了 SSH 也按本机跑（不丢配置）。</summary>
+    private static bool ForceLocal;
     // ★ 注意：管理器是经 SSH 隧道连远端的，ConnHost 就是 127.0.0.1 —— 所以不能用 TargetIsLocal 判定，
-    //   只认「connection.json 里配了 ssh 段」。想切回本地就把 ssh 段清空（连接设置里保存空值即可）。
-    private static bool UseRemote => HasSsh;
+    //   只认「connection.json 里配了 ssh 段 + 没被开关强制成本机」。
+    private static bool UseRemote => HasSsh && !ForceLocal;
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
     private readonly ObservableCollection<WorldRow> rows = [];
@@ -1925,11 +1928,14 @@ public partial class MainWindow : Window
         return v.ToString(v >= 100 ? "F0" : v >= 10 ? "F1" : "F2") + " KB/s";
     }
 
+    // ★ 图表控件复用：网格线与 Y 轴标签只在【尺寸/刻度/单位】变化时才重建。
+    //   原来每 2 秒对 3 张图全部 Clear + 新建（每张 11 条 Line + 11 个 TextBlock + 曲线/区域）→
+    //   持续的分配与布局开销（监控面板"看着静止却一直吃 CPU"的来源之一）。
+    private sealed class ChartCache { public double W, H, Scale; public string Kind = ""; }
+    private static readonly Dictionary<Canvas, ChartCache> ChartCacheMap = [];
+
     private static void DrawChart(Canvas canvas, Canvas yLabels, Canvas xLabels, List<double>[] series, string[] colors, string kind, IReadOnlyList<DateTime> times)
     {
-        canvas.Children.Clear();
-        yLabels.Children.Clear();
-        xLabels.Children.Clear();
         double w = CanvasW(canvas), h = CanvasH(canvas);
         if (w < 12 || h < 12) { return; }
 
@@ -1940,23 +1946,41 @@ public partial class MainWindow : Window
         var gridBrush = new SolidColorBrush(Color.Parse("#242429"));
         var axisBrush = new SolidColorBrush(Color.Parse("#55555E"));
 
-        // 参考线 + Y 轴标签：位置都来自 YFor，标签在参考线上垂直居中
-        for (int gi = 0; gi <= PlotDivisions; gi++)
+        if (!ChartCacheMap.TryGetValue(canvas, out ChartCache? cc)) { cc = new ChartCache(); ChartCacheMap[canvas] = cc; }
+        bool gridSame = Math.Abs(cc.W - w) < 0.5 && Math.Abs(cc.H - h) < 0.5 && Math.Abs(cc.Scale - scale) < 1e-9 && cc.Kind == kind;
+        if (gridSame)
         {
-            double v = scale * gi / PlotDivisions;
-            double y = YFor(v, scale, h);
-            canvas.Children.Add(new Avalonia.Controls.Shapes.Line
+            // 网格线与 Y 标签原样保留，只把曲线/区域（排在网格线之后的子元素）删掉
+            while (canvas.Children.Count > PlotDivisions + 1) { canvas.Children.RemoveAt(canvas.Children.Count - 1); }
+        }
+        else
+        {
+            canvas.Children.Clear();
+            yLabels.Children.Clear();
+            cc.W = w; cc.H = h; cc.Scale = scale; cc.Kind = kind;
+        }
+        xLabels.Children.Clear();   // X 轴时间标签数量随样本数变化，数量很少，每次重建
+
+        // 参考线 + Y 轴标签：位置都来自 YFor，标签在参考线上垂直居中（gridSame 时保留上一轮的，不重建）
+        if (!gridSame)
+        {
+            for (int gi = 0; gi <= PlotDivisions; gi++)
             {
-                StartPoint = new Avalonia.Point(0, y),
-                EndPoint = new Avalonia.Point(w, y),
-                Stroke = gridBrush,
-                StrokeThickness = 1,
-            });
-            var lab = new TextBlock { Text = FmtAxis(v, kind), FontSize = 9, Foreground = axisBrush };
-            lab.Measure(Avalonia.Size.Infinity);
-            Canvas.SetLeft(lab, 52 - 7 - lab.DesiredSize.Width);      // 右对齐，与图表留 7px 间隙
-            Canvas.SetTop(lab, y - lab.DesiredSize.Height / 2);       // ★ 垂直居中在参考线上
-            yLabels.Children.Add(lab);
+                double v = scale * gi / PlotDivisions;
+                double y = YFor(v, scale, h);
+                canvas.Children.Add(new Avalonia.Controls.Shapes.Line
+                {
+                    StartPoint = new Avalonia.Point(0, y),
+                    EndPoint = new Avalonia.Point(w, y),
+                    Stroke = gridBrush,
+                    StrokeThickness = 1,
+                });
+                var lab = new TextBlock { Text = FmtAxis(v, kind), FontSize = 9, Foreground = axisBrush };
+                lab.Measure(Avalonia.Size.Infinity);
+                Canvas.SetLeft(lab, 52 - 7 - lab.DesiredSize.Width);      // 右对齐，与图表留 7px 间隙
+                Canvas.SetTop(lab, y - lab.DesiredSize.Height / 2);       // ★ 垂直居中在参考线上
+                yLabels.Children.Add(lab);
+            }
         }
 
         for (int si = 0; si < series.Length; si++)
@@ -2583,53 +2607,150 @@ public partial class MainWindow : Window
     // ===== 维护（整链重置/备份/恢复 三合一）=====
     private void OnShowMaint(object? sender, RoutedEventArgs e) => ShowView("maint");
 
-    // ===== 连接设置（远端管理）=====
+    // ===== 连接设置：本机管理 / 远端管理 两张卡片 + 模式切换 =====
     private void OnShowConn(object? sender, RoutedEventArgs e)
     {
         try
         {
             ConnHostPanel.Children.Clear();
-            ConnHostPanel.Children.Add(new TextBlock { Text = "支持远端 UTSL：填写远端主机与 REST 端口即可（需在远端放行该端口）", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")) });
-            TextBox F(string label, string val, double w)
+
+            // ---- 小工具：字段行 / 卡片 ----
+            TextBox Field(StackPanel host, string label, string val, double w)
             {
-                var sp = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, Margin = new Avalonia.Thickness(0, 4, 0, 4) };
-                sp.Children.Add(new TextBlock { Text = label, FontSize = 11.5, Width = 90, Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center });
+                var sp = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, Margin = new Avalonia.Thickness(0, 3, 0, 3) };
+                sp.Children.Add(new TextBlock { Text = label, FontSize = 11.5, Width = 110, Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center });
                 var tb = new TextBox { Text = val, FontSize = 12, Width = w, CornerRadius = new Avalonia.CornerRadius(8) };
                 sp.Children.Add(tb);
-                ConnHostPanel.Children.Add(sp);
+                host.Children.Add(sp);
                 return tb;
             }
-            var tbHost = F("主机:", ConnHost, 220);
-            var tbPort = F("REST 端口:", ConnPort.ToString(), 100);
-            var tbTok = F("令牌:", Token, 220);
-            ConnHostPanel.Children.Add(new TextBlock { Text = "⚠ 安全提示：REST 请勿直接暴露公网 ✗ 建议仅监听内网 / 用 SSH 隧道 / 强令牌", FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#E3B341")), TextWrapping = Avalonia.Media.TextWrapping.Wrap, Margin = new Avalonia.Thickness(0, 8, 0, 0) });
+            Border Card(string title, string sub, out StackPanel body)
+            {
+                var inner = new StackPanel { Spacing = 4 };
+                inner.Children.Add(new TextBlock { Text = title, FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = new SolidColorBrush(Color.Parse("#E6E6EA")) });
+                if (sub.Length > 0)
+                {
+                    inner.Children.Add(new TextBlock { Text = sub, FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#8A8A90")), TextWrapping = Avalonia.Media.TextWrapping.Wrap, Margin = new Avalonia.Thickness(0, 0, 0, 4) });
+                }
+                body = new StackPanel { Spacing = 2 };
+                inner.Children.Add(body);
+                return new Border
+                {
+                    Background = new SolidColorBrush(Color.Parse("#141417")),
+                    BorderBrush = new SolidColorBrush(Color.Parse("#2A2A30")),
+                    BorderThickness = new Avalonia.Thickness(1),
+                    CornerRadius = new Avalonia.CornerRadius(14),
+                    Padding = new Avalonia.Thickness(14, 12),
+                    Margin = new Avalonia.Thickness(0, 8, 0, 0),
+                    Child = inner,
+                };
+            }
+            void Row(StackPanel host, params Control[] items)
+            {
+                var sp = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, Margin = new Avalonia.Thickness(0, 6, 0, 0) };
+                foreach (var it in items) { sp.Children.Add(it); }
+                host.Children.Add(sp);
+            }
+            Button Btn(string text)
+                => new() { Content = text, FontSize = 11.5, Padding = new Avalonia.Thickness(14, 5), CornerRadius = new Avalonia.CornerRadius(9) };
+            TextBlock Hint(string text, string color = "#8A8A90")
+                => new() { Text = text, FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse(color)), TextWrapping = Avalonia.Media.TextWrapping.Wrap, Margin = new Avalonia.Thickness(0, 6, 0, 0) };
 
-            ConnHostPanel.Children.Add(new TextBlock { Text = "本机模式（默认）", FontSize = 12, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = new SolidColorBrush(Color.Parse("#B9B9C0")), Margin = new Avalonia.Thickness(0, 12, 0, 0) });
-            var tbLocal = F("本地 UTSL 目录:", LocalDir, 380);
+            // ---- 顶部：模式切换（切到本机不会丢掉已填的 SSH 配置，只是暂时不用）----
+            var modeSwitch = new Avalonia.Controls.ToggleSwitch
+            {
+                OnContent = "远端管理（走 SSH）",
+                OffContent = "本机管理（直接管本机目录）",
+                IsChecked = UseRemote,
+                FontSize = 12,
+                Margin = new Avalonia.Thickness(0, 0, 0, 2),
+            };
+            ConnHostPanel.Children.Add(modeSwitch);
 
-            ConnHostPanel.Children.Add(new TextBlock { Text = "远端模式（走 SSH；填好下面几项即可远程启停 / 看日志 / 读配置，REST 端口填隧道本地端口）", FontSize = 12, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = new SolidColorBrush(Color.Parse("#B9B9C0")), Margin = new Avalonia.Thickness(0, 14, 0, 0), TextWrapping = Avalonia.Media.TextWrapping.Wrap });
-            var tbSshHost = F("SSH 主机:", SshHost, 220);
-            var tbSshPort = F("SSH 端口:", SshPort.ToString(), 100);
-            var tbSshUser = F("SSH 用户:", SshUser, 160);
-            var tbSshKey = F("SSH 密钥:", SshKey, 380);
-            var tbSshDir = F("远端 UTSL 目录:", RemoteDir, 220);
-            var tbRestPort = F("远端 REST 端口:", RemoteRestPort.ToString(), 100);
-            ConnHostPanel.Children.Add(new TextBlock { Text = "提示：远端需要先放好 UTSL 运行目录，并安装「控制台启动器 C:\\utsl-launch」（否则远端启动会因没有真实控制台而崩）。详见 utsl-remote\\README.md", FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")), TextWrapping = Avalonia.Media.TextWrapping.Wrap, Margin = new Avalonia.Thickness(0, 6, 0, 0) });
-            var row = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, Margin = new Avalonia.Thickness(0, 6, 0, 0) };
-            var btnTest = new Button { Content = "测试连接", FontSize = 11.5, Padding = new Avalonia.Thickness(14, 5), CornerRadius = new Avalonia.CornerRadius(9) };
-            var btnSave = new Button { Content = "保存并应用", FontSize = 11.5, Padding = new Avalonia.Thickness(14, 5), CornerRadius = new Avalonia.CornerRadius(9) };
+            var cardLocal = Card("本机管理", "直接读写本机 UTSL 目录、本机启停进程、本机日志。REST 三项在远端模式下表示【隧道本地端】的地址。", out StackPanel bodyLocal);
+            var cardRemote = Card("远端管理", "控制面走 SSH，数据面走同一条 SSH 隧道（REST + 云端 agent 两条转发）。", out StackPanel bodyRemote);
+            ConnHostPanel.Children.Add(cardLocal);
+            ConnHostPanel.Children.Add(cardRemote);
+
+            // ---- 本机卡片 ----
+            var tbLocal = Field(bodyLocal, "本地 UTSL 目录:", LocalDir, 380);
+            var tbHost = Field(bodyLocal, "REST 主机:", ConnHost, 200);
+            var tbPort = Field(bodyLocal, "REST 端口:", ConnPort.ToString(), 90);
+            var tbTok = Field(bodyLocal, "令牌:", Token, 300);
+            var btnAuto = Btn("自动检测（读本机 TShock 配置）");
+            Row(bodyLocal, btnAuto);
+            bodyLocal.Children.Add(Hint("⚠ 安全提示：REST 请勿直接暴露公网 —— 仅监听内网 / 走 SSH 隧道 / 用强令牌。令牌在 connection.json 里以 DPAPI 加密保存。"));
+
+            // ---- 远端卡片 ----
+            var tbSshHost = Field(bodyRemote, "SSH 主机:", SshHost, 220);
+            var tbSshPort = Field(bodyRemote, "SSH 端口:", SshPort.ToString(), 90);
+            var tbSshUser = Field(bodyRemote, "SSH 用户:", SshUser, 160);
+            var tbSshKey = Field(bodyRemote, "SSH 密钥:", SshKey, 380);
+            var tbSshDir = Field(bodyRemote, "远端 UTSL 目录:", RemoteDir, 220);
+            var tbRestPort = Field(bodyRemote, "远端 REST 端口:", RemoteRestPort.ToString(), 90);
+            bodyRemote.Children.Add(Hint("隧道：本地 REST " + ConnPort + " → 远端 127.0.0.1:" + RemoteRestPort + "；agent 另一端走 17879 → 7879。"));
+            var btnTestSsh = Btn("测试 SSH");
+            var btnTunnel = Btn("启动 / 修复隧道");
+            var btnAgent = Btn("安装 / 更新云端 agent");
+            Row(bodyRemote, btnTestSsh, btnTunnel, btnAgent);
+            var agentStatus = new TextBlock
+            {
+                Text = "云端 agent：—", FontSize = 10.5, TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")), Margin = new Avalonia.Thickness(0, 6, 0, 0),
+            };
+            AgentStatusText = agentStatus;
+            bodyRemote.Children.Add(agentStatus);
+            bodyRemote.Children.Add(Hint("远端需先放好 UTSL 运行目录并安装「控制台启动器 C:\\utsl-launch」（见 utsl-remote\\README.md）。"));
+
+            // ---- 底部（两模式共用）----
+            var btnTest = Btn("测试连接");
+            var btnSave = Btn("保存并应用");
+            Row(ConnHostPanel, btnTest, btnSave);
+            ConnInfo.Margin = new Avalonia.Thickness(0, 8, 0, 0);
+            ConnHostPanel.Children.Add(ConnInfo);
+
+            // ---- 模式切换：只显示当前模式那张卡片 ----
+            void ApplyMode()
+            {
+                bool remoteOn = modeSwitch.IsChecked == true;
+                cardLocal.IsVisible = !remoteOn;
+                cardRemote.IsVisible = remoteOn;
+            }
+            modeSwitch.IsCheckedChanged += (_, _) =>
+            {
+                bool remoteOn = modeSwitch.IsChecked == true;
+                ApplyMode();
+                ForceLocal = !remoteOn;
+                if (remoteOn && !HasSsh)
+                {
+                    ConnInfo.Text = "远端模式需要先填【SSH 主机】与【SSH 密钥】—— 已填好请点「保存并应用」";
+                    return;
+                }
+                SaveConn();
+                if (UseRemote) { EnsureTunnel(); }
+                ConnInfo.Text = UseRemote
+                    ? $"已切换到远端管理 · SSH {SshUser}@{SshHost}:{SshPort} → {RemoteDir}"
+                    : "已切换到本机管理";
+                _ = RefreshWorldsAsync();
+                RefreshLog();
+            };
+            ApplyMode();
+
+            // ---- 行为：测试连接 ----
             btnTest.Click += async (_, _) =>
             {
                 try
                 {
                     string url = "http://" + tbHost.Text + ":" + tbPort.Text + "/world/list?token=" + Uri.EscapeDataString(tbTok.Text ?? "");
-                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    var sw3 = System.Diagnostics.Stopwatch.StartNew();
                     string res = await Http.GetStringAsync(url);
-                    sw.Stop();
-                    ConnInfo.Text = $"连接成功 ✓ 延迟 {sw.ElapsedMilliseconds} ms · {res.Length} 字节";
+                    sw3.Stop();
+                    ConnInfo.Text = $"连接成功 ✓ 延迟 {sw3.ElapsedMilliseconds} ms · {res.Length} 字节";
                 }
                 catch (Exception ex) { ConnInfo.Text = "连接失败 ✗ " + ex.Message; }
             };
+
+            // ---- 行为：保存并应用（两张卡片的字段一起落盘）----
             btnSave.Click += (_, _) =>
             {
                 ConnHost = tbHost.Text ?? "127.0.0.1";
@@ -2642,57 +2763,35 @@ public partial class MainWindow : Window
                 SshKey = (tbSshKey.Text ?? "").Trim();
                 RemoteDir = (tbSshDir.Text ?? "").Trim();
                 RemoteRestPort = int.TryParse(tbRestPort.Text, out int rp) && rp > 0 ? rp : 7878;
+                // 保存后按"开关 + 是否填了 SSH"重新判定模式：开关指向远端但没填全 → 仍是本机，并明确提示
+                bool wantRemote = modeSwitch.IsChecked == true;
+                ForceLocal = !wantRemote;
                 SaveConn();
-                if (HasSsh) { EnsureTunnel(); }
-                ConnInfo.Text = $"已保存并应用: http://{ConnHost}:{ConnPort}" + (HasSsh ? $" · 远端模式（SSH {SshUser}@{SshHost}:{SshPort} → {RemoteDir}）" : " · 本机模式");
+                if (UseRemote) { EnsureTunnel(); }
+                ConnInfo.Text = UseRemote
+                    ? $"已保存并应用 · 远端模式（SSH {SshUser}@{SshHost}:{SshPort} → {RemoteDir}）"
+                    : wantRemote
+                        ? "已保存，但 SSH 主机/密钥为空 → 仍按【本机管理】运行"
+                        : $"已保存并应用 · 本机模式（{LocalDir}）";
                 _ = RefreshWorldsAsync();
                 RefreshLog();
             };
-            var btnTestSsh = new Button { Content = "测试 SSH", FontSize = 11.5, Padding = new Avalonia.Thickness(14, 5), CornerRadius = new Avalonia.CornerRadius(9) };
-            btnTestSsh.Click += async (_, _) =>
-            {
-                SshHost = (tbSshHost.Text ?? "").Trim();
-                SshPort = int.TryParse(tbSshPort.Text, out int sp2) && sp2 > 0 ? sp2 : 22;
-                SshUser = (tbSshUser.Text ?? "").Trim();
-                SshKey = (tbSshKey.Text ?? "").Trim();
-                RemoteDir = (tbSshDir.Text ?? "").Trim();
-                if (!HasSsh) { ConnInfo.Text = "SSH 信息不完整 ✗ 需要主机与密钥"; return; }
-                try
-                {
-                    var sw2 = System.Diagnostics.Stopwatch.StartNew();
-                    string r = await Task.Run(() => SshRun("[Console]::OutputEncoding=[Text.Encoding]::UTF8; (hostname) + ' | UTSL进程=' + ((Get-Process UnifierTSL,UnifierTSL.ConsoleClient -ErrorAction SilentlyContinue) | Measure-Object).Count + ' | 日志=' + ((Get-ChildItem '" + RemoteDir + "\\logs\\*.log' -ErrorAction SilentlyContinue) | Measure-Object).Count", 20000));
-                    sw2.Stop();
-                    ConnInfo.Text = "SSH 测试 ✓ " + sw2.ElapsedMilliseconds + " ms · " + r.Replace("\n", " ");
-                }
-                catch (Exception ex) { ConnInfo.Text = "SSH 测试失败 ✗ " + ex.Message; }
-            };
-            var btnTunnel = new Button { Content = "启动/修复隧道", FontSize = 11.5, Padding = new Avalonia.Thickness(14, 5), CornerRadius = new Avalonia.CornerRadius(9) };
-            btnTunnel.Click += (_, _) =>
-            {
-                EnsureTunnel();
-                ConnInfo.Text = "已尝试建立隧道：本地 " + ConnPort + " → 远端 127.0.0.1:" + RemoteRestPort;
-            };
-            var btnAuto = new Button { Content = "自动检测", FontSize = 11.5, Padding = new Avalonia.Thickness(14, 5), CornerRadius = new Avalonia.CornerRadius(9) };
+
+            // ---- 行为：自动检测（读本机 TShock 配置）----
             btnAuto.Click += async (_, _) =>
             {
                 try
                 {
                     int foundPort = 7878; string foundTok = Token;
-                    // 从 TShock 配置读 REST 外部应用令牌（TSManager 也是这么找的 ✓）
                     string tsCfg = Path.Combine(FsRoot, "config", "TShockAPI", "config.json");
                     if (!await Task.Run(() => FsExists(tsCfg))) { tsCfg = Path.Combine(FsRoot, "tshock", "config.json"); }
                     if (await Task.Run(() => FsExists(tsCfg)) && JsonNode.Parse(await Task.Run(() => FsReadText(tsCfg))) is JsonObject ts)
                     {
-                        // 实测确认的键名（TShock 6.x）：RestApiPort 在【顶层】；ApplicationRestTokens 的【键名】就是令牌
                         if (int.TryParse(ts["RestApiPort"]?.ToString(), out int p1) && p1 > 0) { foundPort = p1; }
                         var dict = ts["ApplicationRestTokens"] as JsonObject;
-                        if (dict is not null)
-                        {
-                            foreach (var kv in dict) { foundTok = kv.Key; break; }
-                        }
+                        if (dict is not null) { foreach (var kv in dict) { foundTok = kv.Key; break; } }
                         else
                         {
-                            // 兼容旧版：可能在 Settings 下
                             if (int.TryParse(ts["Settings"]?["RestApiPort"]?.ToString(), out int p2) && p2 > 0) { foundPort = p2; }
                             var d2 = ts["Settings"]?["ApplicationRestTokens"] as JsonObject;
                             if (d2 is not null) { foreach (var kv in d2) { foundTok = kv.Key; break; } }
@@ -2701,28 +2800,47 @@ public partial class MainWindow : Window
                     tbHost.Text = "127.0.0.1";
                     tbPort.Text = foundPort.ToString();
                     tbTok.Text = foundTok;
-                    ConnInfo.Text = $"自动检测完成：端口 {foundPort}，令牌 {foundTok}（来自服务端配置 ✓ 请点测试连接确认）";
+                    ConnInfo.Text = $"自动检测完成：端口 {foundPort}，令牌 {foundTok}（来自服务端配置 ✓ 请点「测试连接」确认）";
                 }
                 catch (Exception ex) { ConnInfo.Text = "自动检测失败: " + ex.Message; }
             };
-            row.Children.Add(btnTest); row.Children.Add(btnSave); row.Children.Add(btnAuto);
-            var row2 = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, Margin = new Avalonia.Thickness(0, 6, 0, 0) };
-            row2.Children.Add(btnTestSsh); row2.Children.Add(btnTunnel);
-              // ===== 云端 agent（UTSLDaemon）：状态灯 + 一键安装/更新 =====
-              var btnAgent = new Button { Content = "安装 / 更新云端 agent", FontSize = 11.5, Padding = new Avalonia.Thickness(14, 5), CornerRadius = new Avalonia.CornerRadius(9) };
-              var agentStatus = new TextBlock
-              {
-                  Text = "云端 agent：—", FontSize = 10.5, TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-                  Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")), Margin = new Avalonia.Thickness(0, 6, 0, 0),
-              };
-              AgentStatusText = agentStatus;
-              btnAgent.Click += async (_, _) => await InstallAgentAsync(agentStatus);
-              row2.Children.Add(btnAgent);
-              ConnHostPanel.Children.Add(agentStatus);
-              RefreshAgentStatus();
-            ConnHostPanel.Children.Add(row2);
-            ConnHostPanel.Children.Add(row);
-            ConnInfo.Text = $"当前: http://{ConnHost}:{ConnPort} · 配置存于 {ConnFile}";
+
+            // ---- 行为：测试 SSH ----
+            btnTestSsh.Click += async (_, _) =>
+            {
+                SshHost = (tbSshHost.Text ?? "").Trim();
+                SshPort = int.TryParse(tbSshPort.Text, out int sp2) && sp2 > 0 ? sp2 : 22;
+                SshUser = (tbSshUser.Text ?? "").Trim();
+                SshKey = (tbSshKey.Text ?? "").Trim();
+                RemoteDir = (tbSshDir.Text ?? "").Trim();
+                if (!HasSsh) { ConnInfo.Text = "SSH 信息不完整 ✗ 需要主机与密钥"; return; }
+                ConnInfo.Text = "正在测试 SSH…";
+                try
+                {
+                    var sw2 = System.Diagnostics.Stopwatch.StartNew();
+                    string r = await Task.Run(() => SshRun("[Console]::OutputEncoding=[Text.Encoding]::UTF8; (hostname) + ' | UTSL进程=' + ((Get-Process UnifierTSL,UnifierTSL.ConsoleClient -ErrorAction SilentlyContinue) | Measure-Object).Count + ' | 日志=' + ((Get-ChildItem '" + RemoteDir + "\\logs\\*.log' -ErrorAction SilentlyContinue) | Measure-Object).Count", 20000));
+                    sw2.Stop();
+                    ConnInfo.Text = r.Trim().Length == 0
+                        ? "SSH 测试 ✗ 没有返回内容（超时或密钥/主机不对）"
+                        : "SSH 测试 ✓ " + sw2.ElapsedMilliseconds + " ms · " + r.Replace("\n", " ");
+                }
+                catch (Exception ex) { ConnInfo.Text = "SSH 测试失败 ✗ " + ex.Message; }
+            };
+
+            // ---- 行为：启动/修复隧道 ----
+            btnTunnel.Click += (_, _) =>
+            {
+                EnsureTunnel();
+                ConnInfo.Text = "已尝试建立隧道：本地 " + ConnPort + " → 远端 127.0.0.1:" + RemoteRestPort;
+            };
+
+            // ---- 行为：安装/更新 agent ----
+            btnAgent.Click += async (_, _) => await InstallAgentAsync(agentStatus);
+
+            RefreshAgentStatus();
+            ConnInfo.Text = UseRemote
+                ? $"当前：远端管理（SSH {SshUser}@{SshHost}）· 配置存于 {ConnFile}"
+                : $"当前：本机管理（{LocalDir}）· 配置存于 {ConnFile}";
             ShowView("conn");
         }
         catch (Exception ex) { ERR("连接设置失败: " + ex.Message); }
@@ -3048,6 +3166,8 @@ public partial class MainWindow : Window
                 Num("边缘触发余量_格:", "边缘触发余量_格", out var tM); pendMargin = tM;
                 Num("传送冷却_毫秒:", "传送冷却_毫秒", out var tC); pendCool = tC;
                 Num("边缘带宽度_格:", "边缘带宽度_格", out var tB); pendBand = tB;
+                // ★ 说明：这一项写进 EdgeStitch.json，由【服务端插件】读取（决定世界边缘传送是否成环）。
+                //   管理器自己的地图/拼接预览始终按条带渲染，不体现成环 —— 不是没生效，是作用域不在这里。
                 Num("首尾相连成环(true/false):", "首尾相连成环", out var tL); pendLoop = tL;
                 pendDelta!.TextChanged += (_, _) => UpdateSafety();
                 if (cfgEdge?["陆地边缘"] is JsonObject le)
