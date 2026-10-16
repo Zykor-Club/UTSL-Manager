@@ -3819,6 +3819,14 @@ public partial class MainWindow : Window
             }
             FileInfo.Text = $"{dirs.Count} 个文件夹 · {files.Count} 个文件" + truncNote;
 
+            // 大小显示：小于 1KB 显示字节（原来整数除法把 <1KB 全显示成 0 KB）
+            static string SizeText(long b)
+            {
+                if (b < 1024) { return b + " B"; }
+                if (b < 1024 * 1024) { return (b / 1024.0).ToString("0.#") + " KB"; }
+                return (b / 1048576.0).ToString("0.#") + " MB";
+            }
+
             void Row(string icon, string name, string sizeText, string timeText, bool isDir, string full, bool? enabled, long sizeBytes = -1)
             {
                 // 表格行：名称(*) | 大小(90) | 修改时间(130) | 启用(64)
@@ -3918,7 +3926,7 @@ public partial class MainWindow : Window
                 bool isDll = x.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && !x.Name.StartsWith("TShockAPI", StringComparison.OrdinalIgnoreCase);
                 bool isOff = x.Name.EndsWith(".dll.disabled", StringComparison.OrdinalIgnoreCase) && !x.Name.StartsWith("TShockAPI", StringComparison.OrdinalIgnoreCase);
                 bool? en = (isDll || isOff) ? isDll : (bool?)null;
-                Row("\uE7C3", x.Name, $"{x.Size / 1024} KB", x.Mtime.ToString("MM-dd HH:mm") + (isOff ? " · 已停用" : ""), false, Path.Combine(fileCwd, x.Name), en, x.Size);
+                Row("\uE7C3", x.Name, SizeText(x.Size), x.Mtime.ToString("MM-dd HH:mm") + (isOff ? " · 已停用" : ""), false, Path.Combine(fileCwd, x.Name), en, x.Size);
             }
             // ★ 同世界链：这里是【异步读取完成】路径，原来又调 ShowView("plugins")，
             //   用户在读取期间切走会被抢回来。视图切换只由点击入口（OnShowPlugins）负责。

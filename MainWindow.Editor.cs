@@ -369,15 +369,7 @@ public partial class MainWindow
         EditHint.Text = "";
         try
         {
-            // 3) 首次保存备份（沿用 xxx.json.yyyyMMdd_HHmmss.bak 的习惯；备份失败不阻止保存，但会提示）
-            if (!editorBackedUp)
-            {
-                string bak = editorPath + "." + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".bak";
-                bool okBak = await Task.Run(() => FsWriteText(bak, editorLoadedText));
-                editorBackedUp = okBak;
-                if (okBak) { ERR("已生成备份: " + System.IO.Path.GetFileName(bak)); }
-                else { ERR("⚠ 备份失败（不影响本次保存），继续保存。"); }
-            }
+            // 3) （原"首次保存自动 .bak"已按用户要求移除 —— 保存就是保存，不再额外落文件）
 
             // 4) 还原行尾 + BOM 后写回
             string body2 = editorEol == "\r\n"

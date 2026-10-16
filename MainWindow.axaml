@@ -190,15 +190,17 @@
         <Border Grid.Row="2" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" ClipToBounds="True">
           <DockPanel>
             <StackPanel DockPanel.Dock="Top">
-              <TextBlock Text="点【文件名】可在线编辑并保存（带 JSON 语法校验、自动备份、保留 BOM/行尾）；点【文件夹名】进入；插件 .dll 行右侧可勾选启用/停用（停用=改名 .dll.disabled，不删除，需重启服务端）" FontSize="10.5" Foreground="#7C7C82" Margin="14,10,14,8" TextWrapping="Wrap"/>
-              <Grid ColumnDefinitions="*,90,130,64,120" Margin="14,0,14,6">
+              <TextBlock Text="点文件名可编辑；点文件夹进入；.dll 行可勾选启用/停用" FontSize="10.5" Foreground="#7C7C82" Margin="36,10,36,8" TextWrapping="Wrap"/>
+              <!-- ★ 表头的左右内缩必须与行一致：行在 ScrollViewer Padding(0,0,12,0) + PluginList Margin(10,0,10,12) + 行内 Padding(14) 里，
+                   合计左右各 36；原来表头只缩进 14 → 行整体左移 8px（用户反馈"大小/修改时间/启用对不齐"）。 -->
+              <Grid ColumnDefinitions="*,90,130,64,120" Margin="36,0,36,6">
                 <TextBlock Grid.Column="0" Text="名称" FontSize="10.5" FontWeight="SemiBold" Foreground="#6E7681"/>
                 <TextBlock Grid.Column="1" Text="大小" FontSize="10.5" FontWeight="SemiBold" Foreground="#6E7681"/>
                 <TextBlock Grid.Column="2" Text="修改时间" FontSize="10.5" FontWeight="SemiBold" Foreground="#6E7681"/>
                 <TextBlock Grid.Column="3" Text="启用" FontSize="10.5" FontWeight="SemiBold" Foreground="#6E7681" HorizontalAlignment="Center"/>
                 <TextBlock Grid.Column="4" Text="操作（下载/删除）" FontSize="10.5" FontWeight="SemiBold" Foreground="#6E7681" HorizontalAlignment="Center"/>
               </Grid>
-              <Border Height="1" Background="#26262B" Margin="14,0,14,4"/>
+              <Border Height="1" Background="#26262B" Margin="36,0,36,4"/>
             </StackPanel>
             <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
               <StackPanel x:Name="PluginList" Margin="10,0,10,12" Spacing="2"/>
