@@ -504,11 +504,12 @@ public partial class MainWindow : Window
     {
         get
         {
+            // ★ 先算好 root 再进锁：AgentClient.RemoteRoot 首次会发一次 HTTP（60 秒超时），
+            //   放在锁内会让任何文件访问都可能持锁阻塞（我自己刚引入的问题，自查发现）。
+            bool direct = DirectReady;
+            string root = direct ? AgentClient.RemoteRoot : UseRemote ? RemoteDir : LocalDir;
             lock (BackendGate)
             {
-                // 直连模式：文件操作全走 agent 的 HTTP 端点（没有 ssh）；根取 agent 的部署根
-                bool direct = DirectReady;
-                string root = direct ? AgentClient.RemoteRoot : UseRemote ? RemoteDir : LocalDir;
                 var b = _fileBackend;
                 if (b is null || b.IsRemote != (UseRemote || direct) || b.Root != root || _lastDirect != direct)
                 {

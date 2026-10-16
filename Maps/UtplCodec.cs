@@ -63,9 +63,17 @@ public static class UtplCodec
     //   现在收到 2048*2048（≈420 万格 ≈ 180 MB），并把 extras 字典也一并限制在同一量级内。
     public const int MaxCells = 2048 * 2048;
     public const int ChestSlots = 40;
+
+    /// <summary>记录数上限：与服务端 UtplFormat.MaxRecords 一致。
+    /// 之前管理器**没有**这个上限 —— 坏文件可以在 chests/signs/entities 段声明一个巨大的记录数，
+    /// 让 Read 顺着分配超大 List（服务端有 100 万的上限，双方必须对齐）。</summary>
+    public const int MaxRecords = 1_000_000;
     // ★ 未知段只是"未来版本多出来的段"，正常文件为 0。上限从 256MB 收到 8MB，
     //   避免畸形文件用超大长度触发天文数字的读取（而且每次读都要穿过 GZip 解压层）。
-    public const int MaxUnknownSegmentBytes = 8 * 1024 * 1024;
+    /// <summary>未知段长度上限：**与服务端一致**（256MB）。
+    /// 上一轮曾把它降到 8MB，但那是治错了病 —— 真正的问题是"逐字节 ReadByte 跳过"（2.68 亿次单字节读），
+    /// 已改用 64KB 分块读解决；上限本身不该比服务端更严，否则未来版本的大未知段会被管理器误拒。</summary>
+    public const int MaxUnknownSegmentBytes = 256 * 1024 * 1024;
     private const int SkipChunkBytes = 64 * 1024;   // 跳过未知段用的分块缓冲大小
 
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
@@ -279,7 +287,10 @@ public static class UtplCodec
             switch (seg)
             {
                 case SegChests:
-                    for (int n = r.ReadInt32(), i = 0; i < n; i++)
+                {
+                    int cn = r.ReadInt32();
+                    if (cn < 0 || cn > MaxRecords) { throw new InvalidDataException($"chests 段记录数非法: {cn}（允许 0 ~ {MaxRecords}）"); }
+                    for (int i = 0; i < cn; i++)
                     {
                         int x = r.ReadInt32(), y = r.ReadInt32();
                         string name = r.ReadString();
@@ -288,11 +299,19 @@ public static class UtplCodec
                         chests.Add(new UtplChest(x, y, name, items));
                     }
                     break;
+                }
                 case SegSigns:
-                    for (int n = r.ReadInt32(), i = 0; i < n; i++) { signs.Add(new UtplSign(r.ReadInt32(), r.ReadInt32(), r.ReadString())); }
+                {
+                    int sn = r.ReadInt32();
+                    if (sn < 0 || sn > MaxRecords) { throw new InvalidDataException($"signs 段记录数非法: {sn}（允许 0 ~ {MaxRecords}）"); }
+                    for (int i = 0; i < sn; i++) { signs.Add(new UtplSign(r.ReadInt32(), r.ReadInt32(), r.ReadString())); }
                     break;
+                }
                 case SegEntities:
-                    for (int n = r.ReadInt32(), i = 0; i < n; i++)
+                {
+                    int en = r.ReadInt32();
+                    if (en < 0 || en > MaxRecords) { throw new InvalidDataException($"entities 段记录数非法: {en}（允许 0 ~ {MaxRecords}）"); }
+                    for (int i = 0; i < en; i++)
                     {
                         byte kind = r.ReadByte();
                         int x = r.ReadInt32(), y = r.ReadInt32();
@@ -303,6 +322,7 @@ public static class UtplCodec
                         ents.Add(new UtplEntity(kind, x, y, arr, on));
                     }
                     break;
+                }
                 default:
                     int len = r.ReadInt32();
                     if (len < 0 || len > MaxUnknownSegmentBytes)
