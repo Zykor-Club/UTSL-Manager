@@ -1158,6 +1158,11 @@ public partial class MainWindow : Window
     private const int AgentRemotePort = 7879;    // 远端 agent 端口（只绑回环）
     private static bool AgentAlive;
     private static long AgentProbedMs;
+    // agent 指标（远端没装 MetricsChannel 插件时的 2 秒级来源；网络是累计字节，速率由管理器差分）
+    private static double AgentCpuPct, AgentPrivateMB;
+    private static long AgentSentBytes = -1, AgentRecvBytes = -1, AgentMetricsAtMs;
+    private static long lastAgentSent = -1, lastAgentRecv = -1;
+    private static readonly HttpClient AgentHttp = new() { Timeout = TimeSpan.FromSeconds(4) };   // ★ 复用，别每轮 new
     private static string AgentBaseUsed = "";   // ★ 当前流连的是哪个 base（本机 7879 / 远端 17879）；切换时必须重连
     private static CancellationTokenSource? agentLogCts;
     private static string AgentBase => UseRemote ? "http://127.0.0.1:" + AgentLocalPort : "http://127.0.0.1:" + AgentRemotePort;
@@ -1174,6 +1179,29 @@ public partial class MainWindow : Window
             return ok;
         }
         catch { AgentProbedMs = Environment.TickCount64; return false; }
+    }
+
+    /// <summary>每 2 秒拉一次 agent /metrics（远端没装 MetricsChannel 插件时，这是唯一的实时来源）。</summary>
+    private async Task AgentMetricsLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                string s = await AgentHttp.GetStringAsync(AgentBaseUsed + "/metrics", ct);
+                using var doc = JsonDocument.Parse(s);
+                var srv = doc.RootElement.GetProperty("server");
+                AgentCpuPct = srv.TryGetProperty("cpuSingleCorePct", out var c) ? c.GetDouble() : 0;
+                AgentPrivateMB = srv.TryGetProperty("privateMB", out var m) ? m.GetDouble() : 0;
+                var net = doc.RootElement.GetProperty("net");
+                AgentSentBytes = net.TryGetProperty("sentBytes", out var sb) ? sb.GetInt64() : -1;
+                AgentRecvBytes = net.TryGetProperty("recvBytes", out var rb) ? rb.GetInt64() : -1;
+                AgentMetricsAtMs = Environment.TickCount64;
+            }
+            catch (OperationCanceledException) { break; }
+            catch { }
+            try { await Task.Delay(2000, ct); } catch { break; }
+        }
     }
 
     /// <summary>订阅 agent 的 SSE 日志流，把行投到控制台；断开则退避重连。AgentAlive=false 时不再重连。</summary>
@@ -1226,7 +1254,9 @@ public partial class MainWindow : Window
             Dispatcher.UIThread.Post(() => ERR("✓ 已连接 UTSLDaemon（云端 agent）—— 控制台日志改为推送，实测延迟约 150 ms；不再轮询日志文件"));
             agentLogCts?.Cancel();
             agentLogCts = new CancellationTokenSource();
+            lastAgentSent = -1; lastAgentRecv = -1; AgentMetricsAtMs = 0;    // ★ 新连接：速率基准重置
             _ = Task.Run(() => AgentLogLoopAsync(agentLogCts.Token));
+            _ = Task.Run(() => AgentMetricsLoopAsync(agentLogCts.Token));
         }
         else
         {
@@ -1701,7 +1731,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                bool live = UseRemote && MetricsAtMs > 0;
+                bool live = UseRemote && (AgentAlive || MetricsAtMs > 0);
                 if (CpuTitle is not null) { CpuTitle.Text = !UseRemote ? "CPU 使用量（本机 · 单核 %）" : live ? "CPU（远端 · 实时 2s）" : "CPU（远端 · 单核 %）"; }
                 if (MemTitle is not null) { MemTitle.Text = !UseRemote ? "内存使用量（本机 · 私有）" : live ? "内存（远端 · 实时 2s）" : "内存（远端 · 私有）"; }
                 if (NetTitle is not null) { NetTitle.Text = !UseRemote ? "网络流量（本机全部网卡）" : live ? "网络（远端网卡 · 实时 2s）" : "网络（远端网卡）"; }
@@ -1716,7 +1746,27 @@ public partial class MainWindow : Window
             // ★ 远端模式：数据来自「合并快照」（每 45 秒一次，不额外发 ssh）—— 监控的是被管的那台服务器。
             //   旧实现用 Process.GetProcessesByName 读的是【本机】进程、网络是本机全部网卡合计 → 测错对象。
             bool pluginFresh = MetricsAtMs > 0 && Environment.TickCount64 - MetricsAtMs < 8000;
-            if (pluginFresh)
+            bool agentFresh = AgentAlive && AgentMetricsAtMs > 0 && Environment.TickCount64 - AgentMetricsAtMs < 8000;
+            if (agentFresh)
+            {
+                // ★ 首选：agent（2 秒级；不要求服务端装 MetricsChannel 插件。
+                //   原来这里只有"插件"和"45 秒快照"两条路，而这台远端没装插件 → 三个图表几乎不动，就是这个原因）
+                cpuVal = AgentCpuPct;
+                memVal = AgentPrivateMB / 1024.0;
+                if (lastAgentSent >= 0 && AgentSentBytes >= 0 && secs > 0)
+                {
+                    up = Math.Max(0, (AgentSentBytes - lastAgentSent) / 1024.0 / secs);
+                    down = Math.Max(0, (AgentRecvBytes - lastAgentRecv) / 1024.0 / secs);
+                }
+                lastAgentSent = AgentSentBytes; lastAgentRecv = AgentRecvBytes;
+                PushCarry(cpuHist, cpuVal); PushCarry(memHist, memVal); PushCarry(upHist, up); PushCarry(downHist, down);
+                CpuNow.Text = $"{cpuVal:F2}%";
+                MemNow.Text = $"{memVal:F2} GB";
+                NetNow.Text = up >= 1024 || down >= 1024
+                    ? $"↑ {up / 1024.0:F2}  ↓ {down / 1024.0:F2} MB/s"
+                    : $"↑ {up:F2}  ↓ {down:F2} KB/s";
+            }
+            else if (pluginFresh)
             {
                 // ★ 首选：服务端 /metrics 插件（2 秒级、实测单次 ~0.1 秒），监控的就是服务器本进程
                 cpuVal = MetricsCpuPct;

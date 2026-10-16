@@ -19,6 +19,7 @@ Dictionary<int, TimeSpan> _prevCpu = [];
 DateTime _prevAt = DateTime.UtcNow;
 long _prevSent = -1, _prevRecv = -1;
 int BoundPort = 0;
+long metricsCalls = 0;
 long lastPingLog = 0;        // 实际绑定到的端口（--selftest 用 0 让系统分配，避免撞上别的程序）
 
 async Task ServeAsync(int listenPort = -1)
@@ -81,6 +82,7 @@ async Task HandleAsync(TcpClient client)
                     await WriteJsonAsync(ns, new { ok = true, name = "UTSLDaemon", version = "0.1.0", root, logs = logsDir, logsExists = Directory.Exists(logsDir), at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
                     return;
                 case "/metrics":
+                    Interlocked.Increment(ref metricsCalls);
                     await WriteJsonAsync(ns, CollectMetrics());
                     return;
                 case "/stream/log":
@@ -169,6 +171,8 @@ object CollectMetrics()
             handles,
         },
         net = new { sentBytes = sent, recvBytes = recv, prevSentBytes = _prevSent, prevRecvBytes = _prevRecv },
+        calls = metricsCalls,
+        uptimeSec = (long)(Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency),
         log = NewestLogInfo(),
     };
 }
