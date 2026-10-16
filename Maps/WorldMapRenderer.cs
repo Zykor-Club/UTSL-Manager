@@ -18,8 +18,11 @@ public sealed record MapRenderStats(
     public string Describe()
     {
         string head = Slices > 1 ? $"拼接 {Slices} 片 · 总 {WorldWidth}×{WorldHeight}" : $"{WorldWidth}×{WorldHeight}";
+        // ★ EncodeMs 恒为 0（PNG 编解码早已从管理器移除，A 子代理 grep 确认无非 third_party 调用）——
+        //   再显示"编码 0ms"就是无意义信息，所以为 0 时不显示。
+        string enc = EncodeMs > 0 ? $" · 编码 {EncodeMs}ms" : "";
         return $"{head} · 像素 {PixelWidth}×{PixelHeight} · 箱 {Chests} · 牌 {Signs} · 实体 {Entities}"
-             + $" · 读取 {LoadMs}ms · 渲染 {RenderMs}ms · 编码 {EncodeMs}ms";
+             + $" · 读取 {LoadMs}ms · 渲染 {RenderMs}ms{enc}";
     }
 }
 
@@ -28,7 +31,10 @@ public sealed record MapRenderStats(
 /// 每个图格画一个纯色像素，不依赖任何贴图/主题资源，因此不需要 TEdit 的 App/DI/视图。
 ///
 /// 两处刻意的设计：
-///   1) 单条目世界缓存：解析一个 4200×2400 世界约 1.7s，切回同一个世界时不重复解析（内存代价约 200MB，只留一份）。
+///   1) 单条目世界缓存：解析一个 4200×2400 世界约 0.8~1.4s，切回同一个世界时不重复解析。
+///      ★ 内存口径按 A 子代理实测修正：TEdit 的 Tile 是 32 字节（原注释写 44），
+///        4200×2400 = 1008 万格 → Tile 数组约 307MB（原注释写"约 200MB"），LoadWorld 后托管堆增量实测 324MB。
+///        所以这份缓存是"用约 300MB 换一次 1.4 秒的重解析"，只留一份。
 ///   2) 按行并行渲染：PixelMap 是纯静态无状态函数，行与行互不重叠，所以并行安全。
 /// </summary>
 public static class WorldMapRenderer
