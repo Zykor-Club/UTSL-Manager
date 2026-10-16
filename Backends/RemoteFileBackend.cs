@@ -64,10 +64,57 @@ public sealed class RemoteFileBackend(ISshTransport ssh, string root) : IFileBac
         catch { return ""; }
     }
 
+    /// <summary>超过这个字节数改走 scp 通道（见 WriteText 的说明）。</summary>
+    private const int LargeWriteBytes = 4096;
+
+    /// <summary>Windows 路径 → scp 远端路径形式（与管理器 ScpPath 同一约定：C:\a → /C:/a）。</summary>
+    private static string ScpPath(string winPath)
+    {
+        string p = winPath.Replace('\\', '/');
+        return (p.Length > 1 && p[1] == ':') ? "/" + p : p;
+    }
+
     public bool WriteText(string path, string text)
     {
-        string b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(text);
         string tmp = path + ".tmp";
+
+        // ★ 大文件走 scp：远端 cmd.exe 有 8191 的命令行上限（实测），所以分块写每趟只能带 2400 base64 ≈ 1.8KB，
+        //   而链路 RTT 实测约 1.67 秒 → 100KB 要 55 趟 ≈ 90 秒。编辑器保存 20KB 配置就会"卡住"十几秒。
+        //   改为：本地写临时文件 → scp 到远端同目录的 .tmp → 远端原子改名（仍是原子替换，失败不留半个文件）。
+        if (bytes.Length > LargeWriteBytes)
+        {
+            // ★ 本地临时文件要有退路：%TEMP% 在受限账户 / 重定向的配置文件 / 沙箱里可能不可写 ——
+            //   实测（探针进程）会抛 UnauthorizedAccessException。IFileBackend 的契约是"不抛异常，失败以返回值表达"，
+            //   所以：先试 %TEMP%，失败退回"程序自己的 tmp/"，两处都不行就 return false。整段再包一层 try/catch 兜住 ssh 侧的异常。
+            string? localTmp = null;
+            try
+            {
+                foreach (string dir in new[] { Path.GetTempPath(), Path.Combine(AppContext.BaseDirectory, "tmp") })
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(dir);
+                        string p = Path.Combine(dir, "utsl-wr-" + Guid.NewGuid().ToString("N") + ".tmp");
+                        File.WriteAllBytes(p, bytes);
+                        localTmp = p;
+                        break;
+                    }
+                    catch { }
+                }
+                if (localTmp is null) { return false; }   // 两处都写不了 → 如实失败
+                if (!ssh.CopyToRemote(localTmp, ScpPath(tmp)))
+                {
+                    try { ssh.Run(Quiet + " Remove-Item -LiteralPath '" + Ps.Q(tmp) + "' -Force -ErrorAction SilentlyContinue", 15000); } catch { }
+                    return false;
+                }
+                return RunWrite("Move-Item -LiteralPath '" + Ps.Q(tmp) + "' -Destination '" + Ps.Q(path) + "' -Force;", 30000);
+            }
+            catch { return false; }
+            finally { if (localTmp is not null) { try { File.Delete(localTmp); } catch { } } }
+        }
+
+        string b64 = Convert.ToBase64String(bytes);
         // ★ E2（审查报告）：这里原来有一整段"先写一遍 + 逐块追加"的死代码（返回值全丢），
         //   紧接着又执行一遍真正的写入 —— 等于每次写文件都发两遍 ssh。已删除。
         //   追加块也从 `$b=[IO.File]::ReadAllBytes($p); WriteAllBytes($p, $b + 新块)`（O(n²)、每块重读整个文件）

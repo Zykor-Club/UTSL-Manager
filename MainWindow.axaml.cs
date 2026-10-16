@@ -506,16 +506,22 @@ public partial class MainWindow : Window
         {
             // ★ 先算好 root 再进锁：AgentClient.RemoteRoot 首次会发一次 HTTP（60 秒超时），
             //   放在锁内会让任何文件访问都可能持锁阻塞（我自己刚引入的问题，自查发现）。
-            bool direct = DirectReady;
-            string root = direct ? AgentClient.RemoteRoot : UseRemote ? RemoteDir : LocalDir;
+            // ★ 远端模式下也优先用 agent（前提：它可达 + 它自报的根与远端根一致）。
+            //   实测原因：远端 SSH 的每一次文件操作都要 5~8 秒（TCP + SSH 握手多轮往返，在 1.67 秒 RTT 的链路上尤其明显），
+            //   而 agent 是同一个隧道上的一次 HTTP（本机 50~200ms）—— 对编辑器保存 / 配置保存这类高频小写入是数量级差别。
+            //   两个前提缺一不可：不可达、或根不一致（例如本该读远端却连上了本机 agent）时，一律退回原来的 SSH 后端。
+            bool agentOk = DirectReady
+                || (UseRemote && AgentClient.Alive && AgentClient.RemoteRoot.Length > 0
+                    && AgentClient.RemoteRoot.Equals(RemoteDir, StringComparison.OrdinalIgnoreCase));
+            string root = DirectReady ? AgentClient.RemoteRoot : UseRemote ? RemoteDir : LocalDir;
             lock (BackendGate)
             {
                 var b = _fileBackend;
-                if (b is null || b.IsRemote != (UseRemote || direct) || b.Root != root || _lastDirect != direct)
+                if (b is null || b.IsRemote != (UseRemote || agentOk) || b.Root != root || _lastDirect != agentOk)
                 {
-                    b = new CachedFileBackend(direct ? new AgentFileBackend(root)
+                    b = new CachedFileBackend(agentOk ? new AgentFileBackend(root)
                         : UseRemote ? new RemoteFileBackend(new UtslSshTransport(), root) : new LocalFileBackend(root));
-                    _fileBackend = b; _lastDirect = direct;
+                    _fileBackend = b; _lastDirect = agentOk;
                 }
                 return b;
             }
