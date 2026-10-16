@@ -11,10 +11,15 @@ namespace UTSLManager.Plugins;
 public static class ManagerApi
 {
     /// <summary>宿主当前实现的插件 API 版本。</summary>
-    public const int Version = 4;
+    public const int Version = 5;
 
     /// <summary>v1：Name / Icon / Description / Author / OnLoad / CreateView。</summary>
     public const int V1 = 1;
+
+    /// <summary>v5：新增**文件页贡献点** —— 插件（额外实现 <see cref="IFileActionPlugin"/>）可以往内置
+    /// 「文件管理」页注册**右键动作**与**工具栏按钮**，拿到当前条目的相对路径/目录/大小
+    /// （<see cref="FileActionContext"/>，纯数据）。此前只有地图页有这类上下文挂载点。</summary>
+    public const int V5 = 5;
 
     /// <summary>v3：新增统一远端文件 API（FilesRoot/ListFiles/ReadText/WriteText/CreateDirectory/Rename/Delete/Upload/Download，
     /// 远端模式走 SSH、本机模式直接读盘）、RunCommand（远端命令，exec 权限）、HttpGet/HttpPost（net 权限）、InvalidateFileCache。</summary>

@@ -2324,6 +2324,7 @@ public partial class MainWindow : Window
         //   地图页的插件注入必须挂在这里 —— 否则"停用→启用"或"重载"之后控件就再也回不来了
         //   （卸载时 BeforeUnload 会把它们清掉）。
         ContributeMapToPlugins();
+        ContributeFileActionsToPlugins();   // ★ v5：文件页插件动作（同样必须在这里重挂）
 
         if (pluginHost is null || ExtPanel is null) { return; }
         ExtPanel.Children.Clear();
@@ -3917,6 +3918,8 @@ public partial class MainWindow : Window
                     tb.PointerPressed += (_, _) => OpenInEditor(full, sizeBytes, name);
                 }
                 rowWrap.Child = sp;
+                // ★ v5：插件注册的右键动作（没有插件注册时返回 null，原有交互完全不变）
+                try { var pm = BuildFilePluginMenu(full, isDir, sizeBytes); if (pm is not null) { rowWrap.ContextMenu = pm; } } catch { }
                 PluginList.Children.Add(rowWrap);
             }
 
@@ -4219,6 +4222,73 @@ public partial class MainWindow : Window
         MapViewChanged = null;      // ★ 一并清掉插件的事件订阅，否则旧插件实例被永久引用（热重载 ALC 收不回）
     }
 
+    // ===== v5：文件页插件动作 =====
+    // 与地图页同一套模式：宿主持有界面、插件只"挂"动作。
+    // ★ 重载时必须整体清空：这些委托指向插件实例，留着会把插件的可回收 ALC 永久钉住（热重载收不回）。
+    private sealed record FileActionReg(string Text, Func<FileActionContext, Task> OnClick, Func<FileActionContext, bool>? Visible);
+    private readonly List<FileActionReg> fileActionRegs = [];
+
+    private void ClearFilePluginActions() => fileActionRegs.Clear();
+
+    /// <summary>插件加载完成后调用：让实现 IFileActionPlugin 的插件往文件页注册右键动作。</summary>
+    private void ContributeFileActionsToPlugins()
+    {
+        ClearFilePluginActions();
+        if (pluginHost is null) { return; }
+        var host = new FileActionHost(this);
+        foreach (LoadedPlugin p in pluginHost.Plugins.ToArray())
+        {
+            if (p.Instance is not IFileActionPlugin fp) { continue; }
+            try
+            {
+                fp.ContributeFileActions(host);
+                Term($"[插件] {p.Name} 已向文件页注册右键动作", "#7C7C82");
+            }
+            catch (Exception ex)
+            {
+                Term($"[插件] {p.Name} 文件页注册失败: {ex.Message}", "#FF7B72");
+            }
+        }
+    }
+
+    private sealed class FileActionHost(MainWindow w) : IFileActionHost
+    {
+        public Action RegisterFileAction(string text, Func<FileActionContext, Task> onClick, Func<FileActionContext, bool>? visible = null)
+        {
+            var reg = new FileActionReg(text, onClick, visible);
+            w.fileActionRegs.Add(reg);
+            return () => w.fileActionRegs.Remove(reg);
+        }
+    }
+
+    /// <summary>为文件页某一行构造插件右键菜单；没有任何插件动作时返回 null（原有交互完全不变）。</summary>
+    private ContextMenu? BuildFilePluginMenu(string full, bool isDir, long size)
+    {
+        if (fileActionRegs.Count == 0) { return null; }
+        string rel = "";
+        string dirRel = "";
+        try
+        {
+            rel = Path.GetRelativePath(FsRoot, full).Replace('\\', '/');
+            dirRel = Path.GetDirectoryName(rel)?.Replace('\\', '/') ?? "";
+        }
+        catch { }
+        var info = new FileActionContext(rel, full, dirRel, isDir, Math.Max(0, size));
+        var items = new List<MenuItem>();
+        foreach (var reg in fileActionRegs.ToArray())
+        {
+            try { if (reg.Visible is not null && !reg.Visible(info)) { continue; } } catch { continue; }
+            var mi = new MenuItem { Header = reg.Text };
+            mi.Click += async (_, _) =>
+            {
+                try { await reg.OnClick(info); }
+                catch (Exception ex) { ERR($"[插件动作] {reg.Text} 失败: {ex.Message}"); }
+            };
+            items.Add(mi);
+        }
+        if (items.Count == 0) { return null; }
+        return new ContextMenu { ItemsSource = items };
+    }
     /// <summary>插件加载完成后调用：让实现 IMapContributionPlugin 的插件往地图页注入界面。</summary>
     private void ContributeMapToPlugins()
     {

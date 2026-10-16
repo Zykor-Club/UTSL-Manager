@@ -14,7 +14,7 @@ namespace ApiProbe;
 /// 报告写到插件数据目录（ctx.DataDir）下的 utsl-api-probe.txt，同时显示在插件视图并写进管理器终端。
 /// ★ 不用 %TEMP%：这台机器上它不可写（实测 UnauthorizedAccessException），原来注释与界面文案都在骗人。
 /// </summary>
-public sealed class ApiProbePlugin : IManagerPlugin
+public sealed class ApiProbePlugin : IManagerPlugin, IFileActionPlugin   // v5：同时演示文件页右键动作
 {
     public string Name => "API 探针";
     public string Icon => "🧪";
@@ -22,10 +22,31 @@ public sealed class ApiProbePlugin : IManagerPlugin
     public string Author => "Zykor-Club";
     public int RequiredApiVersion => ManagerApi.V3;   // v3 门禁：宿主低于 v3 会跳过加载
 
-    private TextBlock? _view;   // （原来还有个只写不读的 _ctx 字段，已删）
+    private TextBlock? _view;
+    private IManagerContext? _ctx;   // v5：右键动作回调里要用（OnLoad 时保存）
+
+    /// <summary>
+    /// v5 文件页贡献点：往文件列表注册右键动作。
+    /// 这里刻意注册两个 —— 一个任何条目都能点，一个只在 .json 文件上出现（验证 visible 过滤真的生效）。
+    /// </summary>
+    public void ContributeFileActions(IFileActionHost host)
+    {
+        host.RegisterFileAction("🧪 API 自检：显示此条目信息", async info =>
+        {
+            await Task.Yield();
+            _ctx?.Log($"[API 探针] 右键动作回调成功 → 相对路径={info.RelativePath}；所在目录={info.Directory}；类型={(info.IsDirectory ? "目录" : "文件")}；大小={info.Size} 字节；宿主实际路径={info.FullPath}");
+        });
+
+        host.RegisterFileAction("🧪 API 自检：只对 .json 文件可见", async info =>
+        {
+            await Task.Yield();
+            _ctx?.Log($"[API 探针] visible 过滤生效（本条只该出现在 .json 上）→ {info.RelativePath}");
+        }, visible: info => !info.IsDirectory && info.RelativePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase));
+    }
 
     public void OnLoad(IManagerContext ctx)
     {
+        _ctx = ctx;
         ctx.RunBackground(async ct =>
         {
             await Task.Delay(1500, ct);   // 等管理器界面与隧道就绪

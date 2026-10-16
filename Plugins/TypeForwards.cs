@@ -24,3 +24,6 @@ using System.Runtime.CompilerServices;
 [assembly: TypeForwardedTo(typeof(UTSLManager.Plugins.MapSelection))]
 [assembly: TypeForwardedTo(typeof(UTSLManager.Plugins.IMapContributionHost))]
 [assembly: TypeForwardedTo(typeof(UTSLManager.Plugins.IMapContributionPlugin))]
+[assembly: TypeForwardedTo(typeof(UTSLManager.Plugins.FileActionContext))]
+[assembly: TypeForwardedTo(typeof(UTSLManager.Plugins.IFileActionHost))]
+[assembly: TypeForwardedTo(typeof(UTSLManager.Plugins.IFileActionPlugin))]
