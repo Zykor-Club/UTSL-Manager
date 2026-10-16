@@ -3111,7 +3111,10 @@ public partial class MainWindow : Window
             // 读 EdgeStitch 配置
             JsonObject? edge = null;
             string edgePath = Path.Combine(FsRoot, "config", "EdgeStitch", "EdgeStitch.json");
-            if (await Task.Run(() => FsExists(edgePath))) { edge = ParseJsonObj(await Task.Run(() => FsReadText(edgePath))); }
+            // ★ 冷缓存时这里原本是 FsExists + FsReadText = 两次 ssh 往返（链路 RTT 约 1.7 秒 → 约 3.4 秒），
+            //   而那正是用户反馈"点世界链要等 5~6 秒"的主要来源（再叠加世界列表等）。
+            //   实测契约：FsReadText 读不到返回空串，ParseJsonObj("") 返回 null → 与"文件不存在"完全同一条路，
+            //   所以这次 FsExists 是多余的。缓存命中时两者都是 0 往返；冷缓存时首屏延迟直接砍半。
             ChainHost.Children.Clear();   // 数据到手才重建
             var chain = edge?["世界链"]?.AsArray().Select(x => x?.ToString() ?? "").Where(x => x.Length > 0).ToList() ?? [];
             if (chain.Count == 0) { chain = [.. rows.Where(r => r.Name != "全部世界").Select(r => r.Name)]; }
