@@ -1216,6 +1216,16 @@ public partial class MainWindow : Window
         if (!HasSsh) { status.Text = "云端 agent：需要先填好 SSH 主机与密钥（远端模式）"; return; }
         string exe = Path.Combine(AppContext.BaseDirectory, "agent", "UTSLDaemon.exe");
         if (!File.Exists(exe)) { status.Text = "云端 agent：找不到安装包 " + exe + " —— 先执行 scripts/publish-agent.ps1"; return; }
+        // ★ 顺序很重要：运行中的 UTSLDaemon.exe 在 Windows 上被锁，直接覆盖会 scp: dest open ... Failure。
+        //   先停旧进程（并结束计划任务），再推，最后重建任务 —— 实测验证过的顺序。
+        status.Text = "云端 agent：正在停止旧进程（否则 exe 被占用，覆盖会失败）…";
+        string stopped = await Task.Run(() => SshRun(
+            "$ErrorActionPreference='SilentlyContinue'; " +
+            "schtasks /End /TN UTSLAgent 2>&1 | Out-Null; " +
+            "Get-Process UTSLDaemon -ErrorAction SilentlyContinue | Stop-Process -Force; " +
+            "Start-Sleep -Seconds 2; " +
+            "'alive=' + ((Get-Process UTSLDaemon -ErrorAction SilentlyContinue) | Measure-Object).Count", 60000));
+        status.Text = "云端 agent：旧进程已停（" + stopped.Trim() + "），正在上传…";
         double mb = new FileInfo(exe).Length / 1048576.0;
         status.Text = $"云端 agent：正在上传 {mb:F1} MB …";
         bool ok = await Task.Run(() =>
@@ -1237,7 +1247,7 @@ public partial class MainWindow : Window
             }
             catch (Exception ex) { lastAgentScpErr = ex.Message; return false; }
         });
-        if (!ok) { status.Text = "云端 agent：上传失败 ✗ " + lastAgentScpErr; return; }
+        if (!ok) { status.Text = "云端 agent：上传失败 ✗ " + lastAgentScpErr + "（若提示 dest open … Failure，说明 exe 仍被占用）"; return; }
 
         status.Text = "云端 agent：正在建计划任务（先停旧的）…";
         string res = await Task.Run(() => SshRun(
