@@ -20,6 +20,7 @@ DateTime _prevAt = DateTime.UtcNow;
 long _prevSent = -1, _prevRecv = -1;
 int BoundPort = 0;
 long metricsCalls = 0;
+long pingCalls = 0;
 long lastPingLog = 0;        // 实际绑定到的端口（--selftest 用 0 让系统分配，避免撞上别的程序）
 
 async Task ServeAsync(int listenPort = -1)
@@ -78,6 +79,7 @@ async Task HandleAsync(TcpClient client)
             switch (path)
             {
                 case "/ping":
+                    Interlocked.Increment(ref pingCalls);
                     if (Environment.TickCount64 - lastPingLog > 60000) { lastPingLog = Environment.TickCount64; Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] /ping（每分钟最多记一次）"); }
                     await WriteJsonAsync(ns, new { ok = true, name = "UTSLDaemon", version = "0.1.0", root, logs = logsDir, logsExists = Directory.Exists(logsDir), at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
                     return;
@@ -172,6 +174,7 @@ object CollectMetrics()
         },
         net = new { sentBytes = sent, recvBytes = recv, prevSentBytes = _prevSent, prevRecvBytes = _prevRecv },
         calls = metricsCalls,
+        pings = pingCalls,
         uptimeSec = (long)(Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency),
         log = NewestLogInfo(),
     };

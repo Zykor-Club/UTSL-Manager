@@ -1163,7 +1163,10 @@ public partial class MainWindow : Window
     private static long AgentSentBytes = -1, AgentRecvBytes = -1, AgentMetricsAtMs;
     private static long lastAgentSent = -1, lastAgentRecv = -1;
     private static readonly HttpClient AgentHttp = new() { Timeout = TimeSpan.FromSeconds(4) };   // ★ 复用，别每轮 new
-    private static string AgentBaseUsed = "";   // ★ 当前流连的是哪个 base（本机 7879 / 远端 17879）；切换时必须重连
+    private static TextBlock? AgentStatusText;
+    private static string lastAgentScpErr = "";
+    private static string AgentBaseUsed = "";
+    private static string AgentProbeErr = "";   // 最近一次探测失败原因（排查用，显示在连接设置页）   // ★ 当前流连的是哪个 base（本机 7879 / 远端 17879）；切换时必须重连
     private static CancellationTokenSource? agentLogCts;
     private static string AgentBase => UseRemote ? "http://127.0.0.1:" + AgentLocalPort : "http://127.0.0.1:" + AgentRemotePort;
 
@@ -1178,7 +1181,76 @@ public partial class MainWindow : Window
             AgentProbedMs = Environment.TickCount64;
             return ok;
         }
-        catch { AgentProbedMs = Environment.TickCount64; return false; }
+        catch (Exception ex) { AgentProbedMs = Environment.TickCount64; AgentProbeErr = ex.GetType().Name + ": " + ex.Message; return false; }
+    }
+
+    /// <summary>刷新连接设置页的 agent 状态灯（UI 线程调用）。</summary>
+    private static void RefreshAgentStatus()
+    {
+        if (AgentStatusText is null) { return; }
+        if (!HasSsh)
+        {
+            AgentStatusText.Text = "云端 agent：本机模式不需要（本机直接读日志/进程）";
+            AgentStatusText.Foreground = new SolidColorBrush(Color.Parse("#7C7C82"));
+            return;
+        }
+        if (AgentAlive)
+        {
+            long fresh = AgentMetricsAtMs > 0 ? Environment.TickCount64 - AgentMetricsAtMs : -1;
+            AgentStatusText.Text = "云端 agent：已连接 ✓" + (fresh >= 0 ? $"（指标 {fresh / 1000.0:F1} 秒前更新）" : "") + " · 日志走推送、指标 2 秒级";
+            AgentStatusText.Foreground = new SolidColorBrush(Color.Parse("#32D74B"));
+        }
+        else
+        {
+            AgentStatusText.Text = "云端 agent：未安装 / 未运行 ✗ " + AgentProbeErr + " —— 点右边按钮推送安装（日志与指标自动回落到 SSH 路径）";
+            AgentStatusText.Foreground = new SolidColorBrush(Color.Parse("#FEBC2E"));
+        }
+    }
+
+    /// <summary>
+    /// 把随管理器分发的 agent（agent/UTSLDaemon.exe，自包含单文件）推到远端并建计划任务常驻。
+    /// 推的是【自包含】版：实测远端只有 .NET 9、没有 .NET 10，框架依赖版起不来。
+    /// </summary>
+    private async Task InstallAgentAsync(TextBlock status)
+    {
+        if (!HasSsh) { status.Text = "云端 agent：需要先填好 SSH 主机与密钥（远端模式）"; return; }
+        string exe = Path.Combine(AppContext.BaseDirectory, "agent", "UTSLDaemon.exe");
+        if (!File.Exists(exe)) { status.Text = "云端 agent：找不到安装包 " + exe + " —— 先执行 scripts/publish-agent.ps1"; return; }
+        double mb = new FileInfo(exe).Length / 1048576.0;
+        status.Text = $"云端 agent：正在上传 {mb:F1} MB …";
+        bool ok = await Task.Run(() =>
+        {
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("scp") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+                psi.ArgumentList.Add("-i"); psi.ArgumentList.Add(SshKey);
+                psi.ArgumentList.Add("-P"); psi.ArgumentList.Add(SshPort.ToString());
+                psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("BatchMode=yes");
+                psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("StrictHostKeyChecking=accept-new");
+                psi.ArgumentList.Add(exe);
+                psi.ArgumentList.Add(SshUser + "@" + SshHost + ":C:/utsl-agent/UTSLDaemon.exe");
+                using var proc = System.Diagnostics.Process.Start(psi)!;
+                string err = proc.StandardError.ReadToEnd();
+                proc.WaitForExit(240000);
+                if (proc.ExitCode != 0) { lastAgentScpErr = err.Trim(); return false; }
+                return true;
+            }
+            catch (Exception ex) { lastAgentScpErr = ex.Message; return false; }
+        });
+        if (!ok) { status.Text = "云端 agent：上传失败 ✗ " + lastAgentScpErr; return; }
+
+        status.Text = "云端 agent：正在建计划任务（先停旧的）…";
+        string res = await Task.Run(() => SshRun(
+            "$ErrorActionPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
+            "New-Item -ItemType Directory -Force -Path C:\\utsl-agent | Out-Null; " +
+            "schtasks /End /TN UTSLAgent 2>&1 | Out-Null; " +
+            "Get-Process UTSLDaemon -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2; " +
+            "$tr='\"C:\\utsl-agent\\UTSLDaemon.exe\" --root " + RemoteDir + " --port 7879'; " +
+            "schtasks /Create /TN UTSLAgent /TR $tr /SC ONSTART /RU SYSTEM /RL HIGHEST /F | Out-Null; " +
+            "schtasks /Run /TN UTSLAgent | Out-Null; Start-Sleep -Seconds 3; " +
+            "'proc=' + ((Get-Process UTSLDaemon -ErrorAction SilentlyContinue) | Measure-Object).Count", 120000));
+        await TickAgentAsync();                       // 立刻重探，别等 20 秒定时器
+        status.Text = "云端 agent：安装完成 · " + res.Trim().Replace("\n", " ") + (AgentAlive ? " · 已连接 ✓" : " · 但探测未通过 ✗");
     }
 
     /// <summary>每 2 秒拉一次 agent /metrics（远端没装 MetricsChannel 插件时，这是唯一的实时来源）。</summary>
@@ -1246,12 +1318,12 @@ public partial class MainWindow : Window
         // ★ 不仅要看"活不活"，还要看"连的是不是同一个 base"：
         //   启动时配置可能还没加载完（UseRemote=false → 探到本机 agent），之后切到远端 →
         //   若只看 AgentAlive 就会一直 true == true 直接 return，流永远留在本机（实测踩到）。
-        if (ok == AgentAlive && want == AgentBaseUsed) { return; }
+        if (ok == AgentAlive && want == AgentBaseUsed) { Dispatcher.UIThread.Post(RefreshAgentStatus); return; }
         AgentAlive = ok;
         AgentBaseUsed = want;
         if (ok)
         {
-            Dispatcher.UIThread.Post(() => ERR("✓ 已连接 UTSLDaemon（云端 agent）—— 控制台日志改为推送，实测延迟约 150 ms；不再轮询日志文件"));
+            Dispatcher.UIThread.Post(() => { ERR("✓ 已连接 UTSLDaemon（云端 agent）—— 控制台日志改为推送，实测延迟约 150 ms；不再轮询日志文件"); RefreshAgentStatus(); });
             agentLogCts?.Cancel();
             agentLogCts = new CancellationTokenSource();
             lastAgentSent = -1; lastAgentRecv = -1; AgentMetricsAtMs = 0;    // ★ 新连接：速率基准重置
@@ -1260,7 +1332,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            Dispatcher.UIThread.Post(() => ERR("agent 不可用，日志回落到 ssh 轮询路径"));
+            Dispatcher.UIThread.Post(() => { ERR("agent 不可用，日志回落到 ssh 轮询路径"); RefreshAgentStatus(); });
             agentLogCts?.Cancel();
             agentLogCts = null;
         }
@@ -2675,6 +2747,18 @@ public partial class MainWindow : Window
             row.Children.Add(btnTest); row.Children.Add(btnSave); row.Children.Add(btnAuto);
             var row2 = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, Margin = new Avalonia.Thickness(0, 6, 0, 0) };
             row2.Children.Add(btnTestSsh); row2.Children.Add(btnTunnel);
+              // ===== 云端 agent（UTSLDaemon）：状态灯 + 一键安装/更新 =====
+              var btnAgent = new Button { Content = "安装 / 更新云端 agent", FontSize = 11.5, Padding = new Avalonia.Thickness(14, 5), CornerRadius = new Avalonia.CornerRadius(9) };
+              var agentStatus = new TextBlock
+              {
+                  Text = "云端 agent：—", FontSize = 10.5, TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                  Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")), Margin = new Avalonia.Thickness(0, 6, 0, 0),
+              };
+              AgentStatusText = agentStatus;
+              btnAgent.Click += async (_, _) => await InstallAgentAsync(agentStatus);
+              row2.Children.Add(btnAgent);
+              ConnHostPanel.Children.Add(agentStatus);
+              RefreshAgentStatus();
             ConnHostPanel.Children.Add(row2);
             ConnHostPanel.Children.Add(row);
             ConnInfo.Text = $"当前: http://{ConnHost}:{ConnPort} · 配置存于 {ConnFile}";
