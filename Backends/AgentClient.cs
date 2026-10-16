@@ -134,12 +134,16 @@ public static class AgentClient
         catch (Exception ex) { progress?.Invoke("下载失败: " + ex.Message); return false; }
     }
 
+    /// <summary>拉起服务端时是否用 headless 世界控制台（见 LocalProcessBackend.HeadlessConsole 的说明）。</summary>
+    public static volatile bool HeadlessConsole = true;
+
     /// <summary>让 agent 拉起服务端（无窗口 + 重定向 stdout，输出可用 /stream/stdout 抓）。</summary>
     public static string StartServer()
     {
         try
         {
-            using var req = new HttpRequestMessage(HttpMethod.Post, Base + "/proc/start");
+            string url = Base + "/proc/start" + (HeadlessConsole ? "?console=headless" : "");
+            using var req = new HttpRequestMessage(HttpMethod.Post, url);
             if (Token.Length > 0) { req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", Token); }
             string s = LocalHttp.Send(req).Content.ReadAsStringAsync().GetAwaiter().GetResult();
             return s.Contains("\"ok\":true") ? ("agent 已拉起服务端 ✓ " + s) : ("agent 启动失败 ✗ " + s);

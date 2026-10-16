@@ -32,16 +32,26 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
     //   导致 TShock 静态构造失败 → 20 个插件里 16 个初始化失败（VirtualWorldCore / 尘歌壶全挂）。
     //   所以"管理器接管控制台（MCSManager 那种喂 stdin）"这条路在当前 UTSL 上不可用，
     //   除非先让 UTSL 容忍没有控制台缓冲的环境。详见开发文档 §32。
+    /// <summary>
+    /// 启动服务端时是否用 headless 世界控制台（不开每世界窗口）。由管理器按设置赋值。
+    /// ★ 依据 UTSL 源码 ServerContext.DefaultConsoleMode：模式在【进程启动时】读环境变量 UTSL_CONSOLE_MODE
+    ///   决定（PerWorld=默认，每个世界一个 ConsoleClient 窗口）。而且每个世界的会话驱动是 while(true) 循环，
+    ///   手动关掉窗口它还会 RestartClient() 再拉起来 —— 唯一可靠的办法就是启动时 headless。
+    /// </summary>
+    public static bool HeadlessConsole = true;
+
     public Task<ProcessResult> StartAsync()
     {
         if (IsAlive()) { return Task.FromResult(new ProcessResult(true, "")); }
         try
         {
-            Process.Start(new ProcessStartInfo(exePath)
+            var psi = new ProcessStartInfo(exePath)
             {
                 WorkingDirectory = workDir,
                 Arguments = "-joinserver first -logmode txt",
-            });
+            };
+            if (HeadlessConsole) { psi.Environment["UTSL_CONSOLE_MODE"] = "headless"; }
+            Process.Start(psi);
             return Task.FromResult(new ProcessResult(true, ""));
         }
         catch (Exception ex) { return Task.FromResult(new ProcessResult(false, "启动失败: " + ex.Message)); }

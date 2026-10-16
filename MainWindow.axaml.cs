@@ -86,10 +86,12 @@ public partial class MainWindow : Window
                 LocalDir = pj["localDir"]?.ToString() ?? LocalDir;
                 WatchdogEnabled = pj["watchdog"] is not { } wv || wv.GetValue<bool>();
                 ForceLocal = pj["forceLocal"]?.GetValue<bool>() ?? false;      // 「本机管理」开关（默认：填了 SSH 就走远端）
+                ShowWorldConsoles = pj["worldConsoles"]?.GetValue<bool>() ?? false;   // 世界控制台窗口：默认不显示（headless）
                 // （模板功能开关已移到扩展插件自己的配置里，宿主不再关心）
             }
             // ★ 全部字段读完后再迁移明文 token（避免把未加载的字段写成空）
             if (migratePlainToken) { migratePlainToken = false; SaveConn(); }
+            ApplyConsoleMode();
         }
         catch { }
     }
@@ -110,7 +112,7 @@ public partial class MainWindow : Window
                     ["direct"] = DirectMode, ["directHost"] = DirectHost, ["directPort"] = DirectPort,
                     ["directTokenEnc"] = DpapiProtect(DirectToken)
                 },
-                ["paths"] = new JsonObject { ["localDir"] = LocalDir, ["watchdog"] = WatchdogEnabled, ["forceLocal"] = ForceLocal }
+                ["paths"] = new JsonObject { ["localDir"] = LocalDir, ["watchdog"] = WatchdogEnabled, ["forceLocal"] = ForceLocal, ["worldConsoles"] = ShowWorldConsoles }
             };
             // ★ 安全（对标 MCSManager CVE-2025-50691 的教训）：token 用 DPAPI 加密后再落盘，
             //   同机其它用户即使读到 connection.json 也解不开；只有加密不可用时才退回明文。
@@ -125,6 +127,21 @@ public partial class MainWindow : Window
     // 原来全是硬编码的 C:\Users\星梦\... ✗ —— 别人装了用不了。改为可在 connection.json 的 paths.localDir 里改，
     // 默认取「当前用户桌面\utsl-deploy」。
     private static string LocalDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "utsl-deploy");
+    /// <summary>把"是否显示世界控制台窗口"同步给两条启动路径（本机直启 / agent 拉起）。</summary>
+    private static void ApplyConsoleMode()
+    {
+        bool headless = !ShowWorldConsoles;
+        LocalProcessBackend.HeadlessConsole = headless;
+        AgentClient.HeadlessConsole = headless;
+    }
+
+    /// <summary>
+    /// 是否显示"世界控制台窗口"（UTSL 的 PerWorld 模式）。默认【不显示】（headless）——
+    /// 那个窗口每个世界一个、且关掉会被会话驱动重新拉起，而管理器本身已能看日志与发指令。
+    /// 注意：模式在服务端【进程启动时】决定，改这个开关要重启服务端才生效。
+    /// </summary>
+    private static bool ShowWorldConsoles;
+
     /// <summary>掉线自启（看门狗）：服务端进程消失时自动拉起。默认开，可关并记住。</summary>
     private static bool WatchdogEnabled = true;
     private static string Logs => Path.Combine(LocalDir, "logs");
@@ -2801,6 +2818,25 @@ public partial class MainWindow : Window
             bodyRemote.Children.Add(Hint("远端需先放好 UTSL 运行目录并安装「控制台启动器 C:\\utsl-launch」（见 utsl-remote\\README.md）。"));
 
             // ---- 底部（两模式共用）----
+            // ---- 世界控制台窗口（两种模式共用；模式在服务端进程启动时决定，改了要重启服务端）----
+            var chkWorldConsoles = new CheckBox
+            {
+                Content = "显示「世界控制台」窗口（每个已加载世界一个；默认关闭）",
+                IsChecked = ShowWorldConsoles, FontSize = 11.5, Margin = new Avalonia.Thickness(0, 12, 0, 0),
+            };
+            chkWorldConsoles.IsCheckedChanged += (_, _) =>
+            {
+                ShowWorldConsoles = chkWorldConsoles.IsChecked == true;
+                ApplyConsoleMode();
+                SaveConn();
+                ERR(ShowWorldConsoles
+                    ? "已设为显示世界控制台窗口 —— 重启服务端后生效（UTSL 的 PerWorld 模式）"
+                    : "已设为不显示世界控制台窗口（headless）—— 重启服务端后生效");
+            };
+            ConnHostPanel.Children.Add(chkWorldConsoles);
+            ConnHostPanel.Children.Add(Hint("说明：UTSL 的窗口模式在服务端【进程启动时】由环境变量 UTSL_CONSOLE_MODE 决定；" +
+                "而且每个世界的控制台会话是循环守护的 —— 你手动关掉窗口它会被重新拉起。想让它们彻底不出现，就在这里关掉并重启服务端。"));
+
             var btnTest = Btn("测试连接");
             var btnSave = Btn("保存并应用");
             Row(ConnHostPanel, btnTest, btnSave);

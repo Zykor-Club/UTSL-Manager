@@ -144,7 +144,7 @@ async Task HandleAsync(TcpClient client)
                     await WriteJsonAsync(ns, CollectMetrics());
                     return;
                 case "/proc/start":
-                    await ProcStartAsync(ns);
+                    await ProcStartAsync(ns, QueryValue(pathRaw, "console"));
                     return;
                 case "/proc/stop":
                     await ProcStopAsync(ns);
@@ -390,7 +390,7 @@ object ProcStatus()
     return new { ok = true, running, pid, privateMB = privMB, exe = ServerExePath(), ring = stdoutRing.Count };
 }
 
-async Task ProcStartAsync(NetworkStream ns)
+async Task ProcStartAsync(NetworkStream ns, string consoleMode = "")
 {
     try
     {
@@ -413,6 +413,12 @@ async Task ProcStartAsync(NetworkStream ns)
         psi.ArgumentList.Add("first");
         psi.ArgumentList.Add("-logmode");
         psi.ArgumentList.Add("txt");
+        // ★ headless：不开每世界控制台窗口（否则多世界宿主给每个有会话的世界开一个 ConsoleClient，
+        //   且其驱动是 while(true) 循环 —— 手动关窗口还会被重新拉起）。
+        if (string.Equals(consoleMode, "headless", StringComparison.OrdinalIgnoreCase))
+        {
+            psi.Environment["UTSL_CONSOLE_MODE"] = "headless";
+        }
         var p = Process.Start(psi);
         if (p is null) { await WriteJsonAsync(ns, new { ok = false, error = "启动失败" }); return; }
         serverProc = p;
