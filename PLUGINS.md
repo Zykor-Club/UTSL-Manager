@@ -539,7 +539,8 @@ ctx:every(60, function() ctx:log("每分钟一次：" .. ctx:now().str) end)   -
 | `ctx:register_panel(title, fn)` + `ctx:on_action(fn)` | **声明式界面**（见下） |
 
 **界面是"声明式"的**：Lua **不能**返回 Avalonia 控件（那会踩类型身份分裂），而是返回一份控件描述，宿主渲染**真控件**。
-控件种类：`text`（只读文本）/ `text_input` / `number` / `checkbox`（真复选框）/ `select`（下拉）/ **`time`（时间选择器，值 `"HH:mm"`）** /
+控件种类：`text`（只读文本）/ `text_input` / `number` / `checkbox`（真复选框）/ `select`（下拉）/ **`time`（★ 钟表盘：外环分钟=橙、内环小时=蓝，**拖动指针**或直接点盘面即可，右侧带「现在」按钮；值 `"HH:mm"`）** /
+`time_simple`（传统两个下拉的时间选择器）/ 
 **`date`（日历选日期，值 `"yyyy-MM-dd"`）** / **`list`（可点选列表，点击回调 `action="select"` 且 `values.clicked` 是被点项的 `key`）** /
 `buttons` / `section`（分节标题）/ `hint`（灰色说明行）/ `divider`。整体按"**标签左、控件右**"的两列布局渲染。
 

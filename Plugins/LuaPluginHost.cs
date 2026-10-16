@@ -403,7 +403,8 @@ internal sealed class LuaScriptBridge
             "checkbox" => MakeCheckbox(row, id),
             "select" => MakeSelect(row, id),
             "number" => MakeNumber(row, id),
-            "time" => MakeTime(row, id),
+            "time" => MakeClock(row, id),
+            "time_simple" => MakeTime(row, id),
             "date" => MakeDate(row, id),
             "text" => new TextBlock { Text = Str(row, "value"), FontSize = 12, Foreground = new SolidColorBrush(Color.Parse("#C7D2E0")), TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center },
             _ => MakeText(row, id),
@@ -459,7 +460,23 @@ internal sealed class LuaScriptBridge
         return nb;
     }
 
-    /// <summary>时间选择器（24 小时制）—— 值格式 "HH:mm"。</summary>
+    /// <summary>
+    /// 钟表式时间选择（用户要求"拖动分针调时间"）+ 一个「现在」按钮。
+    /// 值格式仍是 "HH:mm"，所以 Lua 侧完全不用改；想用回下拉版就写 kind="time_simple"。
+    /// </summary>
+    private Control MakeClock(Table row, string id)
+    {
+        var clock = new UTSLManager.Controls.ClockTimePicker { Value = Str(row, "value") };
+        var now = new Button { Content = "现在", FontSize = 11, Padding = new Thickness(9, 3, 9, 3), CornerRadius = new CornerRadius(7), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
+        now.Click += (_, _) => { var n = DateTime.Now; clock.Value = $"{n.Hour:00}:{n.Minute:00}"; };
+        var sp = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0 };
+        sp.Children.Add(clock);
+        sp.Children.Add(new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children = { now } });
+        if (id.Length > 0) { _getters[id] = () => clock.Value; }
+        return sp;
+    }
+
+    /// <summary>时间选择器（24 小时制，两个下拉那种）—— 值格式 "HH:mm"。</summary>
     private Control MakeTime(Table row, string id)
     {
         var tp = new TimePicker { FontSize = 12, ClockIdentifier = "24HourClock", HorizontalAlignment = HorizontalAlignment.Left };
