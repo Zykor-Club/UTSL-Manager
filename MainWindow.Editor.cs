@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Input;
@@ -9,6 +11,8 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using AvaloniaEdit;
 using AvaloniaEdit.Highlighting;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace UTSLManager;
 
@@ -97,7 +101,10 @@ public partial class MainWindow
         {
             if (editorSaving) { return; }
             if (!editorDirty) { editorDirty = true; UpdateEditorStatus(); }
+            ScheduleLint();          // ★ P3：输入停下 400ms 后跑一次语法校验（性能：不能每敲一下就解析）
         };
+        // ★ P3：波浪线渲染器（AvaloniaEdit 的 IBackgroundRenderer，画在文本层之上）
+        try { ed.TextArea.TextView.BackgroundRenderers.Add(new SquiggleRenderer(this)); } catch { }
         // Ctrl+S 保存；Ctrl+F 打开查找面板
         ed.AddHandler(KeyDownEvent, async (s, e) =>
         {
@@ -177,6 +184,7 @@ public partial class MainWindow
             ShowView("edit");
             ed.Focus();
             UpdateEditorStatus();
+            ScheduleLint();          // 打开即校验一次
         }
         catch (Exception ex) { ERR("打开编辑器失败: " + ex.Message); }
     }
@@ -197,7 +205,8 @@ public partial class MainWindow
         if (editor is null) { return; }
         string dirty = editorDirty ? "● 未保存" : "已保存";
         string enc = (editorHadBom ? "UTF-8 BOM" : "UTF-8") + " · " + (editorEol == "\r\n" ? "CRLF" : "LF");
-        EditStatus.Text = $"{dirty} · {enc} · {editor.Document.LineCount} 行 · {editor.Text.Length} 字符 · {(editorSaving ? "保存中…" : (editorDirty ? "Ctrl+S 保存" : "—"))}";
+        string lint = EditStatusLintText.Length > 0 ? " · " + EditStatusLintText : "";
+        EditStatus.Text = $"{dirty} · {enc} · {editor.Document.LineCount} 行 · {editor.Text.Length} 字符 · {(editorSaving ? "保存中…" : (editorDirty ? "Ctrl+S 保存" : "—"))}{lint}";
         if (BtnEditSave is not null) { BtnEditSave.IsEnabled = !editorSaving; }
         if (EditTitle is not null && editorName.Length > 0) { EditTitle.Text = (editorDirty ? "● " : "") + "编辑 · " + editorName; }
     }
@@ -317,4 +326,222 @@ public partial class MainWindow
         }
     }
     private bool editorOverwriteArmed;
+
+    // ===================== P3：语法校验 + 红色波浪线 =====================
+    //  设计取舍：
+    //   · **防抖 400ms + 后台线程 + 可取消**：绝不每敲一下都解析（性能优先）；结果过期（又敲过键）就直接丢弃。
+    //   · JSON 用 System.Text.Json（异常自带"行 + 该行字节列"，实测 flsae 会报 Expected the literal 'false'）；
+    //     C# 用工程里本来就有的 Roslyn（只取 Error 级；语义错如"未定义变量"抓不到 —— 那需要完整编译引用）。
+    //   · 波浪线用 AvaloniaEdit 的经典做法：IBackgroundRenderer + BackgroundGeometryBuilder 画折线。
+
+    private sealed class EditorDiag
+    {
+        public int Offset; public int Length; public string Message = ""; public int Line; public int Col;
+    }
+
+    private readonly List<EditorDiag> editorDiags = [];
+    private readonly object editorDiagLock = new();
+    private DispatcherTimer? lintTimer;
+    private CancellationTokenSource? lintCts;
+    private int editorLintVersion;
+    private string EditStatusLintText = "";
+
+    /// <summary>输入停止 400ms 后校验一次。</summary>
+    private void ScheduleLint()
+    {
+        if (editor is null) { return; }
+        if (lintTimer is null)
+        {
+            lintTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+            lintTimer.Tick += async (_, _) => { lintTimer!.Stop(); await LintNowAsync(); };
+        }
+        lintTimer.Stop();
+        lintTimer.Start();
+    }
+
+    /// <summary>跑一次校验：后台解析，UI 只收结果。</summary>
+    private async Task LintNowAsync()
+    {
+        var ed = editor;
+        if (ed is null) { return; }
+        string text = ed.Text ?? "";
+        string name = editorName;
+        int myVersion = ++editorLintVersion;
+        try { lintCts?.Cancel(); } catch { }
+        var cts = new CancellationTokenSource();
+        lintCts = cts;
+
+        List<EditorDiag> diags;
+        try { diags = await Task.Run(() => Lint(text, name), cts.Token); }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex) { EditStatusLintText = "校验异常: " + ex.Message; UpdateEditorStatus(); return; }
+        if (myVersion != editorLintVersion || editor is null) { return; }   // 结果已过期
+
+        lock (editorDiagLock)
+        {
+            editorDiags.Clear();
+            editorDiags.AddRange(diags);
+        }
+        try { editor.TextArea.TextView.Redraw(); } catch { }
+
+        EditStatusLintText = diags.Count == 0
+            ? "✓ 语法检查通过"
+            : $"⚠ {diags.Count} 个语法问题 · 第一个：{Compact(diags[0].Message)}（行 {diags[0].Line}，列 {diags[0].Col}）";
+        UpdateEditorStatus();
+    }
+
+    /// <summary>状态栏里只放一行：把多行消息压平。</summary>
+    private static string Compact(string s)
+    {
+        string t = s.Replace("\r", " ").Replace("\n", " ");
+        while (t.Contains("  ")) { t = t.Replace("  ", " "); }
+        return t.Length > 120 ? t[..120] + "…" : t;
+    }
+
+    /// <summary>真正的解析（后台线程调用，不碰 UI）。</summary>
+    private static List<EditorDiag> Lint(string text, string name)
+    {
+        var list = new List<EditorDiag>();
+        if (text.Length == 0) { return list; }
+        string ext = ExtOf(name);
+        try
+        {
+            if (ext == ".json")
+            {
+                try { using var _ = JsonDocument.Parse(text); }
+                catch (JsonException jx)
+                {
+                    // ★ 实测（探针）：System.Text.Json 给的位置常在记号的中间/末尾 ——
+                    //   例如 {"a": flsae} 它把 f 当成字面量开头、报错位置落在 f 之后的 l 上，
+                    //   直接用它画波浪线会只标出 [lsae]。所以以该位置为中心向两侧扩成完整记号。
+                    int off = OffsetFromLineByte(text, jx.LineNumber, jx.BytePositionInLine);
+                    if (off < 0 || off > text.Length) { off = 0; }
+                    (int ts, int tl) = TokenSpanAt(text, off);
+                    (int tl2, int tc2) = LineColAt(text, ts);
+                    list.Add(new EditorDiag
+                    {
+                        Offset = ts,
+                        Length = tl,
+                        Message = jx.Message,
+                        Line = tl2,
+                        Col = tc2,
+                    });
+                }
+            }
+            else if (ext == ".cs" || ext == ".csx")
+            {
+                var tree = CSharpSyntaxTree.ParseText(text);
+                foreach (var d in tree.GetDiagnostics())
+                {
+                    if (d.Severity != DiagnosticSeverity.Error) { continue; }
+                    var span = d.Location.SourceSpan;
+                    var pos = d.Location.GetLineSpan().StartLinePosition;
+                    list.Add(new EditorDiag
+                    {
+                        Offset = span.Start,
+                        Length = Math.Max(1, span.Length),
+                        Message = d.GetMessage(),
+                        Line = pos.Line + 1,
+                        Col = pos.Character + 1,
+                    });
+                    if (list.Count >= 50) { break; }
+                }
+            }
+        }
+        catch { }
+        return list;
+    }
+
+    /// <summary>JsonException 给的是"行(0基) + 该行字节列(0基)"，换算成文档字符偏移。</summary>
+    private static int OffsetFromLineByte(string text, long? line, long? byteCol)
+    {
+        long l = line ?? 0, b = byteCol ?? 0;
+        int idx = 0; long cur = 0;
+        while (cur < l && idx < text.Length) { if (text[idx] == '\n') { cur++; } idx++; }
+        long bytes = 0;
+        while (idx < text.Length && bytes < b)
+        {
+            if (text[idx] == '\n' || text[idx] == '\r') { break; }
+            bytes += Encoding.UTF8.GetByteCount(text[idx].ToString());
+            idx++;
+        }
+        return idx;
+    }
+
+    /// <summary>把偏移扩成一个完整"记号"的区间（向两侧扩；找不到记号就取 1 个字符）。</summary>
+    private static (int Start, int Length) TokenSpanAt(string text, int off)
+    {
+        static bool IsTok(char c) => char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '.' || c == '$' || c == '"';
+        int i = Math.Clamp(off, 0, text.Length);
+        int s = i, e = i;
+        while (s > 0 && IsTok(text[s - 1])) { s--; }
+        while (e < text.Length && IsTok(text[e])) { e++; }
+        if (e <= s)
+        {
+            s = Math.Clamp(i, 0, Math.Max(0, text.Length - 1));
+            e = Math.Min(text.Length, s + 1);
+        }
+        return (s, Math.Max(1, e - s));
+    }
+
+    /// <summary>偏移 → 1 基的行/列（状态栏显示、以及扩边后重算起点用）。</summary>
+    private static (int Line, int Col) LineColAt(string text, int off)
+    {
+        int line = 1, col = 1;
+        for (int i = 0; i < off && i < text.Length; i++)
+        {
+            if (text[i] == '\n') { line++; col = 1; } else { col++; }
+        }
+        return (line, col);
+    }
+
+    /// <summary>红色波浪线渲染器（AvaloniaEdit 的 IBackgroundRenderer）。</summary>
+    private sealed class SquiggleRenderer(MainWindow owner) : AvaloniaEdit.Rendering.IBackgroundRenderer
+    {
+        public AvaloniaEdit.Rendering.KnownLayer Layer => AvaloniaEdit.Rendering.KnownLayer.Selection;
+
+        public void Draw(AvaloniaEdit.Rendering.TextView textView, DrawingContext dc)
+        {
+            if (!textView.VisualLinesValid) { return; }
+            List<EditorDiag> snapshot;
+            lock (owner.editorDiagLock)
+            {
+                if (owner.editorDiags.Count == 0) { return; }
+                snapshot = [.. owner.editorDiags];
+            }
+            var pen = new Pen(new SolidColorBrush(Color.Parse("#FF4D4F")), 1.4);
+            foreach (var line in textView.VisualLines)
+            {
+                int lineStart = line.FirstDocumentLine.Offset;
+                int lineEnd = line.LastDocumentLine.EndOffset;
+                foreach (var d in snapshot)
+                {
+                    int s = Math.Max(d.Offset, lineStart);
+                    int e = Math.Min(d.Offset + Math.Max(1, d.Length), lineEnd);
+                    if (e <= s) { continue; }
+                    var seg = new AvaloniaEdit.Document.TextSegment { StartOffset = s, Length = e - s };
+                    foreach (var r in AvaloniaEdit.Rendering.BackgroundGeometryBuilder.GetRectsForSegment(textView, seg))
+                    {
+                        double y = r.Bottom - 1.0;
+                        var geo = new StreamGeometry();
+                        using (var g = geo.Open())
+                        {
+                            bool up = true;
+                            double x = r.Left;
+                            g.BeginFigure(new Point(x, y), false);
+                            while (x < r.Right)
+                            {
+                                x = Math.Min(x + 2.0, r.Right);
+                                up = !up;
+                                g.LineTo(new Point(x, y + (up ? 0 : -2.5)));
+                            }
+                            g.EndFigure(false);
+                        }
+                        dc.DrawGeometry(null, pen, geo);
+                    }
+                }
+            }
+        }
+    }
 }
+
