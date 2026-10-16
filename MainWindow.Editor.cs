@@ -68,25 +68,56 @@ public partial class MainWindow
                 // 且返回可空 Color —— 取不到就跳过这一类。
                 Color col;
                 try { Color? c0 = sh.GetColor(null!); if (c0 is null) { continue; } col = c0.Value; } catch { continue; }
-                Color tuned = TuneColor(col);
+                Color tuned = TuneColor(c.Name ?? "", col);
                 if (tuned != col) { c.Foreground = new SimpleHighlightingBrush(tuned); }
             }
         }
         catch { }   // 定义若被冻结（不可改）就保持原样，不影响功能
     }
 
-    private static Color TuneColor(Color c)
+    /// <summary>
+    /// 按【颜色名】给一套专为深色藏青背景挑的柔和配色（内置 xshd 的命名是各语言通用的，所以一张表就够）。
+    /// ★ 为什么不用"按比例提亮"：实测把 FieldName 的 #8B008B 提成了 #FF00FF 品红 —— 亮度是够了，但更刺眼，
+    ///   这正是用户说的"颜色太重"。表里没有的名字再走下面的兜底（降饱和 + 保底亮度）。
+    /// </summary>
+    private static readonly Dictionary<string, string> EditorPalette = new(StringComparer.OrdinalIgnoreCase)
     {
+        ["Punctuation"] = "#8FA3BF",   // 标点/分隔符：纯黑换成蓝灰（用户明确反馈"标点看不见"）
+        ["Comment"] = "#6B7A99",       // 注释要"退后"
+        ["String"] = "#9ECE6A", ["Char"] = "#9ECE6A", ["XmlString"] = "#9ECE6A",
+        ["NumberLiteral"] = "#FF9E64",
+        ["Null"] = "#BB9AF7", ["Keyword"] = "#BB9AF7", ["Preprocessor"] = "#BB9AF7",
+        ["Loop"] = "#BB9AF7", ["Jump"] = "#BB9AF7", ["Check"] = "#BB9AF7", ["Goto"] = "#BB9AF7",
+        ["Label"] = "#BB9AF7", ["Cast"] = "#BB9AF7", ["ExternAlias"] = "#BB9AF7", ["Using"] = "#BB9AF7",
+        ["Namespace"] = "#7DCFFF", ["Asm"] = "#7DCFFF",
+        ["FieldName"] = "#7DCFFF", ["Property"] = "#7DCFFF", ["XmlTag"] = "#7DCFFF",
+        ["MethodCall"] = "#7AA2F7", ["MethodDeclaration"] = "#7AA2F7",
+        ["TypeReference"] = "#2AC3DE", ["TypeDefinition"] = "#2AC3DE",
+        ["InterfaceReference"] = "#2AC3DE", ["InterfaceDefinition"] = "#2AC3DE",
+        ["EnumReference"] = "#2AC3DE", ["EnumDefinition"] = "#2AC3DE",
+        ["DelegateReference"] = "#2AC3DE", ["DelegateDefinition"] = "#2AC3DE",
+        ["Struct"] = "#2AC3DE", ["Interface"] = "#2AC3DE", ["Enum"] = "#2AC3DE", ["Delegate"] = "#2AC3DE",
+        ["Exception"] = "#F7768E", ["Attribute"] = "#E0AF68",
+        ["LocalVariable"] = "#C0CAF5", ["Parameter"] = "#C0CAF5", ["XmlAttribute"] = "#BB9AF7",
+    };
+
+    private static Color TuneColor(string name, Color c)
+    {
+        if (EditorPalette.TryGetValue(name, out string? hex)) { return Color.Parse(hex); }
         int mx = Math.Max(c.R, Math.Max(c.G, c.B));
         int mn = Math.Min(c.R, Math.Min(c.G, c.B));
-        // ① 近灰色 → 标点类，直接给蓝灰
-        if (mx - mn <= 26) { return Color.FromArgb(c.A, 0x8F, 0xA3, 0xBF); }
-        // ② 太暗 → 提亮到可读区间
+        // 兜底①：近灰色（多半还是标点/分隔符）→ 蓝灰
+        if (mx - mn <= 26) { return Color.Parse("#8FA3BF"); }
         double lum = (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B) / 255.0;
-        if (lum >= 0.55) { return c; }
-        double k = 0.55 / Math.Max(0.06, lum);
+        if (lum >= 0.5) { return c; }
+        // 兜底②：先降饱和（向该色自身的灰度靠 30%），再整体提亮到 0.5 附近 —— 避免"提亮 = 变霓虹"
+        byte grey = (byte)((c.R + c.G + c.B) / 3);
+        byte Mix(byte v) => (byte)Math.Clamp(v * 0.7 + grey * 0.3, 0, 255);
+        byte r = Mix(c.R), g = Mix(c.G), b = Mix(c.B);
+        double lum2 = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
+        double k = 0.5 / Math.Max(0.06, lum2);
         byte Up(byte v) => (byte)Math.Clamp(v * k, 0, 255);
-        return Color.FromArgb(c.A, Up(c.R), Up(c.G), Up(c.B));
+        return Color.FromArgb(c.A, Up(r), Up(g), Up(b));
     }
 
     /// <summary>可编辑的文本扩展名（其余一律当二进制/不支持，点击时给出明确原因）。</summary>
