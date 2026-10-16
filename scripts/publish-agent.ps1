@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   把 UTSLDaemon 发布成【自包含单文件】并放进管理器的发布目录（agent/UTSLDaemon.exe）。
 
