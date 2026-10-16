@@ -1331,6 +1331,7 @@ public partial class MainWindow : Window
         if (ok == AgentAlive && want == AgentBaseUsed) { Dispatcher.UIThread.Post(RefreshAgentStatus); return; }
         AgentAlive = ok;
         AgentBaseUsed = want;
+        AgentClient.Alive = ok; AgentClient.Base = want;   // ★ 同步给文件通道（P1：上传/下载走 agent，带真实进度）
         if (ok)
         {
             Dispatcher.UIThread.Post(() => { ERR("✓ 已连接 UTSLDaemon（云端 agent）—— 控制台日志改为推送，实测延迟约 150 ms；不再轮询日志文件"); RefreshAgentStatus(); });

@@ -62,17 +62,23 @@ async Task HandleAsync(TcpClient client)
         try
         {
             client.NoDelay = true;
+            // ★ 缓冲区要够大：这条链路 RTT 约 200 ms，默认窗口下吞吐会被卡在 ~0.3 MB/s（实测）
+            try { client.ReceiveBufferSize = 4 * 1024 * 1024; client.SendBufferSize = 4 * 1024 * 1024; } catch { }
             NetworkStream ns = client.GetStream();
             string? requestLine = await ReadLineAsync(ns);
             if (requestLine is null) { return; }
-            // 吃掉请求头直到空行
+            // 吃掉请求头直到空行（顺手留存，/files/put 需要 Content-Length）
+            var reqHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             while (true)
             {
                 string? h = await ReadLineAsync(ns);
                 if (h is null || h.Length == 0) { break; }
+                int c = h.IndexOf(':');
+                if (c > 0) { reqHeaders[h[..c].Trim()] = h[(c + 1)..].Trim(); }
             }
             string[] parts = requestLine.Split(' ');
-            string path = parts.Length >= 2 ? parts[1] : "/";
+            string pathRaw = parts.Length >= 2 ? parts[1] : "/";
+            string path = pathRaw;
             int q = path.IndexOf('?');
             if (q >= 0) { path = path[..q]; }
 
@@ -86,6 +92,18 @@ async Task HandleAsync(TcpClient client)
                 case "/metrics":
                     Interlocked.Increment(ref metricsCalls);
                     await WriteJsonAsync(ns, CollectMetrics());
+                    return;
+                case "/files/get":
+                    await SendFileAsync(ns, QueryValue(pathRaw, "path"));
+                    return;
+                case "/files/put":
+                    await ReceiveFileAsync(ns, QueryValue(pathRaw, "path"), reqHeaders);
+                    return;
+                case "/files/list":
+                    await ListFilesAsync(ns, QueryValue(pathRaw, "path"));
+                    return;
+                case "/files/delete":
+                    await DeletePathAsync(ns, QueryValue(pathRaw, "path"));
                     return;
                 case "/stream/log":
                     Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] 有客户端订阅日志流");
@@ -273,6 +291,97 @@ async Task EmitLineAsync(NetworkStream ns, List<byte> raw)
     await WriteAsync(ns, "data: " + line + "\n\n");
 }
 
+// ================= 文件接口（P1：走 agent 取代 scp，进度=真实字节数）=================
+//   ★ 安全：所有路径都解析到 root 之内，越界一律拒绝。agent 只绑回环，但仍不该能读写任意路径。
+string QueryValue(string rawPath, string name)
+{
+    int q = rawPath.IndexOf('?');
+    if (q < 0) { return ""; }
+    foreach (string kv in rawPath[(q + 1)..].Split('&'))
+    {
+        int e = kv.IndexOf('=');
+        if (e <= 0) { continue; }
+        if (!kv[..e].Equals(name, StringComparison.OrdinalIgnoreCase)) { continue; }
+        return Uri.UnescapeDataString(kv[(e + 1)..].Replace('+', ' '));
+    }
+    return "";
+}
+
+bool ResolveSafe(string rel, out string full, out string err)
+{
+    full = ""; err = "";
+    try
+    {
+        string r = Path.GetFullPath(root);
+        string f = Path.GetFullPath(Path.Combine(r, rel ?? ""));
+        if (!f.StartsWith(r, StringComparison.OrdinalIgnoreCase)) { err = "路径越界（只允许部署根之内）"; return false; }
+        full = f; return true;
+    }
+    catch (Exception ex) { err = ex.Message; return false; }
+}
+
+async Task SendFileAsync(NetworkStream ns, string rel)
+{
+    if (!ResolveSafe(rel, out string full, out string err)) { await WriteJsonAsync(ns, new { ok = false, error = err }); return; }
+    if (!File.Exists(full)) { await WriteJsonAsync(ns, new { ok = false, error = "文件不存在" }); return; }
+    var fi = new FileInfo(full);
+    await WriteRawAsync(ns, "HTTP/1.1 200 OK", "application/octet-stream", [], keepAlive: true, extraHeaders: "", contentLength: fi.Length);
+    using (var fs = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+    {
+        await fs.CopyToAsync(ns, 1 << 20);
+    }
+    await ns.FlushAsync();
+}
+
+async Task ReceiveFileAsync(NetworkStream ns, string rel, Dictionary<string, string> headers)
+{
+    if (!ResolveSafe(rel, out string full, out string err)) { await WriteJsonAsync(ns, new { ok = false, error = err }); return; }
+    long len = headers.TryGetValue("Content-Length", out string? cl) && long.TryParse(cl, out long l) ? l : -1;
+    if (len < 0) { await WriteJsonAsync(ns, new { ok = false, error = "缺少 Content-Length" }); return; }
+    Directory.CreateDirectory(Path.GetDirectoryName(full) ?? root);
+    long got = 0;
+    byte[] buf = new byte[1 << 20];
+    using (var fs = new FileStream(full, FileMode.Create, FileAccess.Write, FileShare.None))
+    {
+        while (got < len)
+        {
+            int n = await ns.ReadAsync(buf, 0, (int)Math.Min(buf.Length, len - got));
+            if (n <= 0) { break; }
+            fs.Write(buf, 0, n);
+            got += n;
+        }
+        fs.Flush();
+    }
+    await WriteJsonAsync(ns, new { ok = got == len, bytes = got, path = rel });
+}
+
+async Task ListFilesAsync(NetworkStream ns, string rel)
+{
+    if (!ResolveSafe(rel, out string full, out string err)) { await WriteJsonAsync(ns, new { ok = false, error = err }); return; }
+    if (!Directory.Exists(full)) { await WriteJsonAsync(ns, new { ok = false, error = "目录不存在" }); return; }
+    var list = new List<object>();
+    foreach (string d in Directory.EnumerateDirectories(full)) { list.Add(new { name = Path.GetFileName(d), dir = true, size = 0L, mtime = 0L }); }
+    foreach (string f in Directory.EnumerateFiles(full))
+    {
+        var fi = new FileInfo(f);
+        list.Add(new { name = fi.Name, dir = false, size = fi.Length, mtime = new DateTimeOffset(fi.LastWriteTimeUtc).ToUnixTimeMilliseconds() });
+    }
+    await WriteJsonAsync(ns, new { ok = true, path = rel, entries = list });
+}
+
+async Task DeletePathAsync(NetworkStream ns, string rel)
+{
+    if (!ResolveSafe(rel, out string full, out string err)) { await WriteJsonAsync(ns, new { ok = false, error = err }); return; }
+    try
+    {
+        if (Directory.Exists(full)) { Directory.Delete(full, true); }
+        else if (File.Exists(full)) { File.Delete(full); }
+        else { await WriteJsonAsync(ns, new { ok = false, error = "不存在" }); return; }
+        await WriteJsonAsync(ns, new { ok = true });
+    }
+    catch (Exception ex) { await WriteJsonAsync(ns, new { ok = false, error = ex.Message }); }
+}
+
 // ================= 极简 HTTP 工具 =================
 async Task<string?> ReadLineAsync(NetworkStream ns)
 {
@@ -294,13 +403,13 @@ async Task WriteJsonAsync(NetworkStream ns, object payload)
     await WriteRawAsync(ns, "HTTP/1.1 200 OK", "application/json; charset=utf-8", body, keepAlive: false);
 }
 
-async Task WriteRawAsync(NetworkStream ns, string status, string contentType, byte[] body, bool keepAlive, string extraHeaders = "")
+async Task WriteRawAsync(NetworkStream ns, string status, string contentType, byte[] body, bool keepAlive, string extraHeaders = "", long contentLength = -1)
 {
     string head = status + "\r\n"
         + "Content-Type: " + contentType + "\r\n"
         + "Connection: " + (keepAlive ? "keep-alive" : "close") + "\r\n"
         + extraHeaders
-        + (keepAlive ? "" : "Content-Length: " + body.Length + "\r\n")
+        + (keepAlive ? (contentLength >= 0 ? "Content-Length: " + contentLength + "\r\n" : "") : "Content-Length: " + body.Length + "\r\n")
         + "\r\n";
     await WriteAsync(ns, head);
     if (body.Length > 0) { await ns.WriteAsync(body); await ns.FlushAsync(); }

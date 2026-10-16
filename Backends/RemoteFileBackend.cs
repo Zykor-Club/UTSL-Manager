@@ -79,8 +79,25 @@ public sealed class RemoteFileBackend(ISshTransport ssh, string root) : IFileBac
     }
 
     public bool Upload(string localPath, string targetPath, Action<string>? progress = null, Func<bool>? cancelled = null)
-        => ssh.CopyToRemote(localPath, targetPath, progress, cancelled);
+    {
+        // ★ agent 在线就走它：进度是真实字节数（scp 不回传进度，只能估计）；失败自动回落 scp
+        if (AgentClient.Alive)
+        {
+            progress?.Invoke("经 agent 上传（真实进度）…");
+            if (AgentClient.Upload(localPath, targetPath, progress, cancelled)) { return true; }
+            progress?.Invoke("agent 上传未成功，回落到 scp…");
+        }
+        return ssh.CopyToRemote(localPath, targetPath, progress, cancelled);
+    }
 
     public bool Download(string sourcePath, string localPath, long knownTotal = 0, Action<string>? progress = null, Func<bool>? cancelled = null)
-        => ssh.CopyFromRemote(sourcePath, localPath, knownTotal, progress, cancelled);
+    {
+        if (AgentClient.Alive)
+        {
+            progress?.Invoke("经 agent 下载（真实进度）…");
+            if (AgentClient.Download(sourcePath, localPath, knownTotal, progress, cancelled)) { return true; }
+            progress?.Invoke("agent 下载未成功，回落到 scp…");
+        }
+        return ssh.CopyFromRemote(sourcePath, localPath, knownTotal, progress, cancelled);
+    }
 }
