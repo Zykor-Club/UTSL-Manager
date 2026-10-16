@@ -1537,7 +1537,8 @@ public partial class MainWindow : Window
     private string lastLogErr = "";
     private string lastRemoteLine = "";
 
-    /// <summary>远端日志：每 3 秒取最新日志尾部，按上一行做去重后只追加新行。</summary>
+    /// <summary>远端日志：每 12 秒（见 RefreshRemoteLog 的节流）取最新日志尾部，按上一行去重后只追加新行。
+    /// ★ agent 在线时这条路径根本不跑（日志走 SSE 推送）；没有 agent 时才回落到这里。</summary>
     private bool logFetching;
 
     private async void RefreshRemoteLog()
@@ -1554,7 +1555,7 @@ public partial class MainWindow : Window
               "if ($f) { '###' + $f.Name; Get-Content $f.FullName -Tail 40 }")); }
         catch (Exception ex)
         {
-            // 自检修复：读日志失败时别每 3 秒刷一条（SSH 配错会刷屏），同一错误最多每分钟提示一次
+            // 自检修复：读日志失败时别每次轮询都刷一条（SSH 配错会刷屏），同一错误最多每分钟提示一次
             long nowMs2 = Environment.TickCount64;
             if (nowMs2 - lastLogErrMs > 60000 || ex.Message != lastLogErr)
             {
@@ -2411,13 +2412,40 @@ public partial class MainWindow : Window
     };
 
     // ===== 插件指标（P1-10）=====
+    // ★ 这个方法由 2 秒指标定时器调用（见 SampleMetrics）。原来每次 Children.Clear() + 重建所有
+    //   Grid/TextBlock，即使名称集合与数值都没变 → 持续 GC 压力与可视树失效，插件多时拖窗口发顿。
+    //   现在：名称集合同样就只改 Text，变了才重建。
+    private readonly List<(TextBlock Val, string Name)> pluginRowCache = [];
+
     private void RefreshPluginMetrics()
     {
         if (PluginMetricsHost is null) { return; }
-        PluginMetricsHost.Children.Clear();
         IReadOnlyList<PluginMetricInfo> metrics = pluginHost is null ? Array.Empty<PluginMetricInfo>() : pluginHost.Metrics;
         IReadOnlyList<PluginStatusInfo> statuses = pluginHost is null ? Array.Empty<PluginStatusInfo>() : pluginHost.Statuses;
         if (PluginMetricsHeader is not null) { PluginMetricsHeader.IsVisible = metrics.Count > 0 || statuses.Count > 0; }
+
+        bool same = pluginRowCache.Count == metrics.Count + statuses.Count;
+        for (int i = 0; i < metrics.Count && same; i++) { if (pluginRowCache[i].Name != metrics[i].Name) { same = false; } }
+        for (int i = 0; i < statuses.Count && same; i++) { if (pluginRowCache[metrics.Count + i].Name != statuses[i].Name) { same = false; } }
+        if (same && pluginRowCache.Count > 0)
+        {
+            for (int i = 0; i < metrics.Count; i++)
+            {
+                var m = metrics[i];
+                try { m.Value = m.Provider(); } catch { m.Value = null; }
+                pluginRowCache[i].Val.Text = m.Display;
+            }
+            for (int i = 0; i < statuses.Count; i++)
+            {
+                var s = statuses[i];
+                try { s.Value = s.Provider(); } catch { s.Value = "—"; }
+                pluginRowCache[metrics.Count + i].Val.Text = s.Value;
+            }
+            return;
+        }
+
+        pluginRowCache.Clear();
+        PluginMetricsHost.Children.Clear();
         foreach (var m in metrics)
         {
             try { m.Value = m.Provider(); } catch { m.Value = null; }
@@ -2430,6 +2458,7 @@ public partial class MainWindow : Window
             row.Children.Add(val);
             Avalonia.Controls.ToolTip.SetTip(row, "来自插件 " + m.PluginName);
             PluginMetricsHost.Children.Add(row);
+            pluginRowCache.Add((val, m.Name));
         }
 
         // 文本状态项（P2-15：状态胶囊）
@@ -2445,6 +2474,7 @@ public partial class MainWindow : Window
             row.Children.Add(val);
             Avalonia.Controls.ToolTip.SetTip(row, "来自插件 " + s.PluginName);
             PluginMetricsHost.Children.Add(row);
+            pluginRowCache.Add((val, s.Name));
         }
     }
 
@@ -2890,9 +2920,16 @@ public partial class MainWindow : Window
     }
 
     /// <summary>按 UTSL 的真实几何估算总图格：源宽 = n×片宽 − 3×重叠×(n−1)，高度按宽度推导。</summary>
+    private long safetySeq;      // 防抖 + 丢弃过期结果
+
     private async void UpdateSafety()
     {
         if (safeText is null || safeBar is null) { return; }
+        // ★ 防抖：这个方法挂在每个 size 文本框的 TextChanged 与步进按钮上，用户每敲一键都会进；
+        //   300ms 内的连续调用只让最后一次真正干活（其余直接返回），并保证乱序完成时旧结果不覆盖新结果。
+        long my = ++safetySeq;
+        try { await Task.Delay(300); } catch { }
+        if (my != safetySeq) { return; }
         int n = Math.Max(1, worldData.Count);
         int width = 4200;
         if (worldData.Count > 0 && int.TryParse(worldData[0]["size"]?.ToString(), out int w0) && w0 > 0) { width = w0; }
@@ -2910,6 +2947,7 @@ public partial class MainWindow : Window
             }
         }
         catch { }
+        if (my != safetySeq) { return; }        // IO 期间又有新输入 → 放弃本次，避免旧结果覆盖新结果
         // ★ 修 bug#7：原式在 int32 下溢出（n=3,width=999999999 → 负值）；改用 long 并钳制
         long srcW64 = (long)n * width - 3L * overlap * (n - 1);
         if (srcW64 <= 0) { srcW64 = (long)n * width; }
@@ -3228,8 +3266,11 @@ public partial class MainWindow : Window
             // ★ 速度优化（实测链路仅约 1.3MB/s，减少重复传输最有效）：远端大小与本机一致就跳过
             if (UseRemote)
             {
-                long remoteSize = FsList(Path.GetDirectoryName(full) ?? fileCwd)
-                    .Where(e => !e.IsDir && e.Name == Path.GetFileName(full)).Select(e => e.Size).FirstOrDefault();
+                // ★ 这里在 UI 线程上（DownloadFileAsync 的第一个 await 之前）→ 远端会先冻一趟 ssh。丢到后台。
+                string dirOfFull = Path.GetDirectoryName(full) ?? fileCwd;
+                string nameOfFull = Path.GetFileName(full);
+                long remoteSize = await Task.Run(() => FsList(dirOfFull)
+                    .Where(e => !e.IsDir && e.Name == nameOfFull).Select(e => e.Size).FirstOrDefault());
                 knownSize = remoteSize;
                 if (File.Exists(local) && remoteSize > 0 && remoteSize == new FileInfo(local).Length)
                 {
@@ -3373,16 +3414,20 @@ public partial class MainWindow : Window
                             bool want = cb.IsChecked == true;
                             string on = System.IO.Path.Combine(fileCwd, baseName);
                             string off = on + ".disabled";
+                            // ★ 原来两次 FsExists 都在 UI 线程上（远端每趟 ssh 约 1.6 秒 → 一次点击冻约 3.2 秒）。
+                            //   一次性丢到后台查，判断与改名都不再占用 UI 线程。
+                            bool offExists = false, onExists = false;
+                            await Task.Run(() => { offExists = FsExists(off); onExists = FsExists(on); });
                             if (want)
                             {
-                                if (!FsExists(off)) { ERR("找不到 " + System.IO.Path.GetFileName(off)); }
-                                else if (FsExists(on)) { ERR($"已存在 {System.IO.Path.GetFileName(on)}，为免覆盖已中止（请先手工处理）"); }
+                                if (!offExists) { ERR("找不到 " + System.IO.Path.GetFileName(off)); }
+                                else if (onExists) { ERR($"已存在 {System.IO.Path.GetFileName(on)}，为免覆盖已中止（请先手工处理）"); }
                                 else { await Task.Run(() => FsRename(off, on)); ERR($"已启用 {baseName} —— 重启服务端后生效"); }
                             }
                             else
                             {
-                                if (!FsExists(on)) { ERR("找不到 " + System.IO.Path.GetFileName(on)); }
-                                else if (FsExists(off)) { ERR($"已存在 {System.IO.Path.GetFileName(off)}，为免覆盖已中止（请先手工处理）"); }
+                                if (!onExists) { ERR("找不到 " + System.IO.Path.GetFileName(on)); }
+                                else if (offExists) { ERR($"已存在 {System.IO.Path.GetFileName(off)}，为免覆盖已中止（请先手工处理）"); }
                                 else { await Task.Run(() => FsRename(on, off)); ERR($"已停用 {baseName} —— 重启服务端后生效"); }
                             }
                             ShowFiles();
@@ -3754,7 +3799,7 @@ public partial class MainWindow : Window
 
     /// <summary>取区块模板文件（只从服务端 _utpl_templates 取）；远端模式拉一份本地副本。
     /// ★ 暂存不用 %TEMP%（这台机器上它不可写），放程序目录下。</summary>
-    private static string? ResolveTemplateFile(string name)
+    private static async Task<string?> ResolveTemplateFileAsync(string name)
     {
         string full = Path.Combine(WorldsDir, "_utpl_templates", name + UtplCodec.Extension);
         if (!Env.IsRemote) { return File.Exists(full) ? full : null; }
@@ -3762,7 +3807,18 @@ public partial class MainWindow : Window
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(staging)!);
-            if (FileBackend.Download(full, staging) || File.Exists(staging)) { return staging; }
+            // ★ 与 ResolveWorldFile 一样先比大小：原来是 Download(...) || File.Exists(...)，|| 左侧总会先执行
+            //   → 每次预览都重下一遍（远端一趟 ssh + 传输）。现在大小一致就直接用本地副本。
+            long remote = 0;
+            try
+            {
+                string d = Path.GetDirectoryName(full) ?? WorldsDir;
+                string n = Path.GetFileName(full);
+                remote = await Task.Run(() => FsList(d).Where(e => !e.IsDir && e.Name == n).Select(e => e.Size).FirstOrDefault());
+            }
+            catch { }
+            if (File.Exists(staging) && remote > 0 && new FileInfo(staging).Length == remote) { return staging; }
+            if (await Task.Run(() => FileBackend.Download(full, staging)) || File.Exists(staging)) { return staging; }
         }
         catch { }
         return null;
@@ -4186,7 +4242,7 @@ public partial class MainWindow : Window
     private async Task<bool> ShowTemplateAsync(string name)
     {
         if (MapImage is null || MapInfo is null) { return false; }
-        string? path = ResolveTemplateFile(name);
+        string? path = await ResolveTemplateFileAsync(name);
         if (path is null) { SetStatusLine("找不到模板 " + name); return false; }
 
         ShowMapProgress(true, 0);
