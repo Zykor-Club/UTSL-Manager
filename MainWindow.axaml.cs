@@ -139,7 +139,16 @@ public partial class MainWindow : Window
     //   只认「connection.json 里配了 ssh 段 + 没被开关强制成本机」。
     private static bool UseRemote => HasSsh && !ForceLocal;
 
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
+    /// <summary>
+    /// 管理器自己的 HTTP 客户端：对 127.0.0.1（本机 REST / SSH 隧道 / agent）【必须禁用代理】。
+    /// ★ 实测踩过：这台机器开着系统代理（WinINET ProxyEnable=1），HttpClient 默认会走代理，
+    ///   于是发往 127.0.0.1:7879 的 agent 请求被交给代理 → 失败/404（curl 同样表现，实测确认）。
+    ///   管理工具的本地/隧道调用一律不该经过代理。
+    /// </summary>
+    private static HttpClient NewLocalHttp(TimeSpan timeout)
+        => new(new SocketsHttpHandler { UseProxy = false, ConnectTimeout = TimeSpan.FromSeconds(5) }) { Timeout = timeout };
+
+    private static readonly HttpClient Http = NewLocalHttp(TimeSpan.FromSeconds(15));
     private readonly ObservableCollection<WorldRow> rows = [];
     private readonly ObservableCollection<TermLine> term = [];
     private string lastLogFile = "";
@@ -1173,7 +1182,8 @@ public partial class MainWindow : Window
     private static double AgentCpuPct, AgentPrivateMB;
     private static long AgentSentBytes = -1, AgentRecvBytes = -1, AgentMetricsAtMs;
     private static long lastAgentSent = -1, lastAgentRecv = -1;
-    private static readonly HttpClient AgentHttp = new() { Timeout = TimeSpan.FromSeconds(4) };   // ★ 复用，别每轮 new
+    // ★ 复用，别每轮 new；且禁用代理（本地/隧道地址走代理必失败）
+    private static readonly HttpClient AgentHttp = NewLocalHttp(TimeSpan.FromSeconds(4));
     private static TextBlock? AgentStatusText;
     private static string lastAgentScpErr = "";
     private static string AgentBaseUsed = "";
@@ -1186,7 +1196,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            using var http = NewLocalHttp(TimeSpan.FromSeconds(2));
             string s = await http.GetStringAsync(baseUrl + "/ping");
             bool ok = s.Contains("\"ok\":true");
             return ok;
@@ -1306,7 +1316,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+                using var http = NewLocalHttp(Timeout.InfiniteTimeSpan);
                 using var resp = await http.GetAsync(AgentBaseUsed + "/stream/stdout", HttpCompletionOption.ResponseHeadersRead, ct);
                 resp.EnsureSuccessStatusCode();
                 using var stream = await resp.Content.ReadAsStreamAsync(ct);
@@ -1340,7 +1350,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+                using var http = NewLocalHttp(Timeout.InfiniteTimeSpan);
                 using var resp = await http.GetAsync(AgentBaseUsed + "/stream/log", HttpCompletionOption.ResponseHeadersRead, ct);
                 resp.EnsureSuccessStatusCode();
                 using var stream = await resp.Content.ReadAsStreamAsync(ct);

@@ -14,6 +14,19 @@ public static class AgentClient
     public static volatile bool Alive;
     public static volatile string Base = "";
 
+    /// <summary>直连模式下的访问令牌（空 = 未启用认证）。</summary>
+    public static volatile string Token = "";
+
+    /// <summary>
+    /// 本类用的 HTTP 客户端：**禁用代理** + 复用。
+    /// 连的都是 127.0.0.1（本机 agent 或 SSH 隧道本地端），走代理必然失败；
+    /// 若用户机器设了 HTTP_PROXY 环境变量，.NET 默认会走代理（loopback 不一定被自动绕过），故显式关闭。
+    /// </summary>
+    public static readonly HttpClient LocalHttp = new(new SocketsHttpHandler { UseProxy = false, ConnectTimeout = TimeSpan.FromSeconds(5) })
+    {
+        Timeout = TimeSpan.FromSeconds(60),
+    };
+
     static TcpClient Connect(out NetworkStream ns)
     {
         var uri = new Uri(Base);
@@ -27,6 +40,9 @@ public static class AgentClient
 
     static string HostHeader => new Uri(Base).Authority;
 
+    /// <summary>认证头：直连模式配了令牌时带上（回环/隧道模式为空）。</summary>
+    static string AuthHeader => Token.Length > 0 ? "Authorization: Bearer " + Token + "\r\n" : "";
+
     /// <summary>上传：PUT 原始字节。progress 收到「已发送/总量 · 速度 · 剩余」。</summary>
     public static bool Upload(string localPath, string remoteRel, Action<string>? progress, Func<bool>? cancelled)
     {
@@ -36,6 +52,7 @@ public static class AgentClient
             using var t = Connect(out var ns);
             string head = "PUT /files/put?path=" + Uri.EscapeDataString(remoteRel) + " HTTP/1.1\r\n"
                         + "Host: " + HostHeader + "\r\n"
+                        + AuthHeader
                         + "Content-Length: " + fi.Length + "\r\n"
                         + "Connection: close\r\n\r\n";
             ns.Write(System.Text.Encoding.ASCII.GetBytes(head));
@@ -74,6 +91,7 @@ public static class AgentClient
             using var t = Connect(out var ns);
             string head = "GET /files/get?path=" + Uri.EscapeDataString(remoteRel) + " HTTP/1.1\r\n"
                         + "Host: " + HostHeader + "\r\n"
+                        + AuthHeader
                         + "Connection: close\r\n\r\n";
             ns.Write(System.Text.Encoding.ASCII.GetBytes(head));
             string status = ReadResponseLine(ns);
@@ -121,8 +139,9 @@ public static class AgentClient
     {
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
-            string s = http.PostAsync(Base + "/proc/start", null).GetAwaiter().GetResult().Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            using var req = new HttpRequestMessage(HttpMethod.Post, Base + "/proc/start");
+            if (Token.Length > 0) { req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", Token); }
+            string s = LocalHttp.Send(req).Content.ReadAsStringAsync().GetAwaiter().GetResult();
             return s.Contains("\"ok\":true") ? ("agent 已拉起服务端 ✓ " + s) : ("agent 启动失败 ✗ " + s);
         }
         catch (Exception ex) { return "agent 启动失败 ✗ " + ex.Message; }
@@ -133,8 +152,9 @@ public static class AgentClient
     {
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
-            string s = http.PostAsync(Base + "/proc/stop", null).GetAwaiter().GetResult().Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            using var req = new HttpRequestMessage(HttpMethod.Post, Base + "/proc/stop");
+            if (Token.Length > 0) { req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", Token); }
+            string s = LocalHttp.Send(req).Content.ReadAsStringAsync().GetAwaiter().GetResult();
             return s.Contains("\"ok\":true") ? ("agent 已停止服务端 ✓ " + s) : ("agent 停止失败 ✗ " + s);
         }
         catch (Exception ex) { return "agent 停止失败 ✗ " + ex.Message; }

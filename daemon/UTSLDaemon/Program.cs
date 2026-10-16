@@ -9,10 +9,25 @@ using System.Text.Json;
 // ===== 参数 =====
 int port = 7879;
 string root = AppContext.BaseDirectory;
+// ★ 直连（面板）模式：--bind 0.0.0.0 把 agent 暴露到网络；--token 是访问令牌。
+//   安全红线：绑非回环地址时【必须】给令牌，否则拒绝启动 —— agent 以 SYSTEM 运行且能写文件/启停进程，
+//   无认证地挂在公网上等于把整台机器的控制权交出去。
+string bindAddr = "127.0.0.1";
+string token = "";
 for (int i = 0; i < args.Length - 1; i++)
 {
     if (args[i] == "--port") { port = int.Parse(args[i + 1]); }
     else if (args[i] == "--root") { root = args[i + 1]; }
+    else if (args[i] == "--bind") { bindAddr = args[i + 1]; }
+    else if (args[i] == "--token") { token = args[i + 1]; }
+}
+bool loopback = bindAddr is "127.0.0.1" or "localhost" or "::1";
+if (!loopback && token.Length < 16)
+{
+    Console.WriteLine("[UTSLDaemon] ✗ 拒绝启动：--bind " + bindAddr + " 是对外地址，但 --token 缺失或过短（至少 16 位）。");
+    Console.WriteLine("[UTSLDaemon]   agent 以 SYSTEM 运行、可写文件与启停进程，暴露到网络必须有强令牌。");
+    Environment.ExitCode = 3;
+    return;
 }
 string logsDir = Path.Combine(root, "logs");
 
@@ -34,17 +49,19 @@ long lastPingLog = 0;        // 实际绑定到的端口（--selftest 用 0 让�
 async Task ServeAsync(int listenPort = -1)
 {
     int want = listenPort < 0 ? port : listenPort;
-    var listener = new TcpListener(IPAddress.Loopback, want);
+    IPAddress bindIp = loopback ? IPAddress.Loopback : IPAddress.Any;
+    var listener = new TcpListener(bindIp, want);
     try { listener.Start(); }
     catch (Exception ex)
     {
         // ★ 端口被占要显式报错退出：曾经因为"起不来但被静默吞掉"，自检去连了别的程序（msedge）拿到 404，白查半天
-        Console.WriteLine("[UTSLDaemon] ✗ 监听 127.0.0.1:" + want + " 失败: " + ex.Message);
+        Console.WriteLine("[UTSLDaemon] ✗ 监听 " + bindAddr + ":" + want + " 失败: " + ex.Message);
         Environment.ExitCode = 2;
         return;
     }
     BoundPort = ((IPEndPoint)listener.LocalEndpoint).Port;
-    Console.WriteLine($"[UTSLDaemon] v0.1.0 监听 127.0.0.1:{BoundPort}  root={root}  logs={logsDir}（logs 存在={Directory.Exists(logsDir)}）");
+    Console.WriteLine($"[UTSLDaemon] v0.1.0 监听 {bindAddr}:{BoundPort}  root={root}  logs={logsDir}（logs 存在={Directory.Exists(logsDir)}）"
+        + (token.Length > 0 ? "  [已启用令牌认证]" : "  [未启用认证：仅回环]"));
     while (true)
     {
         TcpClient client;
@@ -86,16 +103,41 @@ async Task HandleAsync(TcpClient client)
             }
             string[] parts = requestLine.Split(' ');
             string pathRaw = parts.Length >= 2 ? parts[1] : "/";
+            // ★ 兼容【绝对形式】请求行（RFC 7230 5.3.2）：经代理访问时请求行是
+            //   "GET http://host:port/path?query HTTP/1.1"，只取路径部分，否则一律 404。
+            if (pathRaw.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || pathRaw.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                int schemeEnd = pathRaw.IndexOf("://", StringComparison.Ordinal) + 3;
+                int slash = pathRaw.IndexOf('/', schemeEnd);
+                pathRaw = slash >= 0 ? pathRaw[slash..] : "/";
+            }
             string path = pathRaw;
             int q = path.IndexOf('?');
             if (q >= 0) { path = path[..q]; }
+
+            // ★ 令牌认证：配了 token 时，除 /ping（只回版本号，供连通性探测）外所有端点都要
+            //   Authorization: Bearer <token>。比对用固定时间比较，避免时序侧信道。
+            bool authed = token.Length == 0
+                || (reqHeaders.TryGetValue("Authorization", out string? ah)
+                    && ah.StartsWith("Bearer ", StringComparison.Ordinal)
+                    && System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+                           Encoding.UTF8.GetBytes(ah[7..].Trim()), Encoding.UTF8.GetBytes(token)));
+            if (token.Length > 0 && !authed && path != "/ping")
+            {
+                byte[] no = Encoding.UTF8.GetBytes("{\"ok\":false,\"error\":\"未授权：缺少或错误的令牌\"}");
+                await WriteRawAsync(ns, "HTTP/1.1 401 Unauthorized", "application/json", no, keepAlive: false);
+                return;
+            }
 
             switch (path)
             {
                 case "/ping":
                     Interlocked.Increment(ref pingCalls);
                     if (Environment.TickCount64 - lastPingLog > 60000) { lastPingLog = Environment.TickCount64; Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] /ping（每分钟最多记一次）"); }
-                    await WriteJsonAsync(ns, new { ok = true, name = "UTSLDaemon", version = "0.1.0", root, logs = logsDir, logsExists = Directory.Exists(logsDir), at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+                    // 未认证时只回最小信息（不泄露本机路径）；认证后给全量
+                    await WriteJsonAsync(ns, authed
+                        ? new { ok = true, name = "UTSLDaemon", version = "0.1.0", root, logs = logsDir, logsExists = Directory.Exists(logsDir), auth = token.Length > 0, at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }
+                        : new { ok = true, name = "UTSLDaemon", version = "0.1.0", auth = true });
                     return;
                 case "/metrics":
                     Interlocked.Increment(ref metricsCalls);
@@ -586,7 +628,8 @@ async Task<int> SelfTestAsync()
     if (BoundPort == 0) { Console.WriteLine("  ✗ agent 没起来"); return 1; }
     Console.WriteLine("  自检端口 = " + BoundPort);
 
-    using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+    // ★ 禁用代理：自检连的是 127.0.0.1，走代理会失败（实测这台机器开了系统代理）
+using (var http = new HttpClient(new SocketsHttpHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(10) })
     {
         string ping = await http.GetStringAsync("http://127.0.0.1:" + BoundPort + "/ping");
         Ok(ping.Contains("\"ok\":true") && ping.Contains("UTSLDaemon"), "/ping 返回 ok + 版本");
