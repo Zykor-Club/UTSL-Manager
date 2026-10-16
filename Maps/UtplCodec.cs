@@ -26,7 +26,6 @@ public sealed class UtplRegion
     /// </summary>
     public Dictionary<int, (byte FrameNumber, byte WallFrameX, byte WallFrameY, byte WallFrameNumber)> Extras { get; init; } = [];
 
-    public Tile At(int x, int y) => Tiles[y * W + x];
 }
 
 /// <summary>
@@ -90,14 +89,6 @@ public static class UtplCodec
         File.Move(tmp, path);
     }
 
-    /// <summary>只写未压缩的负载（测试里用来比对"解压后是否逐字节一致"）。</summary>
-    public static byte[] WritePayloadBytes(UtplRegion r)
-    {
-        using var ms = new MemoryStream();
-        using (var w = new BinaryWriter(ms, Utf8, leaveOpen: true)) { WritePayload(w, r); }
-        return ms.ToArray();
-    }
-
     private static void WritePayload(BinaryWriter w, UtplRegion r)
     {
         w.Write(Magic);
@@ -122,8 +113,6 @@ public static class UtplCodec
     /// <summary>与服务端 UtplFormat.IsEmpty 同口径：图格/墙/液体/线/制动器/非激活 全无才算空。</summary>
     public static bool IsEmpty(Tile t) =>
         !t.IsActive && t.Wall == 0 && t.LiquidAmount == 0 && !t.HasWire && !t.Actuator && !t.InActive;
-
-    private static void WriteTile(BinaryWriter w, Tile t) => WriteTile(w, t, null);
 
     private static void WriteTile(BinaryWriter w, Tile t,
                                   (byte FrameNumber, byte WallFrameX, byte WallFrameY, byte WallFrameNumber)? extra)

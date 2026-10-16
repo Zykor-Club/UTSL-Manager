@@ -5,9 +5,6 @@ public sealed class RemoteProcessBackend(ISshTransport ssh, Func<string> startSc
 {
     public bool IsRemote => true;
 
-    /// <summary>远端存活由合并快照的进程数判断，这里不做单独探测。</summary>
-    public bool IsAlive() => true;
-
     public Task<ProcessResult> StartAsync() => Task.Run(() =>
     {
         // ★ agent 在线就走它：无窗口启动 + stdout 可抓（不再需要控制台启动器）

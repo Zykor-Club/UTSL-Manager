@@ -24,8 +24,6 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
         return false;
     }
 
-    public bool IsAlive() => AnyAlive();
-
     // ★ 不要给服务端做 stdin/stdout 重定向（实测过，会把它弄坏）：
     //   UTSL 启动时要拿控制台缓冲（ConsolePal.GetBufferInfo / WindowHeight），
     //   一旦没有真实控制台，ServerContext 的 ServerSurfaceConsole 构造就抛 IOException，
@@ -42,7 +40,7 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
 
     public Task<ProcessResult> StartAsync()
     {
-        if (IsAlive()) { return Task.FromResult(new ProcessResult(true, "")); }
+        if (AnyAlive()) { return Task.FromResult(new ProcessResult(true, "")); }   // ★ 原来调 IProcessBackend.IsAlive()，那个成员已删（零调用）
         try
         {
             var psi = new ProcessStartInfo(exePath)

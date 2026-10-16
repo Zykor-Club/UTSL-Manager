@@ -513,18 +513,6 @@ internal sealed class PluginContext : IManagerContext
     private static string WithSep(string dir) =>
         dir.EndsWith(Path.DirectorySeparatorChar) ? dir : dir + Path.DirectorySeparatorChar;
 
-    private string ResolveDeploy(string relativePath)
-    {
-        string root = Path.GetFullPath(DeployRoot);
-        string full = Path.GetFullPath(Path.Combine(root, relativePath));
-        // ★ 修 bug#4：前缀比较必须带上目录分隔符，否则兄弟目录（utsl-deploy-evil）会被误判为在内
-        if (!IsInside(WithSep(root), full))
-        {
-            throw new IOException("路径越界（必须位于 utsl-deploy 内）: " + relativePath);
-        }
-        return full;
-    }
-
     /// <summary>★ 修 bug#9：插件配置文件同样必须限制在 DataDir 内。</summary>
     private string ResolveDataFile(string? fileName)
     {

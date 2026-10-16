@@ -32,9 +32,6 @@ public static class ServerCapabilities
         @"plugins\VirtualWorldCore\MyPotWorld.dll",
     ];
 
-    /// <summary>模板目录（相对部署根）。</summary>
-    public const string TemplatesRel = @"lib\Saves\Worlds\_utpl_templates";
-
     /// <summary>
     /// <paramref name="exists"/>：传入"相对部署根的路径"，返回是否存在。
     /// <paramref name="anyTemplates"/>：模板目录里有没有 .utpl（调用方列目录后传入）。

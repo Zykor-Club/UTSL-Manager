@@ -17,8 +17,6 @@ namespace MapTemplates;
 /// </summary>
 public sealed class MapTemplatesPlugin : IManagerPlugin, IMapContributionPlugin
 {
-    private const string TemplatesRel = @"lib\Saves\Worlds\_utpl_templates";
-
     private IManagerContext? _ctx;
     private IMapContributionHost? _host;
 

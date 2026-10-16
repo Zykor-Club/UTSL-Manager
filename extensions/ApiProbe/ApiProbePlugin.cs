@@ -11,7 +11,8 @@ namespace ApiProbe;
 /// <summary>
 /// 管理器插件 API v3 的端到端自检：逐项调用新能力并输出真实结果。
 /// 每一项独立 try/catch —— 权限被拒不会中断其余检查（这样一次就能看清哪些通、哪些被拒）。
-/// 报告写到 %TEMP%\utsl-api-probe.txt，同时显示在插件视图并写进管理器终端。
+/// 报告写到插件数据目录（ctx.DataDir）下的 utsl-api-probe.txt，同时显示在插件视图并写进管理器终端。
+/// ★ 不用 %TEMP%：这台机器上它不可写（实测 UnauthorizedAccessException），原来注释与界面文案都在骗人。
 /// </summary>
 public sealed class ApiProbePlugin : IManagerPlugin
 {
@@ -21,12 +22,10 @@ public sealed class ApiProbePlugin : IManagerPlugin
     public string Author => "Zykor-Club";
     public int RequiredApiVersion => ManagerApi.V3;   // v3 门禁：宿主低于 v3 会跳过加载
 
-    private IManagerContext? _ctx;
-    private TextBlock? _view;
+    private TextBlock? _view;   // （原来还有个只写不读的 _ctx 字段，已删）
 
     public void OnLoad(IManagerContext ctx)
     {
-        _ctx = ctx;
         ctx.RunBackground(async ct =>
         {
             await Task.Delay(1500, ct);   // 等管理器界面与隧道就绪
@@ -40,13 +39,13 @@ public sealed class ApiProbePlugin : IManagerPlugin
         }, "api-probe");
     }
 
-    public void OnUnload() => _ctx = null;
+    public void OnUnload() { }   // 本插件没有需要收尾的资源
 
     public Control? CreateView(IManagerContext ctx)
     {
         _view = new TextBlock
         {
-            Text = "自检进行中…（结果也会写到 %TEMP%\\utsl-api-probe.txt）",
+            Text = "自检进行中…（结果写到插件数据目录的 utsl-api-probe.txt）",
             FontSize = 12,
             TextWrapping = Avalonia.Media.TextWrapping.Wrap,
             FontFamily = new Avalonia.Media.FontFamily("Cascadia Mono,Consolas,monospace"),

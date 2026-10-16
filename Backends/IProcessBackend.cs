@@ -8,8 +8,6 @@ public interface IProcessBackend
 {
     bool IsRemote { get; }
 
-    bool IsAlive();
-
     Task<ProcessResult> StartAsync();
 
     Task<ProcessResult> StopAsync();

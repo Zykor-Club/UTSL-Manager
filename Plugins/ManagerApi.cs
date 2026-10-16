@@ -15,9 +15,6 @@ public static class ManagerApi
     /// <summary>v1：Name / Icon / Description / Author / OnLoad / CreateView。</summary>
     public const int V1 = 1;
 
-    /// <summary>v2：新增 OnUnload、事件总线、命令、指标、配置、权限、i18n。</summary>
-    public const int V2 = 2;
-
     /// <summary>v3：新增统一远端文件 API（FilesRoot/ListFiles/ReadText/WriteText/CreateDirectory/Rename/Delete/Upload/Download，
     /// 远端模式走 SSH、本机模式直接读盘）、RunCommand（远端命令，exec 权限）、HttpGet/HttpPost（net 权限）、InvalidateFileCache。</summary>
     public const int V3 = 3;
@@ -26,7 +23,7 @@ public static class ManagerApi
     /// 「地图预览」页注入工具栏按钮，并读取当前视图状态（<see cref="MapViewState"/>，纯数据）与图格选区
     /// （<see cref="MapSelection"/>）。地图页本身仍是管理器内置的；插件只在其上挂按钮，
     /// 需要渲染/裁切/模板编码时直接调用 UTSLManager.Maps.* 的公开 API（宿主已带好 TEdit/SkiaSharp）。</summary>
-    public const int V4 = 4;
+    // （原来还有 V2/V4 常量，但全仓零引用 —— 版本只有 Version 一个入口，已删。）
 }
 
 /// <summary>部署目录里的一个文件/文件夹（v3 起提供给插件）。</summary>

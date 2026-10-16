@@ -196,24 +196,6 @@ public static class WorldMapRenderer
         });
     }
 
-    /// <summary>渲染并编码成 PNG 字节（可直接解码成 Avalonia 位图或写文件）。</summary>
-    public static byte[] RenderPng(World world, int scale, out MapRenderStats stats, long loadMs = 0, Action<double>? progress = null)
-    {
-        var sw = Stopwatch.StartNew();
-        using SKBitmap bmp = Render(world, scale, progress);
-        long renderMs = sw.ElapsedMilliseconds;
-
-        sw.Restart();
-        using SKImage img = SKImage.FromBitmap(bmp);
-        using SKData data = img.Encode(SKEncodedImageFormat.Png, 90);
-        byte[] png = data.ToArray();
-        long encodeMs = sw.ElapsedMilliseconds;
-
-        stats = new MapRenderStats(world.TilesWide, world.TilesHigh, bmp.Width, bmp.Height,
-            world.Chests.Count, world.Signs.Count, world.TileEntities.Count, loadMs, renderMs, encodeMs);
-        return png;
-    }
-
     /// <summary>
     /// 按偏移把多片世界拼成一张图（服务端的三个大地图本来是一张超大地图切成的三片）。
     ///

@@ -311,7 +311,6 @@ public sealed class RuYouMusicPanelPlugin : IManagerPlugin
                 catch { }
             }
             lock (_sync) { _lines = lines; }
-            ClearStatus();
         }
     }
 
@@ -660,8 +659,6 @@ public sealed class RuYouMusicPanelPlugin : IManagerPlugin
         lock (_sync) { _status = s; }
         try { Dispatcher.UIThread.Post(() => { if (_statusText is not null) { _statusText.Text = s; } }); } catch { }
     }
-
-    private void ClearStatus() { }
 
     /// <summary>显示/隐藏圆形转圈（可见时每 140ms 换一帧）。</summary>
     private void SetBusy(bool on)

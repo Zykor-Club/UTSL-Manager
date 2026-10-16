@@ -76,7 +76,6 @@ public sealed class PacketInspectorPlugin : IManagerPlugin
     private StackPanel? _playersHost;
     private long _trackedPlayers;
     private long _onlinePlayers;
-    private long _aggTotal;
     private string _playersSig = "";
     private int _dirFilter = -1;            // -1 全部 / 0 C→S / 1 S→C
     private int _rawDirFilter = -1;
@@ -382,7 +381,6 @@ public sealed class PacketInspectorPlugin : IManagerPlugin
         }
         _trackedPlayers = tracked;
         _onlinePlayers = onlineCount;
-        _aggTotal = aggTotal;
         string sigText = sig.ToString();
 
         string status = (aggEnabled ? "● 聚合中" : "○ 聚合已关") + "   ·   跟踪 " + tracked + " 个槽位，在线 " + onlineCount + " 人"
@@ -913,7 +911,7 @@ public sealed class PacketInspectorPlugin : IManagerPlugin
             Cell(6, noBytes ? "—" : t.Hex, false, noBytes);
             Avalonia.Controls.Grid.SetColumn(btns, 7);
             row.Children.Add(btns);
-            stackRow(sp, row);
+            sp.Children.Add(row);      // 原来是 stackRow() 一层无意义包装，直接内联
 
             if (t.Decoded.Length > 0)
             {
@@ -936,8 +934,6 @@ public sealed class PacketInspectorPlugin : IManagerPlugin
             Child = sp,
         };
     }
-
-    private static void stackRow(StackPanel sp, Control c) => sp.Children.Add(c);
 
     // ★ 聚合卡片的列宽：表头与数据行共用 → 像素级对齐（等宽字体 + CJK 回退字体做不到这一点）
     // 前 6 列全部固定宽度（只有最后的 Payload 列自适应）—— 这样表头与数据行的列边界在像素上必然一致，
@@ -1055,11 +1051,6 @@ public sealed class PacketInspectorPlugin : IManagerPlugin
         return w >= width ? s : s + new string(' ', width - w);
     }
 
-    private static string PadLeftDisp(string s, int width)
-    {
-        int w = DispWidth(s);
-        return w >= width ? s : new string(' ', width - w) + s;
-    }
 
     /// <summary>按显示宽度补齐；超宽时按显示宽度截断（不劈开代理对）。</summary>
     private static string Fit(string s, int width)
