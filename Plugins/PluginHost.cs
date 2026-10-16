@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Threading;   // OnUi：把宿主界面回调切回 UI 线程（加载/重载已改到后台线程执行）
 
 namespace UTSLManager.Plugins;
 
@@ -92,11 +93,23 @@ public sealed class PluginHost
 
     // ===== 生命周期 =====
 
+    /// <summary>
+    /// 把宿主的界面回调切到 UI 线程执行（同步，保证"清旧界面 → 再注入新界面"的顺序）。
+    /// ★ 加载/重载会被放到后台线程（Roslyn 编译 + 插件 OnLoad 可能很慢，原来整段占着 UI 线程），
+    ///   而 AfterLoad/BeforeUnload 会碰 Avalonia 控件 —— 不切回去就是跨线程改可视树。
+    /// </summary>
+    private void OnUi(Action? a)
+    {
+        if (a is null) { return; }
+        if (Dispatcher.UIThread.CheckAccess()) { a(); }
+        else { Dispatcher.UIThread.Invoke(a); }   // 调用方是 await 状态（UI 线程空闲），不会死锁
+    }
+
     public PluginLoadReport Load()
     {
         UnloadAll();
         Report = PluginLoader.Load(this);
-        Options.AfterLoad?.Invoke();
+        OnUi(Options.AfterLoad);
         return Report;
     }
 
@@ -114,7 +127,7 @@ public sealed class PluginHost
     private void UnloadAll()
     {
         bool any = _plugins.Count > 0 || _contexts.Count > 0;
-        if (any) { Options.BeforeUnload?.Invoke(); }
+        if (any) { OnUi(Options.BeforeUnload); }
 
         // ★ 修 bug#14：热重载必须取消旧插件后台任务的令牌。原来只有 Shutdown() 取消，而 Reload() 走的是
         //   UnloadAll()（不取消）→ 旧插件的轮询循环永久存活（实测重载后新旧实例同时在轮询），

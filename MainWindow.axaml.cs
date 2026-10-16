@@ -377,7 +377,7 @@ public partial class MainWindow : Window
             }
             int on = rows.Count(r => r.Running) - 1;
             ConnState.Text = $"{on} 世界";
-            if (SrvDot is not null) { SrvDot.Background = new SolidColorBrush(Color.Parse("#32D74B")); }
+            if (SrvDot is not null) { SrvDot.Background = GetBrush("#32D74B"); }   // ★ 用画刷缓存：这条每 2 秒跑一次，原来每轮 new 一个
             serverWasUp = true;
             downTicks = 0;
             watchdogFailures = 0;
@@ -628,8 +628,13 @@ public partial class MainWindow : Window
     /// 直接预热【真正被读的】文件缓存（CachedFileBackend）—— 之后三个页面读缓存即刻返回，
     /// 不需要各自再发一次 ssh（每次 3~8 秒）。
     /// </summary>
+    private static int snapshotBusy;      // 在飞闩锁：单次快照最长 60 秒，而定时器每 30 秒就会再触发
+
     private static void RefreshSnapshot()
     {
+        // ★ 没有闩锁时：一次快照超过 45 秒，下一个 tick 会再起一个完整快照 —— 两者并发抢 SshGate，
+        //   还会重复写同一批 Snap* 静态字段（速率差分基准被搅乱 → 指标忽高忽低）。
+        if (Interlocked.CompareExchange(ref snapshotBusy, 1, 0) != 0) { return; }
         try
         {
             string root = FsRoot;
@@ -769,6 +774,7 @@ public partial class MainWindow : Window
             SnapshotAtMs = now;
         }
         catch { }
+        finally { Volatile.Write(ref snapshotBusy, 0); }   // ★ 必须释放：否则一次异常/提前返回就让快照永久停摆
     }
 
     private static string DecB64(string? b64)
@@ -1266,19 +1272,19 @@ public partial class MainWindow : Window
         if (!HasSsh)
         {
             AgentStatusText.Text = "云端 agent：本机模式不需要（本机直接读日志/进程）";
-            AgentStatusText.Foreground = new SolidColorBrush(Color.Parse("#7C7C82"));
+            AgentStatusText.Foreground = GetBrush("#7C7C82");
             return;
         }
         if (AgentAlive)
         {
             long fresh = AgentMetricsAtMs > 0 ? Environment.TickCount64 - AgentMetricsAtMs : -1;
             AgentStatusText.Text = "云端 agent：已连接 ✓" + (fresh >= 0 ? $"（指标 {fresh / 1000.0:F1} 秒前更新）" : "") + " · 日志走推送、指标 2 秒级";
-            AgentStatusText.Foreground = new SolidColorBrush(Color.Parse("#32D74B"));
+            AgentStatusText.Foreground = GetBrush("#32D74B");
         }
         else
         {
             AgentStatusText.Text = "云端 agent：未安装 / 未运行 ✗ " + AgentProbeErr + " —— 点右边按钮推送安装（日志与指标自动回落到 SSH 路径）";
-            AgentStatusText.Foreground = new SolidColorBrush(Color.Parse("#FEBC2E"));
+            AgentStatusText.Foreground = GetBrush("#FEBC2E");
         }
     }
 
@@ -1747,6 +1753,8 @@ public partial class MainWindow : Window
 
         // ★ 回显在发请求【之前】打：否则指令输出（日志流）可能先到、回显排到下面；请求失败时也会没回显。
         Term("> " + (consoleScope ? "> " : "") + (world.Length == 0 ? "" : "@" + world + " ") + text, "#79C0FF");
+        // ★ 在 await 之前就清空输入框：原来清空在最后，快速双击/长按 Enter 会在清空前再次进入 → 同一条指令发两次
+        CmdBox.Text = "";
         try
         {
             string url = Rest + "/world/command?token=" + Uri.EscapeDataString(Token) + "&world=" + Uri.EscapeDataString(world) + "&cmd=" + Uri.EscapeDataString(text) + "&scope=" + (consoleScope ? "console" : "world");
@@ -1763,7 +1771,7 @@ public partial class MainWindow : Window
         {
             ErrText.Text = "指令发送失败: " + ex.Message;
         }
-        CmdBox.Text = "";
+        // （输入框已在发送前清空，见上）
     }
 
     // ===== 自绘标题栏（macOS 交通灯）=====
@@ -2343,8 +2351,12 @@ public partial class MainWindow : Window
 
     private void OnMgrPluginsReload(object? sender, RoutedEventArgs e)
     {
-        try { pluginHost?.Reload(); ERR("插件已重新加载（见下方列表）"); }
-        catch (Exception ex) { ERR("重载失败: " + ex.Message); }
+        // ★ 重载要编译 .csx / 跑插件 OnLoad，放后台做，别冻界面（界面回调由 PluginHost 切回 UI 线程）
+        _ = Task.Run(() =>
+        {
+            try { pluginHost?.Reload(); ERR("插件已重新加载（见下方列表）"); }
+            catch (Exception ex) { ERR("重载失败: " + ex.Message); }
+        });
     }
 
     private void OnMgrPluginsOpenDir(object? sender, RoutedEventArgs e)
@@ -2433,7 +2445,7 @@ public partial class MainWindow : Window
             if (PluginHost.SetEnabled(p.Descriptor.DllPath, false))
             {
                 ERR("已停用 " + p.SourceFile + "（重命名为 .disabled），重载中…");
-                pluginHost?.Reload();
+                _ = Task.Run(() => { try { pluginHost?.Reload(); } catch (Exception ex) { ERR("重载失败: " + ex.Message); } });
             }
             else { ERR("停用失败：文件不存在"); }
         };
@@ -2470,7 +2482,7 @@ public partial class MainWindow : Window
             if (PluginHost.SetEnabled(real, disabled))
             {
                 ERR((disabled ? "已启用 " : "已停用 ") + Path.GetFileName(real) + "，重载中…");
-                pluginHost?.Reload();
+                _ = Task.Run(() => { try { pluginHost?.Reload(); } catch (Exception ex) { ERR("重载失败: " + ex.Message); } });
             }
             else { ERR("操作失败：文件不存在"); }
         };
@@ -2666,8 +2678,7 @@ public partial class MainWindow : Window
         {
             t.Stop();
             ERR("插件目录已变化，正在重载…");
-            try { pluginHost?.Reload(); }
-            catch (Exception ex) { ERR("自动重载失败: " + ex.Message); }
+            _ = Task.Run(() => { try { pluginHost?.Reload(); } catch (Exception ex) { ERR("自动重载失败: " + ex.Message); } });
         };
         return t;
     }
