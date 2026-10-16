@@ -7,6 +7,9 @@ namespace UTSLManager.Plugins;
 /// 管理器事件总线（每次插件加载/重载产生一个新实例：旧实例连同其订阅一起被丢弃，
 /// 这样卸载插件后不会有残留的委托把插件钉在内存里）。
 /// 所有 Raise 都吞异常并回报，保证单个插件出错不会影响管理器或其他插件。
+///
+/// ★ Raise* 是 internal：本程序集通过 InternalsVisibleTo("UTSLManager") 只授权宿主触发 ——
+///   插件只能订阅，不能伪造"服务端上线/世界切换"这类事件。
 /// </summary>
 public sealed class ManagerEvents
 {

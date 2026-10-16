@@ -27,6 +27,12 @@
   </Target>
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.1.2"><ExcludeAssets>runtime</ExcludeAssets></PackageReference>
+    <!-- ★ P0 起：契约独立成程序集。本插件还用到了宿主的地图/渲染公开 API（UTSLManager.Maps.*），
+         所以【两个都引】：契约（26KB）+ 管理器本体。只做动作/服务/面板的插件只需要契约那一个。 -->
+    <Reference Include="UTSLManager.Plugin.Abstractions">
+      <HintPath>$(ManagerDir)\UTSLManager.Plugin.Abstractions.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UTSLManager">
       <HintPath>$(ManagerDir)\UTSLManager.dll</HintPath>
       <Private>false</Private>

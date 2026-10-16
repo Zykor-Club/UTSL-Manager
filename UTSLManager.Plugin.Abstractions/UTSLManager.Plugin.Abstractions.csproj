@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    UTSLManager 插件契约程序集（P0：把"插件能看到的 API"与"管理器实现"分开）
+
+    为什么这么做：
+      · 插件只需引用这一个小程序集（约 30KB），而不是整个 UTSLManager.dll —— 契约边界才真正成立；
+      · 契约版本可独立演进，宿主能给出明确的"此插件要求 vX、宿主 vY"提示；
+      · 插件不再有机会误用管理器内部实现。
+
+    ★ 命名空间刻意保持 UTSLManager.Plugins 不变 —— 现有插件源码【一行都不用改】。
+    ★ 管理器侧用 TypeForwardedTo 把这些类型转发过来 —— 【已编译的旧插件 dll 也能继续加载】。
+    ★ 宿主 PluginHost.BuildHostAssemblies() 会把 App 目录下所有 dll 都算作"宿主程序集"，
+      所以本程序集会被自动共享：插件拿到的永远是宿主那一份类型，不会出现类型身份分裂。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>UTSLManager.Plugin.Abstractions</AssemblyName>
+    <RootNamespace>UTSLManager.Plugins</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- 契约中出现 Control?（CreateView / AddToolbarControl），需要 Avalonia 引用 -->
+    <PackageReference Include="Avalonia" Version="12.1.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 宿主需要调用 ManagerEvents 的 internal Raise*（事件只能由宿主触发、插件只能订阅） -->
+    <InternalsVisibleTo Include="UTSLManager" />
+  </ItemGroup>
+</Project>

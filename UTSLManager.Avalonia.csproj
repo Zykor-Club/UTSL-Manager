@@ -20,6 +20,13 @@
     <None Remove="samples\**" />
     <EmbeddedResource Remove="samples\**" />
     <AvaloniaResource Remove="samples\**" />
+    <!-- ★ P0：插件契约是独立工程（子目录），绝不能被主工程的通配符编进来 ——
+         否则同一批类型会同时存在于两个程序集，类型转发直接报 CS0729。
+         这一条和上面的 samples/extensions/third_party 是同一类排除。 -->
+    <Compile Remove="UTSLManager.Plugin.Abstractions\**" />
+    <None Remove="UTSLManager.Plugin.Abstractions\**" />
+    <EmbeddedResource Remove="UTSLManager.Plugin.Abstractions\**" />
+    <AvaloniaResource Remove="UTSLManager.Plugin.Abstractions\**" />
     <!-- extensions/ 是「正式管理器插件」的源码目录（同样独立工程，不要被主工程编进去） -->
     <Compile Remove="extensions\**" />
     <None Remove="extensions\**" />
@@ -47,6 +54,10 @@
     <PackageReference Include="SkiaSharp" Version="3.119.4" />
     <PackageReference Include="ReactiveUI" Version="24.3.0" />
     <ProjectReference Include="third_party\TEdit\src\TEdit.Terraria\TEdit.Terraria.csproj" />
+    <!-- ★ P0：插件契约独立程序集。命名空间仍是 UTSLManager.Plugins，管理器用 Plugins\TypeForwards.cs 做类型转发
+         （旧插件 dll 与旧插件源码都无需改动）；输出目录里有了这个 dll 后，PluginHost.BuildHostAssemblies
+         会自动把它算作宿主程序集，插件拿到的永远是宿主那一份类型。 -->
+    <ProjectReference Include="UTSLManager.Plugin.Abstractions\UTSLManager.Plugin.Abstractions.csproj" />
     <Compile Include="third_party\TEdit\src\TEdit5\Controls\PixelMap.cs" Link="TEdit5\PixelMap.cs" />
     <Compile Include="third_party\TEdit\src\TEdit5\Controls\WorldRenderEngine\SkiaTEditExtensions.cs" Link="TEdit5\SkiaTEditExtensions.cs" />
   </ItemGroup>

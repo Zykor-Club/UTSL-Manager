@@ -16,12 +16,14 @@
     <PluginManifestSource>$(MSBuildThisFileDirectory)manifest.json</PluginManifestSource>
   </PropertyGroup>
   <Target Name="CheckManagerExists" BeforeTargets="BeforeBuild">
-    <Error Condition="!Exists('$(ManagerDir)\UTSLManager.dll')" Text="找不到 $(ManagerDir)\UTSLManager.dll —— 请用 -p:ManagerDir=&lt;目录&gt; 指定。" />
+    <Error Condition="!Exists('$(ManagerDir)\UTSLManager.Plugin.Abstractions.dll')" Text="找不到 $(ManagerDir)\UTSLManager.dll —— 请用 -p:ManagerDir=&lt;目录&gt; 指定。" />
   </Target>
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.1.2" />
-    <Reference Include="UTSLManager">
-      <HintPath>$(ManagerDir)\UTSLManager.dll</HintPath>
+    <!-- ★ P0 起：插件只需引用【契约程序集】（约 26KB），不再拖整个 UTSLManager.dll。
+         契约命名空间仍是 UTSLManager.Plugins，源码里 using 一行都不用改。 -->
+    <Reference Include="UTSLManager.Plugin.Abstractions">
+      <HintPath>$(ManagerDir)\UTSLManager.Plugin.Abstractions.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
