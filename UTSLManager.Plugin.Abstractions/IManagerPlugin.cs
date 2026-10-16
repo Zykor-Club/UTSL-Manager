@@ -145,6 +145,20 @@ public interface IManagerContext
     /// <summary>POST 任意 http(s) 地址；jsonBody 为 null 则不发送正文。</summary>
     Task<string> HttpPost(string url, string? jsonBody = null);
 
+    // ===== 服务端进程（v6；起停需 exec 权限）=====
+    /// <summary>
+    /// 服务端当前是否在线 —— 管理器**心跳探测**的结果（本机/远端都适用）。后台线程可读。
+    /// ★ 语义是"能不能连上服务端"，不是"本机有没有这个进程"。
+    /// </summary>
+    bool ServerOnline { get; }
+    /// <summary>
+    /// 启动服务端进程（本机直接起；远端走 SSH/控制台启动器）。reason 会写进管理器终端，便于事后审计。
+    /// 返回是否成功**下发**（注意：启动成功 ≠ 世界加载完成，通常还要等几十秒到几分钟）。
+    /// </summary>
+    Task<bool> StartServerAsync(string reason = "");
+    /// <summary>停止服务端进程。reason 会写进管理器终端。</summary>
+    Task<bool> StopServerAsync(string reason = "");
+
     // ===== i18n =====
     /// <summary>注册某语言的字符串表（通常在 OnLoad 里调用）。</summary>
     void RegisterStrings(string language, IReadOnlyDictionary<string, string> strings);

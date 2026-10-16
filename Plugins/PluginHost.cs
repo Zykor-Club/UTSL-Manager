@@ -40,6 +40,14 @@ public sealed class PluginHostOptions
     public Action? InvalidateFileCache { get; init; }
     /// <summary>在部署主机上执行 PowerShell（远端走 ssh）。</summary>
     public Func<string, int, string>? RunCommand { get; init; }
+
+    // ===== v6：服务端进程（由管理器注入；插件起停需 exec 权限）=====
+    /// <summary>服务端是否在线（管理器心跳探测结果）。</summary>
+    public Func<bool>? ServerOnline { get; init; }
+    /// <summary>启动服务端进程；参数是原因（写进终端便于审计）。返回是否成功下发。</summary>
+    public Func<string, Task<bool>>? StartServer { get; init; }
+    /// <summary>停止服务端进程。</summary>
+    public Func<string, Task<bool>>? StopServer { get; init; }
     /// <summary>加载完成后通知 UI 重建「扩展」菜单 / 刷新「插件管理」页。</summary>
     public Action? AfterLoad { get; init; }
     /// <summary>卸载前通知 UI 把插件界面从可视树摘掉（否则 ALC 无法回收）。</summary>
@@ -274,6 +282,28 @@ internal sealed class PluginContext : IManagerContext
     public string Token => _host.Options.Token();
     public string Language => _host.Options.Language();
     public IReadOnlyCollection<string> Permissions => _permissions is null ? Array.Empty<string>() : _permissions;
+
+    // ===== v6：服务端进程 =====
+    /// <summary>只读信息，不设权限门（未声明权限的插件也能看到服务端状态）。</summary>
+    public bool ServerOnline => _host.Options.ServerOnline?.Invoke() ?? false;
+
+    public async Task<bool> StartServerAsync(string reason = "")
+    {
+        Require("exec");
+        var f = _host.Options.StartServer;
+        if (f is null) { throw new PluginPermissionException($"[{PluginName}] 当前管理器未提供服务端启动能力"); }
+        Log($"[{PluginName}] 请求启动服务端（{reason}）");
+        return await f(reason);
+    }
+
+    public async Task<bool> StopServerAsync(string reason = "")
+    {
+        Require("exec");
+        var f = _host.Options.StopServer;
+        if (f is null) { throw new PluginPermissionException($"[{PluginName}] 当前管理器未提供服务端停止能力"); }
+        Log($"[{PluginName}] 请求停止服务端（{reason}）");
+        return await f(reason);
+    }
 
     public void Log(string message) => _host.Options.Log(message);
 

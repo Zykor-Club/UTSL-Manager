@@ -534,9 +534,14 @@ ctx:every(60, function() ctx:log("每分钟一次：" .. ctx:now().str) end)   -
 | `ctx:read_text/ write_text/ exists/ list_files` | 部署目录文件（需 `fs` 权限；远端/本机统一） |
 | `ctx:worlds()` | 世界列表快照 |
 | `ctx:L(key, fallback)` | i18n |
+| `ctx:server_online()` | 服务端是否在线（管理器**心跳探测**结果，本机/远端同一语义） |
+| `ctx:server_start(reason)` / `ctx:server_stop(reason)` | **启停服务端进程**（需 `exec` 权限；走的是与管理器按钮**同一条**路径 —— 远端=SSH/控制台启动器；`reason` 会写进终端便于审计） |
 | `ctx:register_panel(title, fn)` + `ctx:on_action(fn)` | **声明式界面**（见下） |
 
-**界面是"声明式"的**：Lua **不能**返回 Avalonia 控件（那会踩类型身份分裂），而是返回一份控件描述，宿主渲染**真控件**：
+**界面是"声明式"的**：Lua **不能**返回 Avalonia 控件（那会踩类型身份分裂），而是返回一份控件描述，宿主渲染**真控件**。
+控件种类：`text`（只读文本）/ `text_input` / `number` / `checkbox`（真复选框）/ `select`（下拉）/ **`time`（时间选择器，值 `"HH:mm"`）** /
+**`date`（日历选日期，值 `"yyyy-MM-dd"`）** / **`list`（可点选列表，点击回调 `action="select"` 且 `values.clicked` 是被点项的 `key`）** /
+`buttons` / `section`（分节标题）/ `hint`（灰色说明行）/ `divider`。整体按"**标签左、控件右**"的两列布局渲染。
 
 ```lua
 ctx:register_panel("我的面板", function()
@@ -560,10 +565,13 @@ end)
   但所有 Lua 回调都在**后台线程**执行（实测：Lua 死循环期间管理器计时器照常跳动），所以**界面不会被冻住**。
   这与"C# 插件本来就能 `RunCommand` 执行任意 PowerShell"是同一级信任模型：**插件是你自己装的，就该信任它**。
 
-**完整示例：`extensions\LuaTaskScheduler`（定时任务）** —— 间隔 N 分钟 / 每天 HH:mm / 每周几 / 每月几号，
-动作支持 PowerShell 命令或 UTSL REST；带任务列表、编辑表单、保存/立即执行/新增/删除/上一个/下一个。
-它的排程判定是纯函数并**导出给自动化测试**：`probes/LuaSchedCheck` 会加载**真实发布的那份 plugin.lua**，
-用桩 ctx 跑 14 个用例（间隔边界 / 定点 / 星期 / 月日 / 同日不重复 / 非法输入不抛异常）——**当前 14/14 通过**。
+**完整示例：`extensions\LuaTaskScheduler`（定时任务）** —— 排程：**间隔 N 秒** / 每天 HH:mm / 每周几 / 每月几号 / **指定日期（日历选）**；
+动作：**REST（默认）** / PowerShell 命令 / **启动服务端** / **停止服务端**；选项：**仅服务器在线时执行**，
+并带 **10 分钟宽限补跑**（04:00 恰好离线、04:05 才上线也会补跑一次，不会永久错过）；
+界面是**可直接点选的任务列表** + 两列表单 + 最近执行记录（保存 / 立即执行 / 新增 / 复制 / 删除）。
+它的排程判定与动作分派都是纯函数/可注入并**导出给自动化测试**：`probes/LuaSchedCheck` 会加载**真实发布的那份 plugin.lua**，
+用桩 ctx（含记录型桩）跑 **28 个用例**（秒级间隔边界 / 宽限补跑 / 每周 / 每月 / 指定日期 / 描述文案 /
+**动作分派是否真的调到 rest·cmd·start·stop**）——**当前 28/28 通过**。
 另有 `extensions\LuaSmoke`（自检插件）：把"加载次数/心跳次数"写进配置，可**从磁盘客观验证** Lua 通道是否工作。
 ## 13. 示例
 

@@ -2264,6 +2264,11 @@ public partial class MainWindow : Window
                 Token = () => Token,
                 Worlds = RowsSnapshot,
                 Log = m => Term(m, PickColor(m)),
+                // ★ v6：服务端进程控制。在线状态用管理器的**心跳探测结果**（本机/远端同一语义），
+                //   起停复用与「启动/停止服务端」按钮完全相同的路径（含远端 SSH/控制台启动器与看门狗保护）。
+                ServerOnline = () => lastServerUp == true,
+                StartServer = reason => PluginStartServerAsync(reason),
+                StopServer = reason => PluginStopServerAsync(reason),
                 Language = () => ManagerLanguage,
                 // ★ v3：把「统一部署目录访问」注入插件宿主 —— 远端走 SSH / scp，本机直接读盘。
                 //   插件因此不再受"只能读本机目录"的限制（旧 ReadDeployText 在远端模式下读错了目标）。
@@ -4935,6 +4940,34 @@ public partial class MainWindow : Window
     {
         watchdogProtectUntilMs = Environment.TickCount64 + seconds * 1000L;
         _ = why;
+    }
+
+    // ★ v6：插件请求起停服务端 —— 与按钮同一条路径，但把"是谁请求的"记进终端（可审计）。
+    private async Task<bool> PluginStartServerAsync(string reason)
+    {
+        try
+        {
+            Term($"--- 插件请求启动服务端（{reason}）---", "#79C0FF");
+            ProtectWatchdog(600, "plugin-start:" + reason);
+            ProcessResult r = await ProcessBackend.StartAsync();
+            Term(r.Message, PickColor(r.Message));
+            ErrText.Text = r.Ok ? "插件已请求启动服务端" : r.Message;
+            return r.Ok;
+        }
+        catch (Exception ex) { ERR("插件启动服务端失败: " + ex.Message); return false; }
+    }
+
+    private async Task<bool> PluginStopServerAsync(string reason)
+    {
+        try
+        {
+            Term($"--- 插件请求停止服务端（{reason}）---", "#FEBC2E");
+            ProcessResult r = await ProcessBackend.StopAsync();
+            Term(r.Message, PickColor(r.Message));
+            ErrText.Text = r.Ok ? "插件已请求停止服务端" : r.Message;
+            return r.Ok;
+        }
+        catch (Exception ex) { ERR("插件停止服务端失败: " + ex.Message); return false; }
     }
 
     /// <summary>★ 修 bug#15：目标是否为本机 —— 远端目标绝不在本机拉起/停止服务端进程。</summary>

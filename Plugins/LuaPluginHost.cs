@@ -146,6 +146,9 @@ internal sealed class LuaScriptBridge
         t["list_files"] = (Func<string, Table>)(d => ListFilesTable(d));
         t["worlds"] = (Func<Table>)(WorldsTable);
         t["L"] = (Func<string, string, string>)((k, f) => _ctx.L(k, f));
+        t["server_online"] = (Func<bool>)(() => Safe(() => _ctx.ServerOnline, false));
+        t["server_start"] = (Func<string, bool>)(reason => BlockOk(_ctx.StartServerAsync(reason)));
+        t["server_stop"] = (Func<string, bool>)(reason => BlockOk(_ctx.StopServerAsync(reason)));
         t["register_panel"] = (Action<string, DynValue>)((title, fn) => { _panelTitle = title; _panelSpec = fn; });
         t["on_action"] = (Action<DynValue>)(fn => _onAction = fn);
         _lua.Globals["ctx"] = t;
@@ -374,83 +377,172 @@ internal sealed class LuaScriptBridge
         string kind = Str(row, "kind");
         string label = Str(row, "label");
         string id = Str(row, "id");
+
         switch (kind)
         {
+            case "section":
+                {
+                    var sp = new StackPanel { Spacing = 3, Margin = new Thickness(0, 8, 0, 3) };
+                    sp.Children.Add(new TextBlock { Text = label, FontSize = 12, FontWeight = FontWeight.SemiBold, Foreground = new SolidColorBrush(Color.Parse("#79C0FF")) });
+                    sp.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.Parse("#22314D")) });
+                    return sp;
+                }
+            case "hint":
+                return new TextBlock { Text = label, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#6E7681")), TextWrapping = TextWrapping.Wrap };
             case "divider":
                 return new Border { Height = 1, Background = new SolidColorBrush(Color.Parse("#26262B")), Margin = new Thickness(0, 4, 0, 4) };
-            case "text":
-                {
-                    var g = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
-                    var l = new TextBlock { Text = label, FontSize = 11.5, Foreground = new SolidColorBrush(Color.Parse("#8A8A90")), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 0) };
-                    var v = new TextBlock { Text = Str(row, "value"), FontSize = 12, Foreground = new SolidColorBrush(Color.Parse("#C7D2E0")), TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
-                    Grid.SetColumn(l, 0); Grid.SetColumn(v, 1);
-                    g.Children.Add(l); g.Children.Add(v);
-                    return g;
-                }
-            case "select":
-                {
-                    var sp = new StackPanel { Spacing = 4 };
-                    sp.Children.Add(new TextBlock { Text = label, FontSize = 11.5, Foreground = new SolidColorBrush(Color.Parse("#8A8A90")) });
-                    var cb = new ComboBox { FontSize = 12, MinWidth = 180 };
-                    var opts = row.Get("options").Table;
-                    string cur = Str(row, "value");
-                    int sel = 0;
-                    if (opts is not null)
-                    {
-                        for (int i = 1; i <= opts.Length; i++)
-                        {
-                            string s = opts.Get(i).String ?? "";
-                            cb.Items.Add(s);
-                            if (s == cur) { sel = i - 1; }
-                        }
-                    }
-                    if (cb.ItemCount > 0) { cb.SelectedIndex = sel; }
-                    sp.Children.Add(cb);
-                    if (id.Length > 0) { _getters[id] = () => cb.SelectedItem?.ToString() ?? ""; }
-                    return sp;
-                }
-            case "number":
-                {
-                    var sp = new StackPanel { Spacing = 4 };
-                    sp.Children.Add(new TextBlock { Text = label, FontSize = 11.5, Foreground = new SolidColorBrush(Color.Parse("#8A8A90")) });
-                    var nb = new NumericUpDown { FontSize = 12, Minimum = 0, Maximum = 1_000_000, Increment = 1, MinWidth = 120 };
-                    try { nb.Value = (decimal)row.Get("value").Number; } catch { }
-                    sp.Children.Add(nb);
-                    if (id.Length > 0) { _getters[id] = () => nb.Value.HasValue ? (double)nb.Value.Value : 0d; }
-                    return sp;
-                }
+            case "list":
+                return BuildList(row);
             case "buttons":
-                {
-                    var sp = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-                    var items = row.Get("items").Table;
-                    if (items is not null)
-                    {
-                        for (int i = 1; i <= items.Length; i++)
-                        {
-                            var it = items.Get(i).Table;
-                            if (it is null) { continue; }
-                            string text = Str(it, "text");
-                            string action = Str(it, "action");
-                            var b = new Button { Content = text, FontSize = 11.5, Padding = new Thickness(12, 5, 12, 5), CornerRadius = new CornerRadius(9) };
-                            b.Click += (_, _) => FireAction(action);
-                            sp.Children.Add(b);
-                        }
-                    }
-                    return sp;
-                }
-            default:
-                {
-                    var sp = new StackPanel { Spacing = 4 };
-                    sp.Children.Add(new TextBlock { Text = label, FontSize = 11.5, Foreground = new SolidColorBrush(Color.Parse("#8A8A90")) });
-                    var tb = new TextBox { Text = Str(row, "value"), FontSize = 12, MinWidth = 220 };
-                    sp.Children.Add(tb);
-                    if (id.Length > 0) { _getters[id] = () => tb.Text ?? ""; }
-                    return sp;
-                }
+                return BuildButtons(row);
         }
+
+        // ★ 其余都是"标签左 / 控件右"的两列行 —— 比原来"标签在上、控件在下"整齐得多
+        Control ctl = kind switch
+        {
+            "checkbox" => MakeCheckbox(row, id),
+            "select" => MakeSelect(row, id),
+            "number" => MakeNumber(row, id),
+            "time" => MakeTime(row, id),
+            "date" => MakeDate(row, id),
+            "text" => new TextBlock { Text = Str(row, "value"), FontSize = 12, Foreground = new SolidColorBrush(Color.Parse("#C7D2E0")), TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center },
+            _ => MakeText(row, id),
+        };
+        return Labeled(label, ctl);
     }
 
-    private void FireAction(string action)
+    private static Control Labeled(string label, Control ctl)
+    {
+        var g = new Grid { ColumnDefinitions = new ColumnDefinitions("128,*"), Margin = new Thickness(0, 2, 0, 2) };
+        var l = new TextBlock { Text = label, FontSize = 11.5, Foreground = new SolidColorBrush(Color.Parse("#8A8A90")), VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
+        Grid.SetColumn(l, 0);
+        Grid.SetColumn(ctl, 1);
+        g.Children.Add(l);
+        g.Children.Add(ctl);
+        return g;
+    }
+
+    private Control MakeCheckbox(Table row, string id)
+    {
+        var v = row.Get("value");
+        bool b = v.Type == DataType.Boolean ? v.Boolean : (v.Type == DataType.String && string.Equals(v.String, "yes", StringComparison.OrdinalIgnoreCase));
+        var cb = new CheckBox { IsChecked = b, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+        if (id.Length > 0) { _getters[id] = () => cb.IsChecked == true; }
+        return cb;
+    }
+
+    private Control MakeSelect(Table row, string id)
+    {
+        var cb = new ComboBox { FontSize = 12, MinWidth = 150, HorizontalAlignment = HorizontalAlignment.Left };
+        var opts = row.Get("options").Table;
+        string cur = Str(row, "value");
+        int sel = 0;
+        if (opts is not null)
+        {
+            for (int i = 1; i <= opts.Length; i++)
+            {
+                string s = opts.Get(i).String ?? "";
+                cb.Items.Add(s);
+                if (s == cur) { sel = i - 1; }
+            }
+        }
+        if (cb.ItemCount > 0) { cb.SelectedIndex = sel; }
+        if (id.Length > 0) { _getters[id] = () => cb.SelectedItem?.ToString() ?? ""; }
+        return cb;
+    }
+
+    private Control MakeNumber(Table row, string id)
+    {
+        var nb = new NumericUpDown { FontSize = 12, Minimum = 0, Maximum = 1_000_000_000, Increment = 1, MinWidth = 130, HorizontalAlignment = HorizontalAlignment.Left };
+        try { nb.Value = (decimal)row.Get("value").Number; } catch { }
+        if (id.Length > 0) { _getters[id] = () => nb.Value.HasValue ? (double)nb.Value.Value : 0d; }
+        return nb;
+    }
+
+    /// <summary>时间选择器（24 小时制）—— 值格式 "HH:mm"。</summary>
+    private Control MakeTime(Table row, string id)
+    {
+        var tp = new TimePicker { FontSize = 12, ClockIdentifier = "24HourClock", HorizontalAlignment = HorizontalAlignment.Left };
+        var m = System.Text.RegularExpressions.Regex.Match(Str(row, "value"), "^([0-9]{1,2}):([0-9]{2})$");
+        if (m.Success)
+        {
+            try { tp.SelectedTime = new TimeSpan(int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value), 0); } catch { }
+        }
+        if (id.Length > 0) { _getters[id] = () => tp.SelectedTime is TimeSpan ts ? ts.ToString(@"hh\:mm") : ""; }
+        return tp;
+    }
+
+    /// <summary>日历式日期选择 —— 值格式 "yyyy-MM-dd"（用户明确要 MCSManager 那种日历效果）。</summary>
+    private Control MakeDate(Table row, string id)
+    {
+        var dp = new CalendarDatePicker { FontSize = 12, HorizontalAlignment = HorizontalAlignment.Left, Watermark = "点击选择日期" };
+        if (DateTime.TryParse(Str(row, "value"), out var dt)) { dp.SelectedDate = dt; }
+        if (id.Length > 0) { _getters[id] = () => dp.SelectedDate is DateTime d ? d.ToString("yyyy-MM-dd") : ""; }
+        return dp;
+    }
+
+    private Control MakeText(Table row, string id)
+    {
+        var tb = new TextBox { Text = Str(row, "value"), FontSize = 12, MinWidth = 220, HorizontalAlignment = HorizontalAlignment.Stretch };
+        if (id.Length > 0) { _getters[id] = () => tb.Text ?? ""; }
+        return tb;
+    }
+
+    /// <summary>可点选的列表（每项可带副标题；点击回调 action="select" 并把该项的 key 放进 values.clicked）。</summary>
+    private Control BuildList(Table row)
+    {
+        var sp = new StackPanel { Spacing = 3 };
+        var items = row.Get("items").Table;
+        if (items is null) { return sp; }
+        for (int i = 1; i <= items.Length; i++)
+        {
+            var it = items.Get(i).Table;
+            if (it is null) { continue; }
+            string text = Str(it, "text");
+            string sub = Str(it, "sub");
+            bool active = it.Get("active").Boolean;
+            string key = Str(it, "key");
+            var bord = new Border
+            {
+                Background = new SolidColorBrush(Color.Parse(active ? "#16233A" : "#14161C")),
+                BorderBrush = new SolidColorBrush(Color.Parse(active ? "#2D5A9E" : "#22242B")),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(10, 6, 10, 6),
+                Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
+            };
+            var inner = new StackPanel { Spacing = 1 };
+            inner.Children.Add(new TextBlock { Text = text, FontSize = 12, Foreground = new SolidColorBrush(Color.Parse(active ? "#DCE7F5" : "#B9C4D4")), TextTrimming = TextTrimming.CharacterEllipsis });
+            if (sub.Length > 0) { inner.Children.Add(new TextBlock { Text = sub, FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#7C8AA0")) }); }
+            bord.Child = inner;
+            string k = key.Length > 0 ? key : i.ToString();
+            bord.PointerPressed += (_, _) => FireAction("select", k);
+            sp.Children.Add(bord);
+        }
+        return sp;
+    }
+
+    private Control BuildButtons(Table row)
+    {
+        var sp = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 4, 0, 0) };
+        var items = row.Get("items").Table;
+        if (items is not null)
+        {
+            for (int i = 1; i <= items.Length; i++)
+            {
+                var it = items.Get(i).Table;
+                if (it is null) { continue; }
+                string text = Str(it, "text");
+                string action = Str(it, "action");
+                var b = new Button { Content = text, FontSize = 11.5, Padding = new Thickness(12, 5, 12, 5), CornerRadius = new CornerRadius(9) };
+                b.Click += (_, _) => FireAction(action, null);
+                sp.Children.Add(b);
+            }
+        }
+        return sp;
+    }
+
+    private void FireAction(string action, string? clicked = null)
     {
         if (_onAction is null) { return; }
         var values = new Table(_lua);
@@ -458,6 +550,7 @@ internal sealed class LuaScriptBridge
         {
             try { values[kv.Key] = DynValue.FromObject(_lua, kv.Value()); } catch { }
         }
+        if (clicked is not null) { values["clicked"] = clicked; }   // 列表项被点击时带上它的 key
         _ = Task.Run(() =>
         {
             try { CallLua(_onAction, DynValue.NewString(action), DynValue.NewTable(values)); }
@@ -474,6 +567,7 @@ internal sealed class LuaScriptBridge
         lock (_gate) { return _lua.Call(fn, args); }
     }
     private static string Block(Task<string> t) { try { return t.GetAwaiter().GetResult(); } catch (Exception ex) { return "[出错] " + ex.Message; } }
+    private static bool BlockOk(Task<bool> t) { try { return t.GetAwaiter().GetResult(); } catch (Exception ex) { return false; } }
     private static T Safe<T>(Func<T> f, T fallback) { try { return f(); } catch { return fallback; } }
 
     private double Number(DynValue fn)

@@ -11,7 +11,11 @@ namespace UTSLManager.Plugins;
 public static class ManagerApi
 {
     /// <summary>宿主当前实现的插件 API 版本。</summary>
-    public const int Version = 5;
+    public const int Version = 6;
+
+    /// <summary>v6：新增**服务端进程控制** —— ServerOnline / StartServerAsync / StopServerAsync
+    /// （起停需 exec 权限；走的是与管理器「启动/停止服务端」按钮同一条路径，远端=SSH/控制台启动器）。</summary>
+    public const int V6 = 6;
 
     /// <summary>v1：Name / Icon / Description / Author / OnLoad / CreateView。</summary>
     public const int V1 = 1;
