@@ -45,6 +45,8 @@ long stdoutSeq = 0;
 // ★ 这几个必须是【文件顶部】的顶层变量：顶层语句里被局部函数捕获的变量必须先声明，否则 CS0165。
 string _logPick = "";        // 最近一次选中的日志文件（缓存，避免每 150ms 枚举排序整个目录）
 long _logPickAtMs = 0;
+//   注意：顶层变量若要被局部函数捕获，必须带初始化器（否则 CS0165）。
+long _netSent = 0, _netRecv = 0, _netAtMs = 0;   // 网卡累计字节的 1 秒缓存（枚举一次 75~174ms，不值得每 2 秒做一次）
 // ★ JsonSerializerOptions 内部带序列化元数据缓存，每次请求 new 一个等于把缓存丢掉（.NET 有专门的分析器警告）。
 var jsonOpts = new JsonSerializerOptions { WriteIndented = false };
 long metricsCalls = 0;
@@ -212,6 +214,26 @@ async Task HandleAsync(TcpClient client)
 
 // ================= 指标 =================
 
+(long Sent, long Recv) NetTotalsCached()
+{
+    long nowMs = Environment.TickCount64;
+    if (_netAtMs > 0 && nowMs - _netAtMs < 1000) { return (_netSent, _netRecv); }
+    long s0 = 0, r0 = 0;
+    try
+    {
+        foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (ni.OperationalStatus != OperationalStatus.Up) { continue; }
+            if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) { continue; }
+            IPInterfaceStatistics st = ni.GetIPStatistics();
+            s0 += st.BytesSent; r0 += st.BytesReceived;
+        }
+    }
+    catch { }
+    _netSent = s0; _netRecv = r0; _netAtMs = nowMs;
+    return (s0, r0);
+}
+
 object CollectMetrics()
 {
     var now = DateTime.UtcNow;
@@ -249,18 +271,10 @@ object CollectMetrics()
     }
     cpuSingleCore = Math.Max(0, cpuSingleCore);
 
+    // ★ 网卡枚举实测 75~174ms/次（A 子代理数据），占 /metrics 118~186ms 的大头，而管理器每 2 秒就拉一次。
+    //   累计字节本来就要靠相邻采样差分，1 秒的缓存完全够用（快照之间有差分基准）。
     long sent = 0, recv = 0;
-    try
-    {
-        foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
-        {
-            if (ni.OperationalStatus != OperationalStatus.Up) { continue; }
-            if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) { continue; }
-            IPInterfaceStatistics st = ni.GetIPStatistics();
-            sent += st.BytesSent; recv += st.BytesReceived;
-        }
-    }
-    catch { }
+    (sent, recv) = NetTotalsCached();
 
     return new
     {
@@ -354,7 +368,10 @@ async Task StreamLogAsync(NetworkStream ns)
             using (FileStream fs = new(cur, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
             {
                 if (!tailDone) { pos = Math.Max(0, fs.Length - TailBytes); tailDone = true; }
-                if (fs.Length < pos) { pos = 0; pending.Clear(); }
+                if (fs.Length < pos) { pos = 0; }
+                // ★ 必须先清 pending：pos 只在一行读全时才前进，所以上一轮末尾那半行【下一轮会从 pos 再读到】。
+                //   不清就会把同一段半行重复追加 → 日志文本重复损坏（子代理已实测复现 PARTIALx6）。
+                pending.Clear();
                 fs.Seek(pos, SeekOrigin.Begin);
                 long abs = pos;
                 int n;
@@ -369,7 +386,12 @@ async Task StreamLogAsync(NetworkStream ns)
                             pending.Clear();
                             pos = abs;
                         }
-                        else { pending.Add(buf[i]); }
+                        else
+                        {
+                            // 保险：日志里若出现异常长的一"行"（没有换行），别把内存吃爆
+                            if (pending.Count < 4 * 1024 * 1024) { pending.Add(buf[i]); }
+                            else { await EmitLineAsync(ns, pending); pending.Clear(); pos = abs; }
+                        }
                     }
                 }
             }

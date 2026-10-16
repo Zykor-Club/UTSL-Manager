@@ -615,6 +615,8 @@ public partial class MainWindow : Window
     private static int samplesSeen;                   // 本机模式：首帧只记基线，避免"开机至今总CPU"假尖峰
     // ★ 服务端 /metrics 插件（MetricsChannel）—— 远端模式的实时指标来源（实测单次 98~147ms，可 2 秒级）
     private static double MetricsCpuPct, MetricsUpKbps, MetricsDownKbps, MetricsPrivateMB;
+    // 网卡累计字节的 3 秒缓存 + 上一次采样时间（用于算真实速率分母）—— 见 SampleMetrics 里的说明
+    private static long netCacheSent = 0, netCacheRecv = 0, netCacheAtMs = 0, lastBytesAtMs = 0;
     // （原来还声明了 MetricsGcMB / MetricsLogicalCpu / MetricsThreads / MetricsPlayers / MetricsWorlds，
     //   全仓只有赋值、没有读取 —— 已删，报表里那几行的解析也一并去掉）
     private static long MetricsAtMs;                  // 最近一次成功取值的时间
@@ -657,7 +659,10 @@ public partial class MainWindow : Window
                 "$e=Join-Path (Join-Path (Join-Path $b 'config') 'EdgeStitch') 'EdgeStitch.json'; if(Test-Path -LiteralPath $e){$o.e=[Convert]::ToBase64String([IO.File]::ReadAllBytes($e))}else{$o.e=''}; " +
                 "$o.r=@(Get-ChildItem -LiteralPath $b -ErrorAction SilentlyContinue|ForEach-Object{ $(if($_.PSIsContainer){'D'}else{'F'})+'|'+$_.Length+'|'+$_.LastWriteTime.ToString('o')+'|'+$_.Name }); " +
                 "$md=Join-Path (Join-Path $b 'GenerateMap') 'Images'; $o.m=@(if(Test-Path -LiteralPath $md){Get-ChildItem -LiteralPath $md -Filter *.png -ErrorAction SilentlyContinue|ForEach-Object{'F|'+$_.Length+'|'+$_.LastWriteTime.ToString('o')+'|'+$_.Name}}); " +
-                "$o.d=[ordered]@{}; foreach($n in @('config','Worlds','ServerPlugins','logs')){ $p=Join-Path $b $n; if(Test-Path -LiteralPath $p){ $o.d[$n]=@(Get-ChildItem -LiteralPath $p -ErrorAction SilentlyContinue|ForEach-Object{ $(if($_.PSIsContainer){'D'}else{'F'})+'|'+$_.Length+'|'+$_.LastWriteTime.ToString('o')+'|'+$_.Name }) } }; " +
+                // ★ 预热目录必须写【管理器真正读的】相对路径：原来写的是根上的 'Worlds'/'ServerPlugins'，
+                //   而真实世界在 lib\Saves\Worlds（根上的 Worlds 是另一回事）、ServerPlugins 这个目录根本不存在
+                //   → 快照等于白做，文件管理页/世界相关缓存仍然各自走一趟 ssh。
+                "$o.d=[ordered]@{}; foreach($n in @('config','lib\\Saves\\Worlds','lib\\Saves\\Worlds\\_utpl_templates','logs','plugins')){ $p=Join-Path $b $n; if(Test-Path -LiteralPath $p){ $o.d[$n]=@(Get-ChildItem -LiteralPath $p -ErrorAction SilentlyContinue|ForEach-Object{ $(if($_.PSIsContainer){'D'}else{'F'})+'|'+$_.Length+'|'+$_.LastWriteTime.ToString('o')+'|'+$_.Name }) } }; " +
                 "$u=Get-Process UnifierTSL -ErrorAction SilentlyContinue|Select-Object -First 1; " +
                 "if($u){$o.uc=[long]$u.TotalProcessorTime.TotalMilliseconds;$o.um=[long]$u.PrivateMemorySize64}else{$o.uc=-1;$o.um=0}; " +
                 "$ns=0;$nr=0; foreach($ni in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()){ " +
@@ -810,6 +815,13 @@ public partial class MainWindow : Window
         if (_fileBackend is CachedFileBackend c) { c.InvalidateCache(); }
     }
 
+    /// <summary>只失效某个路径（+ 它所在目录的列表）。★ 上传/写文件后用这个：
+    /// 原来用 FsInvalidate()（整张清空）会把 45 秒合并快照刚预热好的缓存全部丢掉，之后每个页面又各走一趟 ssh。</summary>
+    private static void FsInvalidatePath(string path)
+    {
+        if (_fileBackend is CachedFileBackend c) { c.InvalidatePath(path); }
+    }
+
     private static List<FsEntry> FsList(string dir) => FileBackend.List(dir).ToList();
     private static bool FsExists(string path) => FileBackend.Exists(path);
     private static string FsReadText(string path) => FileBackend.ReadText(path);
@@ -821,10 +833,13 @@ public partial class MainWindow : Window
     /// <summary>本地 → 远端（scp；远端路径用 /C:/ 形式）</summary>
     private static bool FsUpload(string localPath, string remotePath)
     {
-        FsInvalidate();
+        FsInvalidatePath(remotePath);
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo("scp") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            // ★ 不重定向 stdout/stderr：scp 的进度是往 stderr 刷的，管道写满就会阻塞子进程，
+            //   而我们这里的循环只 WaitForExit、从不读管道 → 上传会一直卡到 600 秒超时（A 子代理实测指出）。
+            //   这里只关心退出码，不重定向即可（上传进度本来就是按"本地文件大小 + 已用时间"估的）。
+            var psi = new System.Diagnostics.ProcessStartInfo("scp") { UseShellExecute = false, CreateNoWindow = true };
             psi.ArgumentList.Add("-i"); psi.ArgumentList.Add(SshKey);
             psi.ArgumentList.Add("-P"); psi.ArgumentList.Add(SshPort.ToString());
             psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("BatchMode=yes");
@@ -854,7 +869,8 @@ public partial class MainWindow : Window
     {
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo("scp") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            // ★ 同上：不重定向（否则 stderr 写满会卡死下载循环，只能等 180 秒超时）
+            var psi = new System.Diagnostics.ProcessStartInfo("scp") { UseShellExecute = false, CreateNoWindow = true };
             psi.ArgumentList.Add("-i"); psi.ArgumentList.Add(SshKey);
             psi.ArgumentList.Add("-P"); psi.ArgumentList.Add(SshPort.ToString());
             psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("BatchMode=yes");
@@ -1458,6 +1474,7 @@ public partial class MainWindow : Window
         AgentClient.Alive = ok; AgentClient.Base = want;   // ★ 同步给文件通道（P1：上传/下载走 agent，带真实进度）
         AgentClient.Token = DirectReady ? DirectToken : ""; // 直连模式带上令牌
         AgentClient.ResetRoot();                            // base 变了 → agent 根缓存失效
+        if (ok) { AgentClient.RefreshRoot(); }               // 在【后台】抓 /ping 的 root（RemoteRoot 现在是纯字段读，不再阻塞调用线程）
         AgentHttp.DefaultRequestHeaders.Authorization = AgentClient.Token.Length > 0
             ? new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", AgentClient.Token) : null;
         if (ok)
@@ -1929,23 +1946,36 @@ public partial class MainWindow : Window
                 if (samplesSeen > 0) { PushCarry(cpuHist, 0); PushCarry(memHist, null); PushCarry(upHist, null); PushCarry(downHist, null); }
             }
 
+            // ★ 网卡枚举实测 75~174ms/次（A 子代理数据），是 UI 线程每 2 秒那 100~225ms 的大头。
+            //   累计字节本来就要靠相邻采样差分，所以给它几秒缓存；速率按【真实经过时间】算（见下面 netSecs），
+            //   因此缓存不会让速率被高估。
             long sent = 0, recv = 0;
-            try
+            long nowMs2 = Environment.TickCount64;
+            if (netCacheAtMs == 0 || nowMs2 - netCacheAtMs > 3000)
             {
-                foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+                long s0 = 0, r0 = 0;
+                try
                 {
-                    if (ni.OperationalStatus != OperationalStatus.Up) { continue; }
-                    if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) { continue; }   // 回环不计（避免隧道流量重复计）
-                    var st = ni.GetIPStatistics();
-                    sent += st.BytesSent; recv += st.BytesReceived;
+                    foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+                    {
+                        if (ni.OperationalStatus != OperationalStatus.Up) { continue; }
+                        if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) { continue; }   // 回环不计（避免隧道流量重复计）
+                        var st = ni.GetIPStatistics();
+                        s0 += st.BytesSent; r0 += st.BytesReceived;
+                    }
                 }
+                catch { }
+                netCacheSent = s0; netCacheRecv = r0; netCacheAtMs = nowMs2;
             }
-            catch { }
+            sent = netCacheSent; recv = netCacheRecv;
             // ★ 首帧只记基线：否则第一帧 = 网卡开机至今的总字节 → 假尖峰（曾出现 18823250 这种天文数字）
+            // 速率用【这一次网卡采样与上一次之间的真实时间】做分母（配合上面的 3 秒缓存，避免高估）
+            double netSecs = lastBytesAtMs > 0 ? Math.Max(0.5, (nowMs2 - lastBytesAtMs) / 1000.0) : secs;
+            lastBytesAtMs = nowMs2;
             if (lastBytesSeen && samplesSeen > 0)
             {
-                up = Math.Max(0, (sent - lastBytesSent) / 1024.0 / secs);
-                down = Math.Max(0, (recv - lastBytesRecv) / 1024.0 / secs);
+                up = Math.Max(0, (sent - lastBytesSent) / 1024.0 / netSecs);
+                down = Math.Max(0, (recv - lastBytesRecv) / 1024.0 / netSecs);
                 PushCarry(upHist, up); PushCarry(downHist, down);
                 NetNow.Text = $"↑ {up:F2}  ↓ {down:F2} KB/s";
             }

@@ -191,6 +191,9 @@ public sealed class CachedFileBackend(IFileBackend inner, int ttlMs = 90_000) : 
     {
         lock (_gate)
         {
+            // ★ 单飞用的每键锁也必须配上限：_memo 有 512 条上限，而 _keyGates 原来只增不减
+            //   （长时间浏览文件页会持续堆积小对象）。到上限就整体清掉，最坏退化成"某次并发首读多打一趟 IO"。
+            if (_keyGates.Count >= MaxEntries && !_keyGates.ContainsKey(key)) { _keyGates.Clear(); }
             if (!_keyGates.TryGetValue(key, out object? g)) { g = new object(); _keyGates[key] = g; }
             return g;
         }

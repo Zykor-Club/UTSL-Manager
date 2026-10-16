@@ -33,6 +33,9 @@ public static class AgentClient
         var t = new TcpClient { NoDelay = true };
         // ★ 同 agent 侧：链路 RTT 约 200 ms，缓冲太小会把吞吐压到 ~0.3 MB/s
         try { t.ReceiveBufferSize = 4 * 1024 * 1024; t.SendBufferSize = 4 * 1024 * 1024; } catch { }
+        // ★ 必须设收发超时：原来一个都没设，对端假死（隧道断了但 socket 还在）时 ns.Read/Write 会阻塞到 TCP 层
+        //   自己超时（可达数分钟），期间"取消传输"按钮完全无效（cancelled 只在每次 Write 之前检查）。
+        try { t.ReceiveTimeout = 15000; t.SendTimeout = 30000; } catch { }
         t.Connect(uri.Host, uri.Port);
         ns = t.GetStream();
         return t;
@@ -198,22 +201,26 @@ public static class AgentClient
 
     static string _root = "";
 
-    /// <summary>agent 的部署根（直连模式下它就是文件路径的基准）。带缓存，从 /ping 取（认证后才有）。</summary>
-    public static string RemoteRoot
+    /// <summary>
+    /// agent 的部署根（直连模式下文件路径的基准）。
+    /// ★ 刻意做成【不阻塞】的纯字段读：原来未命中缓存时会在这里同步发一次 HTTP（60 秒超时），
+    ///   而调用点是 FileBackend getter（可能在 UI 线程或持锁路径上）。
+    ///   现在由 TickAgentAsync 在后台探活时调 RefreshRoot() 填好；没填到就是空串，
+    ///   而管理器传的路径都是绝对的（绝对路径在 agent 的 ResolveSafe 里依旧受根目录约束），功能不受影响。
+    /// </summary>
+    public static string RemoteRoot => _root;
+
+    /// <summary>后台（TickAgentAsync 里）调用：把 /ping 的 root 抓回来。</summary>
+    public static void RefreshRoot()
     {
-        get
+        try
         {
-            if (_root.Length > 0) { return _root; }
-            try
-            {
-                string? s = GetText("/ping");
-                if (s is null) { return ""; }
-                using var doc = System.Text.Json.JsonDocument.Parse(s);
-                _root = doc.RootElement.TryGetProperty("root", out var r) ? (r.GetString() ?? "") : "";
-            }
-            catch { }
-            return _root;
+            string? s = GetText("/ping");
+            if (s is null) { return; }
+            using var doc = System.Text.Json.JsonDocument.Parse(s);
+            _root = doc.RootElement.TryGetProperty("root", out var r) ? (r.GetString() ?? "") : "";
         }
+        catch { }
     }
 
     /// <summary>切换 base 时清掉根缓存（换机器了）。</summary>

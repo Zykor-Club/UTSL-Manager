@@ -59,7 +59,12 @@ public sealed class PluginPermissionException : Exception
 public sealed class PluginHost
 {
     internal PluginHostOptions Options { get; }
-    internal HttpClient Http { get; } = new() { Timeout = TimeSpan.FromSeconds(15) };
+    /// <summary>插件用的 HTTP 客户端。★ 必须禁用代理：插件拿它打的多是 127.0.0.1（本机 REST / 隧道），
+    /// 而用户机器若设了系统代理/HTTP_PROXY，请求会被代理劫持而失败（管理器自己的 NewLocalHttp 就是因此禁的，同机实测过）。</summary>
+    internal HttpClient Http { get; } = new(new System.Net.Http.SocketsHttpHandler { UseProxy = false })
+    {
+        Timeout = TimeSpan.FromSeconds(15),
+    };
     internal IReadOnlyCollection<string> HostAssemblies { get; }
 
     private readonly List<LoadedPlugin> _plugins = [];
