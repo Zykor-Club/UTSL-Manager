@@ -60,13 +60,24 @@ MyPlugin/
     <!-- 编译期需要 Avalonia 界面类型；版本必须与宿主一致 -->
     <PackageReference Include="Avalonia" Version="12.1.2" />
 
-    <!-- ★ 管理器契约。Private=false 必须要有：
-         运行时用管理器已加载的那一份 UTSLManager.dll；
-         复制出第二份会让类型标识不一致，管理器认不出你的插件（且不一定报错）。-->
+    <!-- ★ P0 起：插件只需引用【契约程序集】（约 26KB）。命名空间仍是 UTSLManager.Plugins，using 不用改。
+         Private=false 必须要有：运行时用管理器已加载的那一份；
+         复制出第二份会让类型标识不一致，管理器认不出你的插件（且不一定报错）。 -->
+    <Reference Include="UTSLManager.Plugin.Abstractions">
+      <HintPath>$(ManagerDir)\UTSLManager.Plugin.Abstractions.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- 只有需要调用宿主的地图/渲染等公开 API（UTSLManager.Maps.*）时才再引管理器本体；
+         纯动作 / 服务 / 面板插件不需要它。参考 extensions\MapTemplates（两个都引）。
+         ★ 顺带说明：管理器里保留了 TypeForwardedTo，所以【按旧版 UTSLManager.dll 编译的插件 dll 无需重编】
+           也能继续加载 —— 老插件不会因为这次拆分而失效。 -->
+    <!--
     <Reference Include="UTSLManager">
       <HintPath>$(ManagerDir)\UTSLManager.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    -->
   </ItemGroup>
 
   <!-- 可选：构建后自动部署（管理器在跑时文件被占用 → 只警告、不让 build 失败）-->
