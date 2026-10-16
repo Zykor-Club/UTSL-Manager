@@ -7,11 +7,11 @@
   为什么自包含：被管机器上通常没有 .NET 10（实测远端只有 .NET 9），框架依赖版跑不起来。
 
 .EXAMPLE
-  ./scripts/publish-agent.ps1                       # 输出到仓库上两级\AvaloniaUTSL\agent\
+  ./scripts/publish-agent.ps1                       # 输出到仓库上两级（相对工程目录；本脚本在 scripts/ 下，所以是三层 ..）\AvaloniaUTSL\agent\
   ./scripts/publish-agent.ps1 -ManagerDir D:\app   # 指定管理器目录
 #>
 param(
-    [string]$ManagerDir = (Join-Path $PSScriptRoot "..\..\AvaloniaUTSL")
+    [string]$ManagerDir = (Join-Path $PSScriptRoot "..\..\..\AvaloniaUTSL")
 )
 
 $ErrorActionPreference = "Stop"
