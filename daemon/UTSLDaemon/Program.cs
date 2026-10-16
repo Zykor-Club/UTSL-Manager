@@ -95,6 +95,8 @@ async Task HandleAsync(TcpClient client)
         }
         catch (Exception ex)
         {
+            // 客户端正常断开（SSE 取消订阅、curl 超时等）不该当错误刷屏
+            if (ex is IOException || ex.InnerException is IOException) { return; }
             Console.WriteLine("[UTSLDaemon] 处理失败: " + ex.Message);
         }
     }
@@ -182,12 +184,20 @@ object? NewestLogInfo()
 }
 
 // ================= 日志流（SSE）=================
+//   ★ 两个实测踩过的坑：
+//   1. 偏移记账必须用【绝对偏移】。最初写 consumed += i + 1，而 i 只是当前读块内的下标，
+//      导致 pos 推进错误 → 同一批日志被反复重发 → 管理器控制台"一直抽搐"。
+//   2. 必须按 UTF-8 解码【完整行】。最初逐字节 (char)b，等于 Latin-1 → 中文全变乱码；
+//      文件开头的 BOM 也要去掉，否则首行多出不可见字符。
 async Task StreamLogAsync(NetworkStream ns)
 {
     await WriteRawAsync(ns, "HTTP/1.1 200 OK", "text/event-stream", [], keepAlive: true, extraHeaders: "Cache-Control: no-cache\r\nX-Accel-Buffering: no\r\n");
     string cur = "";
     long pos = 0;
+    const int TailBytes = 64 * 1024;
+    bool tailDone = false;
     byte[] buf = new byte[64 * 1024];
+    var pending = new List<byte>(4096);
     long lastBeat = Environment.TickCount64;
 
     while (true)
@@ -202,33 +212,34 @@ async Task StreamLogAsync(NetworkStream ns)
         }
         if (f.FullName != cur)
         {
-            cur = f.FullName; pos = 0;
+            cur = f.FullName;
+            tailDone = false;
+            pending.Clear();
             await WriteAsync(ns, "event: file\ndata: " + f.Name + "\n\n");
         }
         try
         {
             using (FileStream fs = new(cur, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
             {
-                if (fs.Length < pos) { pos = 0; }
+                if (!tailDone) { pos = Math.Max(0, fs.Length - TailBytes); tailDone = true; }
+                if (fs.Length < pos) { pos = 0; pending.Clear(); }
                 fs.Seek(pos, SeekOrigin.Begin);
-                var sb = new StringBuilder();
+                long abs = pos;
                 int n;
-                long consumed = pos;
                 while ((n = fs.Read(buf, 0, buf.Length)) > 0)
                 {
                     for (int i = 0; i < n; i++)
                     {
-                        if (buf[i] == (byte)'\n')
+                        abs++;
+                        if (buf[i] == 10)
                         {
-                            string line = sb.ToString().TrimEnd('\r');
-                            sb.Clear();
-                            if (line.Length > 0) { await WriteAsync(ns, "data: " + line + "\n\n"); }
-                            consumed += i + 1;      // ★ 只把"完整行"算作已消费，半行留到下次
+                            await EmitLineAsync(ns, pending);
+                            pending.Clear();
+                            pos = abs;
                         }
-                        else { sb.Append((char)buf[i]); }
+                        else { pending.Add(buf[i]); }
                     }
                 }
-                pos = consumed;
             }
         }
         catch (Exception ex)
@@ -240,6 +251,19 @@ async Task StreamLogAsync(NetworkStream ns)
         if (Environment.TickCount64 - lastBeat > 15000) { await WriteAsync(ns, ": beat\n\n"); lastBeat = Environment.TickCount64; }
         await Task.Delay(150);
     }
+}
+
+/// <summary>把一行（字节）按 UTF-8 解码后推给订阅方；顺手去掉开头的 BOM。</summary>
+async Task EmitLineAsync(NetworkStream ns, List<byte> raw)
+{
+    int start = 0, count = raw.Count;
+    if (count >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) { start = 3; count -= 3; }
+    if (count <= 0) { return; }
+    byte[] arr = new byte[count];
+    raw.CopyTo(start, arr, 0, count);
+    string line = Encoding.UTF8.GetString(arr).TrimEnd('\r');
+    if (line.Length == 0) { return; }
+    await WriteAsync(ns, "data: " + line + "\n\n");
 }
 
 // ================= 极简 HTTP 工具 =================
