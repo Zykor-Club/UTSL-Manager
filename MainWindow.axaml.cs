@@ -2608,6 +2608,38 @@ public partial class MainWindow : Window
     private void OnShowMaint(object? sender, RoutedEventArgs e) => ShowView("maint");
 
     // ===== 连接设置：本机管理 / 远端管理 两张卡片 + 模式切换 =====
+    /// <summary>
+    /// 模式切换（本机 ↔ 远端）后，把【与"管哪台机器"相关】的缓存与视图全部重置并重取。
+    /// ★ 后端本身会自动重建（FileBackend 里比较 IsRemote/Root），但界面上的数据是各页面各自缓存的：
+    ///   世界列表、日志游标、文件页当前目录、配置对象、指标/快照基准、agent 连接……
+    ///   不重置就会出现"切了模式，控制台/文件/配置还是旧那台的内容"（用户实测反馈）。
+    /// </summary>
+    private void AfterModeSwitch()
+    {
+        // 1) 与"哪台机器"相关的游标 / 缓存对象
+        lastLogFile = ""; lastRemoteLine = ""; logPos = 0; lastRemoteLogMs = 0;
+        fileCwd = FsRoot;                        // 文件页回到新后端的根
+        lastWorldRel = "";                       // 地图：下次重新解析、导出目标失效
+        cfgLauncher = null; cfgEdge = null;      // 配置页：丢掉旧机器读出来的配置对象
+        SnapPrevAtMs = 0; SnapshotAtMs = 0; SnapPrevCpuMs = -1; SnapshotProcs = 0;
+        MetricsAtMs = 0; AgentMetricsAtMs = 0; AgentSentBytes = -1; AgentRecvBytes = -1;
+        RestAlive = false; dotsInit = false;     // 状态灯重判
+        if (_fileBackend is CachedFileBackend c) { c.InvalidateCache(); }
+        // 2) agent 立刻重探：它会按新的 base 重启 日志/stdout/指标 三条流（原来是等最多 20 秒的定时器）
+        _ = Task.Run(() => TickAgentAsync());
+        // 3) 重取共享数据
+        _ = RefreshWorldsAsync();
+        RefreshLog();
+        _ = Task.Run(() => RefreshSnapshot());
+        // 4) 当前正在看的页面就地重刷（否则得手动切走再切回来）
+        try
+        {
+            if (PluginsView.IsVisible) { ShowFiles(); }                      // 文件管理页
+            if (ConfigView.IsVisible) { OnShowConfig(null, new RoutedEventArgs()); }   // 配置页
+        }
+        catch { }
+    }
+
     private void OnShowConn(object? sender, RoutedEventArgs e)
     {
         // ★ 先切页面再填内容：填充过程万一抛异常，页面本身仍然打得开（错误由下面的 catch 报到控制台）。
@@ -2626,7 +2658,7 @@ public partial class MainWindow : Window
                 host.Children.Add(sp);
                 return tb;
             }
-            Border Card(string title, string sub, out StackPanel body)
+            Border Card(string title, string sub, out StackPanel body, out TextBlock badge)
             {
                 var inner = new StackPanel { Spacing = 4 };
                 inner.Children.Add(new TextBlock { Text = title, FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = new SolidColorBrush(Color.Parse("#E6E6EA")) });
@@ -2634,6 +2666,9 @@ public partial class MainWindow : Window
                 {
                     inner.Children.Add(new TextBlock { Text = sub, FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#8A8A90")), TextWrapping = Avalonia.Media.TextWrapping.Wrap, Margin = new Avalonia.Thickness(0, 0, 0, 4) });
                 }
+                // 「✓ 当前正在使用」徽标：两张卡片都常驻显示，用它 + 边框色指出当前模式
+                badge = new TextBlock { Text = "✓ 当前正在使用", FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#0A84FF")), IsVisible = false, Margin = new Avalonia.Thickness(0, 2, 0, 2) };
+                inner.Children.Add(badge);
                 body = new StackPanel { Spacing = 2 };
                 inner.Children.Add(body);
                 return new Border
@@ -2669,8 +2704,8 @@ public partial class MainWindow : Window
             };
             ConnHostPanel.Children.Add(modeSwitch);
 
-            var cardLocal = Card("本机管理", "直接读写本机 UTSL 目录、本机启停进程、本机日志。REST 三项在远端模式下表示【隧道本地端】的地址。", out StackPanel bodyLocal);
-            var cardRemote = Card("远端管理", "控制面走 SSH，数据面走同一条 SSH 隧道（REST + 云端 agent 两条转发）。", out StackPanel bodyRemote);
+            Border cardLocal = Card("本机管理", "直接读写本机 UTSL 目录、本机启停进程、本机日志。REST 三项在远端模式下表示【隧道本地端】的地址。", out StackPanel bodyLocal, out TextBlock badgeLocal);
+            Border cardRemote = Card("远端管理", "控制面走 SSH，数据面走同一条 SSH 隧道（REST + 云端 agent 两条转发）；也可以改成 agent 直连。", out StackPanel bodyRemote, out TextBlock badgeRemote);
             ConnHostPanel.Children.Add(cardLocal);
             ConnHostPanel.Children.Add(cardRemote);
 
@@ -2712,12 +2747,14 @@ public partial class MainWindow : Window
             //   再 Add 到 ConnHostPanel 会因为"控件已有父级"抛异常 —— 而 ShowView 原本在方法最后，
             //   于是整个连接设置页都打不开（这就是本次回归的原因）。它一直显示在页面顶部，直接改 Text 即可。
 
-            // ---- 模式切换：只显示当前模式那张卡片 ----
+            // ---- 模式切换：两张卡片都常驻显示，只标出当前正在使用的那张 ----
             void ApplyMode()
             {
                 bool remoteOn = modeSwitch.IsChecked == true;
-                cardLocal.IsVisible = !remoteOn;
-                cardRemote.IsVisible = remoteOn;
+                cardLocal.BorderBrush = new SolidColorBrush(Color.Parse(remoteOn ? "#2A2A30" : "#0A84FF"));
+                cardRemote.BorderBrush = new SolidColorBrush(Color.Parse(remoteOn ? "#0A84FF" : "#2A2A30"));
+                badgeLocal.IsVisible = !remoteOn;
+                badgeRemote.IsVisible = remoteOn;
             }
             modeSwitch.IsCheckedChanged += (_, _) =>
             {
@@ -2732,10 +2769,9 @@ public partial class MainWindow : Window
                 SaveConn();
                 if (UseRemote) { EnsureTunnel(); }
                 ConnInfo.Text = UseRemote
-                    ? $"已切换到远端管理 · SSH {SshUser}@{SshHost}:{SshPort} → {RemoteDir}"
-                    : "已切换到本机管理";
-                _ = RefreshWorldsAsync();
-                RefreshLog();
+                    ? $"已切换到远端管理 · SSH {SshUser}@{SshHost}:{SshPort} → {RemoteDir} —— 正在刷新各页面…"
+                    : $"已切换到本机管理（{LocalDir}）—— 正在刷新各页面…";
+                AfterModeSwitch();
             };
             ApplyMode();
 
@@ -2768,6 +2804,7 @@ public partial class MainWindow : Window
                 RemoteRestPort = int.TryParse(tbRestPort.Text, out int rp) && rp > 0 ? rp : 7878;
                 // 保存后按"开关 + 是否填了 SSH"重新判定模式：开关指向远端但没填全 → 仍是本机，并明确提示
                 bool wantRemote = modeSwitch.IsChecked == true;
+                bool modeChanged = ForceLocal != !wantRemote || UseRemote != wantRemote;
                 ForceLocal = !wantRemote;
                 SaveConn();
                 if (UseRemote) { EnsureTunnel(); }
@@ -2776,8 +2813,9 @@ public partial class MainWindow : Window
                     : wantRemote
                         ? "已保存，但 SSH 主机/密钥为空 → 仍按【本机管理】运行"
                         : $"已保存并应用 · 本机模式（{LocalDir}）";
-                _ = RefreshWorldsAsync();
-                RefreshLog();
+                // 模式真的变了（或后端根目录变了）就刷新各页面，否则只是保存字段
+                if (modeChanged || _fileBackend is null) { AfterModeSwitch(); }
+                else { _ = RefreshWorldsAsync(); RefreshLog(); }
             };
 
             // ---- 行为：自动检测（读本机 TShock 配置）----
