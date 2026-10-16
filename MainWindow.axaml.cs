@@ -494,23 +494,30 @@ public partial class MainWindow : Window
 
     // ===== 统一文件访问：本机直连 / 远端 SSH，统一由 IFileBackend 提供（本文件不再分叉）=====
     private static IFileBackend? _fileBackend;
+    /// <summary>后端懒加载的互斥锁。★ UI 线程（构造流程）与后台线程（快照预热/页面加载）会同时首次触达，
+    /// 原来无锁 → 可能各 new 一个装饰器，后写者覆盖字段，而先返回的调用方继续用「落选」实例；
+    /// 落选实例的 90 秒缓存再也清不掉（FsInvalidate 只清字段上那一个）→ 上传/保存后目录列表仍是旧的。</summary>
+    private static readonly object BackendGate = new();
 
     /// <summary>连接配置重载（本机/远端切换或根目录变化）时自动重建后端。</summary>
     private static IFileBackend FileBackend
     {
         get
         {
-            // 直连模式：文件操作全走 agent 的 HTTP 端点（没有 ssh）；根取 agent 的部署根
-            bool direct = DirectReady;
-            string root = direct ? AgentClient.RemoteRoot : UseRemote ? RemoteDir : LocalDir;
-            var b = _fileBackend;
-            if (b is null || b.IsRemote != (UseRemote || direct) || b.Root != root || _lastDirect != direct)
+            lock (BackendGate)
             {
-                b = new CachedFileBackend(direct ? new AgentFileBackend(root)
-                    : UseRemote ? new RemoteFileBackend(new UtslSshTransport(), root) : new LocalFileBackend(root));
-                _fileBackend = b; _lastDirect = direct;
+                // 直连模式：文件操作全走 agent 的 HTTP 端点（没有 ssh）；根取 agent 的部署根
+                bool direct = DirectReady;
+                string root = direct ? AgentClient.RemoteRoot : UseRemote ? RemoteDir : LocalDir;
+                var b = _fileBackend;
+                if (b is null || b.IsRemote != (UseRemote || direct) || b.Root != root || _lastDirect != direct)
+                {
+                    b = new CachedFileBackend(direct ? new AgentFileBackend(root)
+                        : UseRemote ? new RemoteFileBackend(new UtslSshTransport(), root) : new LocalFileBackend(root));
+                    _fileBackend = b; _lastDirect = direct;
+                }
+                return b;
             }
-            return b;
         }
     }
 

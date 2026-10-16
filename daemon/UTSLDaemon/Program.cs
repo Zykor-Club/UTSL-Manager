@@ -42,6 +42,11 @@ const int StdoutRingMax = 4000;
 // ★ 入队总序号（绝对游标）。环形缓冲满时从队首丢弃；若消费者用数组下标当游标，
 //   长度恒为 4000 → 下标永远追不上 → stdout 流会永久静默。序号才是可靠的进度标识。
 long stdoutSeq = 0;
+// ★ 这几个必须是【文件顶部】的顶层变量：顶层语句里被局部函数捕获的变量必须先声明，否则 CS0165。
+string _logPick = "";        // 最近一次选中的日志文件（缓存，避免每 150ms 枚举排序整个目录）
+long _logPickAtMs = 0;
+// ★ JsonSerializerOptions 内部带序列化元数据缓存，每次请求 new 一个等于把缓存丢掉（.NET 有专门的分析器警告）。
+var jsonOpts = new JsonSerializerOptions { WriteIndented = false };
 long metricsCalls = 0;
 long pingCalls = 0;
 long lastPingLog = 0;        // 实际绑定到的端口（--selftest 用 0 让系统分配，避免撞上别的程序）
@@ -213,32 +218,34 @@ object CollectMetrics()
     double secs = Math.Max(0.05, (now - _prevAt).TotalSeconds);
     _prevAt = now;
 
-    List<Process> procs = [];
-    foreach (Process p in Process.GetProcessesByName("UnifierTSL"))
-    {
-        try { if (!p.HasExited) { procs.Add(p); } } catch { }
-    }
-
+    // ★ 原来把 Process 收进 List 后一直不 Dispose：Process 实现 IDisposable，HasExited/TotalProcessorTime/
+    //   Threads/HandleCount 都会 OpenProcess 并缓存句柄。管理器每 2 秒拉一次 /metrics → 句柄只能等 GC 终结器，
+    //   高负载下（GC 间隔大）会持续上涨。现在一个循环内取完所需数值并立即释放。
     double cpuSingleCore = 0;
     long privBytes = 0, workBytes = 0;
-    int threads = 0, handles = 0, pid = 0;
-    foreach (Process p in procs)
+    int threads = 0, handles = 0, pid = 0, procCount = 0;
+    foreach (Process p in Process.GetProcessesByName("UnifierTSL"))
     {
-        try
+        using (p)
         {
-            p.Refresh();
-            pid = p.Id;
-            if (_prevCpu.TryGetValue(p.Id, out TimeSpan prev))
+            try
             {
-                cpuSingleCore += (p.TotalProcessorTime - prev).TotalMilliseconds / (secs * 1000) * 100.0;
+                if (p.HasExited) { continue; }
+                procCount++;
+                p.Refresh();
+                pid = p.Id;
+                if (_prevCpu.TryGetValue(p.Id, out TimeSpan prev))
+                {
+                    cpuSingleCore += (p.TotalProcessorTime - prev).TotalMilliseconds / (secs * 1000) * 100.0;
+                }
+                _prevCpu[p.Id] = p.TotalProcessorTime;
+                privBytes += p.PrivateMemorySize64;
+                workBytes += p.WorkingSet64;
+                threads += p.Threads.Count;
+                handles += p.HandleCount;
             }
-            _prevCpu[p.Id] = p.TotalProcessorTime;
-            privBytes += p.PrivateMemorySize64;
-            workBytes += p.WorkingSet64;
-            threads += p.Threads.Count;
-            handles += p.HandleCount;
+            catch { }
         }
-        catch { }
     }
     cpuSingleCore = Math.Max(0, cpuSingleCore);
 
@@ -262,8 +269,8 @@ object CollectMetrics()
         cores = Environment.ProcessorCount,
         server = new
         {
-            running = procs.Count > 0,
-            processes = procs.Count,
+            running = procCount > 0,
+            processes = procCount,
             pid,
             cpuSingleCorePct = Math.Round(cpuSingleCore, 2),
             privateMB = Math.Round(privBytes / 1048576.0, 1),
@@ -279,11 +286,31 @@ object CollectMetrics()
     };
 }
 
+// ★ 日志文件缓存：/stream/log 每 150ms、/metrics 每 2 秒都要"取最新日志"，原来每次都是
+//   "枚举整个 logs 目录 + 按时间排序 + 构造 FileInfo" 的重活（轮转文件多时就是持续空转的 CPU）。
+//   现在 5 秒内复用同一个结果；缓存路径每轮检查是否还存在，文件被删/轮转立刻重新枚举。
+FileInfo? PickNewestLog()
+{
+    long nowMs = Environment.TickCount64;
+    if (_logPick.Length > 0 && nowMs - _logPickAtMs < 5000)
+    {
+        try { var cached = new FileInfo(_logPick); if (cached.Exists) { return cached; } } catch { }
+    }
+    try
+    {
+        FileInfo? f = new DirectoryInfo(logsDir).GetFiles("*.log").OrderByDescending(x => x.LastWriteTime).FirstOrDefault();
+        _logPick = f?.FullName ?? "";
+        _logPickAtMs = nowMs;
+        return f;
+    }
+    catch { _logPick = ""; _logPickAtMs = nowMs; return null; }
+}
+
 object? NewestLogInfo()
 {
     try
     {
-        FileInfo? f = new DirectoryInfo(logsDir).GetFiles("*.log").OrderByDescending(x => x.LastWriteTime).FirstOrDefault();
+        FileInfo? f = PickNewestLog();
         return f is null ? null : new { name = f.Name, bytes = f.Length, at = new DateTimeOffset(f.LastWriteTimeUtc).ToUnixTimeMilliseconds() };
     }
     catch { return null; }
@@ -308,8 +335,7 @@ async Task StreamLogAsync(NetworkStream ns)
 
     while (true)
     {
-        FileInfo? f = null;
-        try { f = new DirectoryInfo(logsDir).GetFiles("*.log").OrderByDescending(x => x.LastWriteTime).FirstOrDefault(); } catch { }
+        FileInfo? f = PickNewestLog();
         if (f is null)
         {
             if (Environment.TickCount64 - lastBeat > 15000) { await WriteAsync(ns, ": no-log-dir\n\n"); lastBeat = Environment.TickCount64; }
@@ -696,7 +722,7 @@ async Task<string?> ReadLineAsync(NetworkStream ns)
 
 async Task WriteJsonAsync(NetworkStream ns, object payload)
 {
-    byte[] body = JsonSerializer.SerializeToUtf8Bytes(payload, new JsonSerializerOptions { WriteIndented = false });
+    byte[] body = JsonSerializer.SerializeToUtf8Bytes(payload, jsonOpts);
     await WriteRawAsync(ns, "HTTP/1.1 200 OK", "application/json; charset=utf-8", body, keepAlive: false);
 }
 
