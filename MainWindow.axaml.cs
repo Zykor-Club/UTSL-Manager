@@ -3601,20 +3601,22 @@ public partial class MainWindow : Window
         return wb;
     }
 
-    private void OnShowMap(object? sender, RoutedEventArgs e)
+    private async void OnShowMap(object? sender, RoutedEventArgs e)
     {
-        // ★ 地图由管理器本体直接解析 .wld 渲染（见 Maps\WorldMapRenderer.cs），
-        //   不再依赖服务端 GenerateMap 插件产出的 PNG，也不再跨 ssh 传拼接大图。
-       RefreshMapPicker();
-        LoadMap();
+        // ★ 地图由管理器本体直接解析 .wld 渲染（见 Maps\WorldMapRenderer.cs）。
+        // ★★ 先把页面切过去再异步填数据：远端模式下建列表要 4 次 ssh 往返（每次约 1.6 s），
+        //    原来在 UI 线程上同步做，点了就像卡死（实测用户反馈"卡死半天"就是这个）。
         ShowView("map");
+        MapInfo.Text = "正在读取世界列表…";
+        await RefreshMapPickerAsync();
+        await LoadMap();
         Dispatcher.UIThread.Post(() => OnMapFit(null, new RoutedEventArgs()), DispatcherPriority.Background);
         var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
         t.Tick += (_, _) => { t.Stop(); OnMapFit(null, new RoutedEventArgs()); };
         t.Start();
     }
 
-    private void OnRefreshMap(object? sender, RoutedEventArgs e) { RefreshMapPicker(); LoadMap(); }
+    private async void OnRefreshMap(object? sender, RoutedEventArgs e) { await RefreshMapPickerAsync(); await LoadMap(); }
 
     /// <summary>服务端世界存档目录（唯一地图来源，不读别处）。</summary>
     private static string WorldsDir => Path.Combine(Env.FileRoot, "lib", "Saves", "Worlds");
@@ -3650,21 +3652,37 @@ public partial class MainWindow : Window
     private static List<string> WorldFilesIn(string subDir, Func<string, bool>? filter = null)
         => FsList(Path.Combine(WorldsDir, subDir))
             .Where(e => !e.IsDir && e.Name.EndsWith(".wld", StringComparison.OrdinalIgnoreCase))
+            .Where(e => e.Size > 1024)          // 0 字节/截断的存档列出来也渲染不了（远端就有一个），直接过滤
+
             .Where(e => filter is null || filter(e.Name))
             .OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
             .Select(e => Path.GetFileNameWithoutExtension(e.Name))
             .ToList();
 
-    private void RefreshMapPicker()
+    /// <summary>
+    /// 重建地图下拉列表。★ 数据全部在**后台线程**取：远端模式下 ServerWorldNames 要读一次 config.json、
+    /// 再列三次目录，每次都是一趟 ssh（约 1.6 s）—— 放 UI 线程上就是"点一下卡死半天"。
+    /// ★ 条目 = 自动启动的世界 ∪ **磁盘上所有 .wld**：只按 config.json 的 autoStartServers 列，
+    ///   会把"存在但没自动启动"的世界整个藏掉（用户反馈的"地图列表其他地图呢"）。
+    /// </summary>
+    private async Task RefreshMapPickerAsync()
     {
         if (MapPicker is null) { return; }
         string sel = MapPicker.SelectedItem as string ?? "";
-        var items = new List<string> { "全部（拼接图）" };
-        items.AddRange(ServerWorldNames());
-        // 假世界（尘歌壶等虚拟世界）与虚拟世界模板：单独标注，不与服务端世界混在一起
-        items.AddRange(WorldFilesIn("", n => n.StartsWith("尘歌壶_", StringComparison.Ordinal)).Select(n => VirtualMarker + n));
-        items.AddRange(WorldFilesIn("_vwc_templates").Select(n => BaselineMarker + n));
-       MapPicker.ItemsSource = items;
+        List<string> items = await Task.Run(() =>
+        {
+            var list = new List<string> { "全部（拼接图）" };
+            void Add(string s) { if (s.Length > 0 && !list.Contains(s, StringComparer.OrdinalIgnoreCase)) { list.Add(s); } }
+            foreach (var n in ServerWorldNames()) { Add(n); }
+            foreach (var n in WorldFilesIn(""))
+            {
+                // 尘歌壶等虚拟世界单独标注，其余按普通世界列（磁盘上有就列出来）
+                Add(n.StartsWith("尘歌壶_", StringComparison.Ordinal) ? VirtualMarker + n : n);
+            }
+            foreach (var n in WorldFilesIn("_vwc_templates")) { Add(BaselineMarker + n); }
+            return list;
+        });
+        MapPicker.ItemsSource = items;
         MapPicker.SelectedIndex = items.Count == 0 ? -1 : Math.Max(0, items.IndexOf(sel));
     }
 
@@ -3849,14 +3867,14 @@ public partial class MainWindow : Window
         return null;
     }
 
-    private void OnMapPickChanged(object? sender, SelectionChangedEventArgs e)
+    private async void OnMapPickChanged(object? sender, SelectionChangedEventArgs e)
     {
-        LoadMap();
+        await LoadMap();
         Dispatcher.UIThread.Post(() => OnMapFit(null, new RoutedEventArgs()), DispatcherPriority.Background);
     }
 
     /// <summary>渲染当前选中的世界（后台线程；同一个世界第二次打开时复用已解析结果）。</summary>
-    private async void LoadMap()
+    private async Task LoadMap()
     {
         try
         {
