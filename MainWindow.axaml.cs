@@ -700,10 +700,11 @@ public partial class MainWindow : Window
                 }
             }
             long now = Environment.TickCount64;
-            WarmCache(cfg, cfgText);
-            WarmCache(edge, edgeText);
-            WarmCache(cfg, exists: cfgText.Length > 0);
-            WarmCache(edge, exists: edgeText.Length > 0);
+            // ★ 只有【真读到内容】才写缓存。原来无条件 WarmCache(cfg, cfgText)：一旦这次 ssh 读取失败
+            //   （超时/链路抖动 → cfgText 为空串）就会把"空文本"写进缓存，而快照每 45 秒重来一次 → 持续投毒。
+            //   实机症状：世界链页面把"读不到"当成"没装 EdgeStitch"（用户反馈"我明明是装了的"）。
+            if (cfgText.Length > 0) { WarmCache(cfg, cfgText); WarmCache(cfg, exists: true); }
+            if (edgeText.Length > 0) { WarmCache(edge, edgeText); WarmCache(edge, exists: true); }
             if (entries.Count > 0)
             {
                 WarmCache(root, list: entries);
@@ -3112,9 +3113,14 @@ public partial class MainWindow : Window
             JsonObject? edge = null;
             string edgePath = Path.Combine(FsRoot, "config", "EdgeStitch", "EdgeStitch.json");
             // ★ 冷缓存时这里原本是 FsExists + FsReadText = 两次 ssh 往返（链路 RTT 约 1.7 秒 → 约 3.4 秒），
-            //   而那正是用户反馈"点世界链要等 5~6 秒"的主要来源（再叠加世界列表等）。
-            //   实测契约：FsReadText 读不到返回空串，ParseJsonObj("") 返回 null → 与"文件不存在"完全同一条路，
-            //   所以这次 FsExists 是多余的。缓存命中时两者都是 0 往返；冷缓存时首屏延迟直接砍半。
+            //   那正是"点世界链要等 5~6 秒"的一部分。实测契约：FsReadText 读不到返回空串，
+            //   ParseJsonObj("") 返回 null → 与"文件不存在"完全同一条路，所以那次 FsExists 是多余的。
+            // ★ 并且先定点失效：缓存里可能留着快照写进来的空文本，直接读会把"读不到"当成"没装"。
+            // ※ 教训：这一行的替换曾经只写了注释、漏了语句，而 edge 的声明是 null，编译照样通过 ——
+            //   所以这类改动必须把结果读回来核对，不能只看 build 成功。
+            FsInvalidatePath(edgePath);
+            string edgeText = await Task.Run(() => FsReadText(edgePath));
+            edge = ParseJsonObj(edgeText);
             ChainHost.Children.Clear();   // 数据到手才重建
             var chain = edge?["世界链"]?.AsArray().Select(x => x?.ToString() ?? "").Where(x => x.Length > 0).ToList() ?? [];
             if (chain.Count == 0) { chain = [.. rows.Where(r => r.Name != "全部世界").Select(r => r.Name)]; }
@@ -3180,9 +3186,22 @@ public partial class MainWindow : Window
             }
             else
             {
-                ChainHost.Children.Add(new TextBlock { Text = "未找到 EdgeStitch 配置（未安装该插件）—— 上方按当前已加载世界顺序展示", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#6E7681")), TextWrapping = Avalonia.Media.TextWrapping.Wrap });
+                // ★ 区分"读取失败"与"确实没装"：原来一律显示"未安装"，把用户误导成"我明明装了"（实机反馈）
+                string why;
+                if (edgeText.Length == 0)
+                {
+                    bool exists = await Task.Run(() => FsExists(edgePath));
+                    why = exists
+                        ? "文件存在但读不到内容（链路超时 / 被拒）→ " + edgePath
+                        : "这个路径没有配置文件 → " + edgePath;
+                }
+                else
+                {
+                    why = "文件存在但不是合法 JSON（前 60 字符：" + edgeText[..Math.Min(60, edgeText.Length)].Replace("\r", "").Replace("\n", " ") + "）";
+                }
+                ChainHost.Children.Add(new TextBlock { Text = "未能读取 EdgeStitch 世界链配置：" + why, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#FF7B72")), TextWrapping = Avalonia.Media.TextWrapping.Wrap });
             }
-            ChainInfo.Text = $"{chain.Count} 个世界" + (edge is null ? "（EdgeStitch 未安装）" : "");
+            ChainInfo.Text = $"{chain.Count} 个世界" + (edge is null ? "（未读到 EdgeStitch 配置，见下方原因）" : "");
             // ★★ 这里原来又调了一次 ShowView("chain") —— 数据的读取要 5~6 秒（远端冷缓存时是 ssh 往返），
             //   用户等不及切到别的页面后，这行会把页面【抢回】世界链（实机反馈的问题）。
             //   页面在 L3106 点击时已经切过去了，异步完成后只需填内容，绝不能再切视图。
