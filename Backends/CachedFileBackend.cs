@@ -90,6 +90,26 @@ public sealed class CachedFileBackend(IFileBackend inner, int ttlMs = 90_000) : 
     public bool Download(string sourcePath, string localPath, long knownTotal = 0, Action<string>? progress = null, Func<bool>? cancelled = null)
         => inner.Download(sourcePath, localPath, knownTotal, progress, cancelled);
 
+    /// <summary>
+    /// 预热：把外部（例如 45 秒合并快照）已经取到的内容直接放进缓存，键格式与内部一致。
+    /// ★ 存在的理由：快照本来就"一次 ssh 拿回所有常用数据"，原来却写进了 MainWindow 里一个
+    ///   没有任何读取点的 FsMemo 死字典 → 页面读文件仍然各发一趟 ssh（约 1.6 s），快照白做。
+    /// </summary>
+    public void WarmText(string path, string text)
+    {
+        lock (_gate) { _memo[Key("read", path)] = new Entry { Text = text, AtMs = Environment.TickCount64 }; }
+    }
+
+    public void WarmList(string dir, IReadOnlyList<FsEntry> list)
+    {
+        lock (_gate) { _memo[Key("list", dir)] = new Entry { List = list, AtMs = Environment.TickCount64 }; }
+    }
+
+    public void WarmExists(string path, bool exists)
+    {
+        lock (_gate) { _memo[Key("exists", path)] = new Entry { Bool = exists, AtMs = Environment.TickCount64 }; }
+    }
+
     /// <summary>清空缓存（替代原 FsInvalidate 的调用点）。</summary>
     public void InvalidateCache()
     {

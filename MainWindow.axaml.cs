@@ -277,7 +277,19 @@ public partial class MainWindow : Window
         if (PromptText is not null) { PromptText.Text = name == "全部世界" ? "@ 全部世界" : "@ " + name; }
     }
 
+    private static bool WorldsFetching;                // 防重入（REST 未就绪时单次最长 15 秒，2 秒定时器会叠出多个请求）
+
     private async Task RefreshWorldsAsync()
+    {
+        // ★ 原来没有防重入：REST 未就绪（换图/加载期）时每 2 秒再发一次 GET，最多 7 个并发在飞；
+        //   而每个 catch 都会 downTicks++，于是"连续 2 次失败"被同一个真实故障快速凑满 → 看门狗误判/重复触发。
+        if (WorldsFetching) { return; }
+        WorldsFetching = true;
+        try { await RefreshWorldsCoreAsync(); }
+        finally { WorldsFetching = false; }
+    }
+
+    private async Task RefreshWorldsCoreAsync()
     {
         try
         {
@@ -504,10 +516,18 @@ public partial class MainWindow : Window
     }
 
     // 短 TTL 缓存：文件后端有自己的缓存（CachedFileBackend）；这一份仍供其它读取路径使用
-    private sealed class FsMemoEntry { public string? Text; public List<FsEntry>? List; public bool? Bool; public long AtMs; }
-    private static readonly Dictionary<string, FsMemoEntry> FsMemo = new();
-    private const int FsMemoTtlMs = 90000;
-    private static string FsKey(string op, string path) => op + "|" + path.ToLowerInvariant();
+    /// <summary>
+    /// 把快照已经取到的内容灌进【真正被读的】缓存（Backends/CachedFileBackend）。
+    /// ★ 原来这里写的是一个静态死字典 FsMemo（全仓没有读取点），快照"一次 ssh 覆盖所有页面"的
+    ///   设计因此从未生效 —— 页面读文件仍各发一趟 ssh。现在直接预热被读的缓存。
+    /// </summary>
+    private static void WarmCache(string path, string? text = null, List<FsEntry>? list = null, bool? exists = null)
+    {
+        if (_fileBackend is not CachedFileBackend c) { return; }
+        if (text is not null) { c.WarmText(path, text); }
+        if (list is not null) { c.WarmList(path, list); }
+        if (exists is bool b) { c.WarmExists(path, b); }
+    }
 
     private static string Q(string s) => s.Replace("'", "''");
     /// <summary>C:\a\b → /C:/a/b（Windows OpenSSH 的 scp 远端路径必须带前导斜杠）</summary>
@@ -543,7 +563,8 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// 一次 ssh 拿回所有常用数据（进程数/监听端口/config.json/EdgeStitch.json/根目录列表），
-    /// 直接写进 FsMemo 缓存 —— 之后三个页面读缓存即刻返回，不需要各自再发一次 ssh（每次 3~8 秒）。
+    /// 直接预热【真正被读的】文件缓存（CachedFileBackend）—— 之后三个页面读缓存即刻返回，
+    /// 不需要各自再发一次 ssh（每次 3~8 秒）。
     /// </summary>
     private static void RefreshSnapshot()
     {
@@ -555,11 +576,8 @@ public partial class MainWindow : Window
             if (!UseRemote)
             {
                 // 本机模式：直接读，无需 ssh
-                lock (FsMemo)
-                {
-                    FsMemo[FsKey("read", cfg)] = new FsMemoEntry { Text = File.Exists(cfg) ? File.ReadAllText(cfg) : "", AtMs = Environment.TickCount64 };
-                    FsMemo[FsKey("read", edge)] = new FsMemoEntry { Text = File.Exists(edge) ? File.ReadAllText(edge) : "", AtMs = Environment.TickCount64 };
-                }
+                WarmCache(cfg, File.Exists(cfg) ? File.ReadAllText(cfg) : "");
+                WarmCache(edge, File.Exists(edge) ? File.ReadAllText(edge) : "");
                 SnapshotAtMs = Environment.TickCount64;
                 return;
             }
@@ -610,17 +628,14 @@ public partial class MainWindow : Window
                 }
             }
             long now = Environment.TickCount64;
-            lock (FsMemo)
+            WarmCache(cfg, cfgText);
+            WarmCache(edge, edgeText);
+            WarmCache(cfg, exists: cfgText.Length > 0);
+            WarmCache(edge, exists: edgeText.Length > 0);
+            if (entries.Count > 0)
             {
-                FsMemo[FsKey("read", cfg)] = new FsMemoEntry { Text = cfgText, AtMs = now };
-                FsMemo[FsKey("read", edge)] = new FsMemoEntry { Text = edgeText, AtMs = now };
-                FsMemo[FsKey("exists", cfg)] = new FsMemoEntry { Bool = cfgText.Length > 0, AtMs = now };
-                FsMemo[FsKey("exists", edge)] = new FsMemoEntry { Bool = edgeText.Length > 0, AtMs = now };
-                if (entries.Count > 0)
-                {
-                    FsMemo[FsKey("list", root)] = new FsMemoEntry { List = entries, AtMs = now };
-                    FsMemo[FsKey("exists", root)] = new FsMemoEntry { Bool = true, AtMs = now };
-                }
+                WarmCache(root, list: entries);
+                WarmCache(root, exists: true);
             }
             // 地图 PNG 列表也写进缓存 → 地图页选图不再单独发 ssh
             var mapEntries = new List<FsEntry>();
@@ -635,7 +650,7 @@ public partial class MainWindow : Window
                     mapEntries.Add(new FsEntry(parts[3], false, size, mt));
                 }
             }
-            if (mapEntries.Count > 0) { lock (FsMemo) { FsMemo[FsKey("list", MapRemoteDir)] = new FsMemoEntry { List = mapEntries, AtMs = now }; } }
+            if (mapEntries.Count > 0) { WarmCache(MapRemoteDir, list: mapEntries); }
             // ★ 常用子目录（config/Worlds/ServerPlugins/logs）也一并进缓存 → 进子目录同样是毫秒级
             if (o["d"] is JsonObject dirmap)
             {
@@ -666,11 +681,8 @@ public partial class MainWindow : Window
                     if (sub.Count > 0)
                     {
                         string subPath = Path.Combine(root, kv.Key);
-                        lock (FsMemo)
-                        {
-                            FsMemo[FsKey("list", subPath)] = new FsMemoEntry { List = sub, AtMs = now };
-                            FsMemo[FsKey("exists", subPath)] = new FsMemoEntry { Bool = true, AtMs = now };
-                        }
+                        WarmCache(subPath, list: sub);
+                        WarmCache(subPath, exists: true);
                     }
                 }
             }
@@ -727,7 +739,6 @@ public partial class MainWindow : Window
 
     private static void FsInvalidate()
     {
-        lock (FsMemo) { FsMemo.Clear(); }
         if (_fileBackend is CachedFileBackend c) { c.InvalidateCache(); }
     }
 
@@ -803,7 +814,9 @@ public partial class MainWindow : Window
                 else { Progress($"下载 {done / 1048576.0:F1} MB · {mbps:F2} MB/s（可点「取消传输」）"); }
             }
             Progress("");
-            return File.Exists(localPath);
+            // ★ 必须看 scp 退出码：原来只要目标文件存在就返回 true —— scp 失败（远端文件被删/权限不足）时
+            //   会把上一次留下的旧文件或这次只写了一半的文件当成"下载成功"，调用方静默用错数据。
+            return p.ExitCode == 0 && File.Exists(localPath);
         }
         catch { return false; }
     }
@@ -1590,19 +1603,29 @@ public partial class MainWindow : Window
     }
 
     // ★ 实测：单次 ssh 握手 ~1.5 秒；但并发堆到 40 个时单次会变成 14 秒（互相拖慢）。
-    //   这里用信号量限制并发（最多 2 个），并且最多等 15 秒就放行（避免互相死等）。
+    //   用信号量限制并发（最多 2 个）。
+    //   ★ 改动：原来「最多等 15 秒就放行」——等不到许可照样起 ssh，等于并发上限名存实亡
+    //     （注释里自己描述的劣化场景就是这么触发的）。现在改为：等不到就【放弃本次调用】，
+    //     返回空串（与"失败返回空串"的既有约定一致），绝不无界地起 ssh。
     private static readonly System.Threading.SemaphoreSlim SshGate = new(2, 2);
+
+    /// <summary>最近一次 ssh 失败/超时的原因（排查用；空表示正常）。</summary>
+    internal static string LastSshError = "";
 
     private static string SshRun(string psScript, int timeoutMs = 30000)
     {
-        bool got = SshGate.Wait(15000);
+        if (!SshGate.Wait(60000))
+        {
+            LastSshError = "等待 ssh 通道超时（60 秒）—— 远端可能异常繁忙或卡住";
+            return "";
+        }
         try
         {
             return SshRunInner(psScript, timeoutMs);
         }
         finally
         {
-            if (got) { SshGate.Release(); }
+            SshGate.Release();
         }
     }
 
@@ -1627,21 +1650,42 @@ public partial class MainWindow : Window
         psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("ConnectTimeout=10");
         psi.ArgumentList.Add(SshUser + "@" + SshHost);
         psi.ArgumentList.Add("powershell -NoProfile -EncodedCommand " + b64);
-        using var p = System.Diagnostics.Process.Start(psi) ?? throw new Exception("无法启动 ssh");
-        string o = p.StandardOutput.ReadToEnd();
-        string err = p.StandardError.ReadToEnd();
-        if (!p.WaitForExit(timeoutMs)) { try { p.Kill(true); } catch { } }   // 自检修复：超时杀掉 ssh，避免僵留进程
-        // 远端 PowerShell 会把进度/错误流以 CLIXML 形式吐出来，这里滤掉，日志面板才干净
-        var keep = new List<string>();
-        foreach (string ln in o.Split('\n'))
+        var p = System.Diagnostics.Process.Start(psi) ?? throw new Exception("无法启动 ssh");
+        try
         {
-            string s = ln.TrimEnd('\r');
-            if (s.StartsWith("#< CLIXML") || s.StartsWith("<Objs") || s.StartsWith("<S ") || s.Contains("P S C u s t o m O b j e c t")) { continue; }
-            keep.Add(s);
+            // ★★ 这里原来有两处致命问题（实测复核确认）：
+            //   ① 先 ReadToEnd() 再 WaitForExit(timeoutMs)：ReadToEnd 会一直阻塞到 ssh 退出才返回，
+            //      远端挂住时那一行永不返回，【超时保护根本没机会执行】，而后台线程与 SshGate 许可被永久占用
+            //      （只有 2 个许可，两个卡住 = 远端模式整片停摆，且没有任何报错）。
+            //   ② stdout/stderr 串行读：管道缓冲约 4KB，远端往 stderr 写超一屏（CLIXML 进度流）就会
+            //      ssh 阻塞在写、我们阻塞在读 → 经典互等死锁。
+            //   现在：两个流【并发】读，超时用 Task.WhenAny 判，超时即 Kill 并返回空串（失败约定）。
+            Task<string> so = p.StandardOutput.ReadToEndAsync();
+            Task<string> se = p.StandardError.ReadToEndAsync();
+            Task both = Task.WhenAll(so, se);
+            if (Task.WaitAny(both, Task.Delay(timeoutMs)) != 0)
+            {
+                try { p.Kill(true); } catch { }
+                try { both.Wait(3000); } catch { }        // 杀掉后等流收尾，避免句柄/线程悬空
+                LastSshError = $"ssh 超时（{timeoutMs} ms）—— 已终止该 ssh 进程";
+                return "";
+            }
+            string o = so.Result;
+            string err = se.Result;
+            // 远端 PowerShell 会把进度/错误流以 CLIXML 形式吐出来，这里滤掉，日志面板才干净
+            var keep = new List<string>();
+            foreach (string ln in o.Split('\n'))
+            {
+                string s = ln.TrimEnd('\r');
+                if (s.StartsWith("#< CLIXML") || s.StartsWith("<Objs") || s.StartsWith("<S ") || s.Contains("P S C u s t o m O b j e c t")) { continue; }
+                keep.Add(s);
+            }
+            string clean = string.Join("\n", keep).Trim();
+            if (clean.Length == 0) { clean = err.Trim(); }
+            if (clean.Length == 0) { LastSshError = "ssh 返回空（远端脚本失败或连接被拒）"; }
+            return clean;
         }
-        string clean = string.Join("\n", keep).Trim();
-        if (clean.Length == 0) { clean = err.Trim(); }
-        return clean;
+        finally { p.Dispose(); }
     }
 
     /// <summary>远端启动脚本：先清旧进程，再用 WMI 创建「控制台启动器」（脱离 SSH 会话，断开不会被回收）。</summary>
@@ -1742,6 +1786,15 @@ public partial class MainWindow : Window
             }
             using var fs = new FileStream(f.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             if (fs.Length < logPos) { logPos = 0; }
+            // ★ 首次（logPos==0）不要从文件头整读：几十 MB 的日志会逐行读 + 每行一次 Term
+            //   （集合增删 + ScrollIntoView 的 Dispatcher.Post 排队）→ 启动瞬间几万次 UI 操作 = "一打开就卡"。
+            //   只取尾部 64KB 作为首屏上下文，并把 logPos 对齐到读起点。
+            if (logPos == 0 && fs.Length > 64 * 1024)
+            {
+                fs.Seek(-64 * 1024, SeekOrigin.End);
+                using (var skip = new StreamReader(fs, System.Text.Encoding.UTF8, true, 4096, leaveOpen: true)) { skip.ReadLine(); }   // 丢掉被截断的半行
+                logPos = fs.Position;
+            }
             fs.Seek(logPos, SeekOrigin.Begin);
             using var sr = new StreamReader(fs);
             string? line;
@@ -3159,8 +3212,14 @@ public partial class MainWindow : Window
         try
         {
             string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            File.Copy(cfgLauncherPath, cfgLauncherPath + "." + stamp + ".bak", true);
-            if (FsExists(cfgEdgePath)) { await Task.Run(() => FsWriteText(cfgEdgePath + "." + stamp + ".bak", FsReadText(cfgEdgePath))); }
+            // ★ 远端模式下 cfgLauncherPath 是【远端路径】，而 File.Copy 只认本机 → 原来这里抛异常被 catch
+            //   吞成「保存失败」，并且整段后续写入（含 EdgeStitch）全被跳过：配置实际没保存。
+            //   统一走后端（本机直读 / 远端 ssh），并整体放到后台线程（顺带消掉 UI 线程的一趟 ssh）。
+            await Task.Run(() =>
+            {
+                FsWriteText(cfgLauncherPath + "." + stamp + ".bak", FsReadText(cfgLauncherPath));
+                if (FsExists(cfgEdgePath)) { FsWriteText(cfgEdgePath + "." + stamp + ".bak", FsReadText(cfgEdgePath)); }
+            });
 
             if (cfgLauncher is not null)
             {
@@ -3179,8 +3238,9 @@ public partial class MainWindow : Window
                         ["evil"] = "0",
                     });
                 }
-                cfgLauncher["launcher"] ??= new JsonObject();
-                (cfgLauncher["launcher"] as JsonObject)!["autoStartServers"] = arr;
+                // ★ 原来用 (… as JsonObject)! ：若 "launcher" 是数组/字符串，as 得 null，! 不改变运行时行为 → NRE
+                if (cfgLauncher["launcher"] is not JsonObject lo) { lo = new JsonObject(); cfgLauncher["launcher"] = lo; }
+                lo["autoStartServers"] = arr;
                 await Task.Run(() => FsWriteText(cfgLauncherPath, cfgLauncher.ToJsonString(new JsonSerializerOptions { WriteIndented = true })));
             }
 
