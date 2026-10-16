@@ -123,6 +123,13 @@ public static class WorldMapRenderer
             : new SyncProgress<ProgressChangedEventArgs>(p => progress(Math.Clamp(p.ProgressPercentage / 100.0, 0.0, 1.0)));
         (World? w, Exception? err) = World.LoadWorld(path, false, lp);
         if (w is null) { return (null, err?.Message ?? "未知错误"); }
+        // ★ R6：D 子代理实测 —— 0 字节或 4KB 乱码的 .wld 会被 TEdit 当成"合法世界"返回（尺寸 0×0），
+        //   截断的 6.5MB 文件也会返回 4200×2400 且 error 为空 → 界面把坏存档渲染成空白/半张图却不报错。
+        //   这里至少把"尺寸非法"这种明确的坏文件挡下来（截断的情况 TEdit 内部吞掉了异常，无法在此判定）。
+        if (w.TilesWide <= 0 || w.TilesHigh <= 0)
+        {
+            return (null, $"世界尺寸非法（{w.TilesWide}×{w.TilesHigh}）：文件可能为空、乱码或已损坏");
+        }
 
         lock (Gate)
         {

@@ -68,6 +68,11 @@ public static class UtplCodec
     /// 之前管理器**没有**这个上限 —— 坏文件可以在 chests/signs/entities 段声明一个巨大的记录数，
     /// 让 Read 顺着分配超大 List（服务端有 100 万的上限，双方必须对齐）。</summary>
     public const int MaxRecords = 1_000_000;
+
+    /// <summary>chests 段的单独上限。★ 每条 chest 都要 new 一个 40 元素的 slot 数组，
+    /// 所以 1e6 条会分配 4000 万个对象 —— D 子代理实测：475KB 的 gzip 夹具（999,999 条，正好卡在 MaxRecords 内）
+    /// 触发 OutOfMemoryException、峰值工作集 1055MB。真实模板不可能有 2 万个箱子。</summary>
+    public const int MaxChestRecords = 20_000;
     // ★ 未知段只是"未来版本多出来的段"，正常文件为 0。上限从 256MB 收到 8MB，
     //   避免畸形文件用超大长度触发天文数字的读取（而且每次读都要穿过 GZip 解压层）。
     /// <summary>未知段长度上限：**与服务端一致**（256MB）。
@@ -289,7 +294,7 @@ public static class UtplCodec
                 case SegChests:
                 {
                     int cn = r.ReadInt32();
-                    if (cn < 0 || cn > MaxRecords) { throw new InvalidDataException($"chests 段记录数非法: {cn}（允许 0 ~ {MaxRecords}）"); }
+                    if (cn < 0 || cn > MaxChestRecords) { throw new InvalidDataException($"chests 段记录数非法: {cn}（允许 0 ~ {MaxChestRecords}）；每条 chest 要分配 {ChestSlots} 个槽位对象，上限按内存安全收紧"); }
                     for (int i = 0; i < cn; i++)
                     {
                         int x = r.ReadInt32(), y = r.ReadInt32();

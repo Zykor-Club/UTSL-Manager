@@ -14,12 +14,32 @@ string root = AppContext.BaseDirectory;
 //   无认证地挂在公网上等于把整台机器的控制权交出去。
 string bindAddr = "127.0.0.1";
 string token = "";
-for (int i = 0; i < args.Length - 1; i++)
+// ★ R8：原来 `i < args.Length - 1` 会让末尾参数被静默忽略（--port 缺值 → 回落内建 7879 = 生产端口），
+//   而 --port abc 的 int.Parse 异常未捕获、直接进 Windows 错误报告。现在缺值/非法一律显式退出码 4。
+for (int i = 0; i < args.Length; i++)
 {
-    if (args[i] == "--port") { port = int.Parse(args[i + 1]); }
-    else if (args[i] == "--root") { root = args[i + 1]; }
-    else if (args[i] == "--bind") { bindAddr = args[i + 1]; }
-    else if (args[i] == "--token") { token = args[i + 1]; }
+    string Need(string name)
+    {
+        if (i + 1 >= args.Length)
+        {
+            Console.WriteLine("[UTSLDaemon] ✗ " + name + " 缺少参数值");
+            Environment.ExitCode = 4; Environment.Exit(4);
+        }
+        return args[++i];
+    }
+    if (args[i] == "--port")
+    {
+        if (!int.TryParse(Need("--port"), out port) || port <= 0 || port > 65535)
+        {
+            Console.WriteLine("[UTSLDaemon] ✗ --port 不是合法端口");
+            Environment.ExitCode = 4; Environment.Exit(4);
+        }
+    }
+    else if (args[i] == "--root") { root = Need("--root"); }
+    else if (args[i] == "--bind") { bindAddr = Need("--bind"); }
+    else if (args[i] == "--token") { token = Need("--token"); }
+    else if (args[i] == "--selftest") { /* 主流程后面处理 */ }
+    else { Console.WriteLine("[UTSLDaemon] ⚠ 未知参数: " + args[i]); }
 }
 bool loopback = bindAddr is "127.0.0.1" or "localhost" or "::1";
 if (!loopback && token.Length < 16)
@@ -74,6 +94,10 @@ async Task ServeAsync(int listenPort = -1)
         TcpClient client;
         try { client = await listener.AcceptTcpClientAsync(); }
         catch (Exception ex) { Console.WriteLine("[UTSLDaemon] accept 失败: " + ex.Message); continue; }
+        // ★★ 实测：经 SSH 隧道（RTT≈200ms）下载 6.6MB 只有 0.36 MB/s —— 因为 Windows 默认 socket 缓冲约 64KB，
+        //   64KB / 0.2s ≈ 320 KB/s，正好对上。管理器客户端那侧本来设了 4MB（注释里就写着"太小会压到 ~0.3MB/s"），
+        //   但【接受连接这一侧】没设 —— 大文件传输的瓶颈就卡在这里。两端都要设。
+        try { client.NoDelay = true; client.ReceiveBufferSize = 4 * 1024 * 1024; client.SendBufferSize = 4 * 1024 * 1024; } catch { }
         _ = Task.Run(() => HandleAsync(client));
     }
 }
@@ -97,18 +121,20 @@ async Task HandleAsync(TcpClient client)
             // ★ 缓冲区要够大：这条链路 RTT 约 200 ms，默认窗口下吞吐会被卡在 ~0.3 MB/s（实测）
             try { client.ReceiveBufferSize = 4 * 1024 * 1024; client.SendBufferSize = 4 * 1024 * 1024; } catch { }
             NetworkStream ns = client.GetStream();
-            string? requestLine = await ReadLineAsync(ns);
+            // ★ R3：请求行/请求头必须有读超时，否则"连上不发数据"的连接会无限期占着（D 子代理实测 100 条 1.5 秒后仍在）。
+            string? requestLine = await ReadLineAsync(ns).WaitAsync(TimeSpan.FromSeconds(30));
             if (requestLine is null) { return; }
             // 吃掉请求头直到空行（顺手留存，/files/put 需要 Content-Length）
             var reqHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             while (true)
             {
-                string? h = await ReadLineAsync(ns);
+                string? h = await ReadLineAsync(ns).WaitAsync(TimeSpan.FromSeconds(30));
                 if (h is null || h.Length == 0) { break; }
                 int c = h.IndexOf(':');
                 if (c > 0) { reqHeaders[h[..c].Trim()] = h[(c + 1)..].Trim(); }
             }
             string[] parts = requestLine.Split(' ');
+            string methodRaw = parts.Length >= 1 ? parts[0].ToUpperInvariant() : "GET";
             string pathRaw = parts.Length >= 2 ? parts[1] : "/";
             // ★ 兼容【绝对形式】请求行（RFC 7230 5.3.2）：经代理访问时请求行是
             //   "GET http://host:port/path?query HTTP/1.1"，只取路径部分，否则一律 404。
@@ -133,6 +159,15 @@ async Task HandleAsync(TcpClient client)
             {
                 byte[] no = Encoding.UTF8.GetBytes("{\"ok\":false,\"error\":\"未授权：缺少或错误的令牌\"}");
                 await WriteRawAsync(ns, "HTTP/1.1 401 Unauthorized", "application/json", no, keepAlive: false);
+                return;
+            }
+
+            // ★★ 破坏性端点禁止 GET：浏览器里任意页面都能发起跨站 GET（D 子代理实测带 Origin: http://evil.example
+            //   的 GET /files/delete 照样生效），而这些操作会删/建/改名/覆盖文件。
+            if (path is "/files/delete" or "/fs/mkdir" or "/fs/rename" or "/files/put" && methodRaw == "GET")
+            {
+                byte[] m = Encoding.UTF8.GetBytes("{\"ok\":false,\"error\":\"该端点不接受 GET（破坏性操作）\"}");
+                await WriteRawAsync(ns, "HTTP/1.1 405 Method Not Allowed", "application/json", m, keepAlive: false);
                 return;
             }
 
@@ -552,6 +587,18 @@ string QueryValue(string rawPath, string name)
     return "";
 }
 
+/// <summary>解析结果是否就是部署根自身。★ 删除/覆盖写必须显式拒绝它 —— 见 DeletePathAsync 的说明。</summary>
+bool IsRootItself(string full)
+{
+    try
+    {
+        string r = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string f = Path.GetFullPath(full).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return f.Equals(r, StringComparison.OrdinalIgnoreCase);
+    }
+    catch { return true; }   // 判不了就按"是根"处理（安全侧）
+}
+
 bool ResolveSafe(string rel, out string full, out string err)
 {
     full = ""; err = "";
@@ -582,12 +629,34 @@ async Task SendFileAsync(NetworkStream ns, string rel)
     await ns.FlushAsync();
 }
 
+/// <summary>
+/// 排空请求体再回错误响应。★ 不排空时内核会回 RST，客户端可能【收不到响应】（D 子代理实测：同一个越界 PUT
+/// 连做 6 次里 5 次 no-response），管理器那侧会因此间歇性静默回落到 scp。
+/// </summary>
+async Task DrainBodyAsync(NetworkStream ns, Dictionary<string, string> headers)
+{
+    try
+    {
+        long left = headers.TryGetValue("Content-Length", out string? cl) && long.TryParse(cl, out long l) ? l : 0;
+        byte[] tmp = new byte[64 * 1024];
+        while (left > 0)
+        {
+            int n = await ns.ReadAsync(tmp, 0, (int)Math.Min(tmp.Length, left)).WaitAsync(TimeSpan.FromSeconds(10));
+            if (n <= 0) { break; }
+            left -= n;
+        }
+    }
+    catch { }
+}
+
 async Task ReceiveFileAsync(NetworkStream ns, string rel, Dictionary<string, string> headers)
 {
-    if (!ResolveSafe(rel, out string full, out string err)) { await WriteJsonAsync(ns, new { ok = false, error = err }); return; }
+    // ★ 拒绝空路径 / 根自身 / 目录目标：D 子代理实测 PUT path=（空）会在【部署根之外】建 <根>.part 且零响应；
+    //   PUT path=<已存在目录> 会在根内留 sub.part。写文件必须落到根内的具体文件。
+    if (!ResolveSafe(rel, out string full, out string err)) { await DrainBodyAsync(ns, headers); await WriteJsonAsync(ns, new { ok = false, error = err }); return; }
+    if (IsRootItself(full)) { await DrainBodyAsync(ns, headers); await WriteJsonAsync(ns, new { ok = false, error = "拒绝写入部署根自身" }); return; }
     long len = headers.TryGetValue("Content-Length", out string? cl) && long.TryParse(cl, out long l) ? l : -1;
-    if (len < 0) { await WriteJsonAsync(ns, new { ok = false, error = "缺少 Content-Length" }); return; }
-    Directory.CreateDirectory(Path.GetDirectoryName(full) ?? root);
+    if (len < 0) { await DrainBodyAsync(ns, headers); await WriteJsonAsync(ns, new { ok = false, error = "缺少 Content-Length" }); return; }
     long got = 0;
     byte[] buf = new byte[1 << 20];
     // ★ 写 .part 再改名：原来直接 FileMode.Create 写最终路径，断连/重启会在原处留下
@@ -595,17 +664,29 @@ async Task ReceiveFileAsync(NetworkStream ns, string rel, Dictionary<string, str
     string part = full + ".part";
     try
     {
+        // ★ R5：原来这两句在 try 之外 —— 父路径是文件（subdir/inner.txt/child.bin）时异常跑出 try → 客户端收不到任何响应
+        if (Directory.Exists(full)) { throw new IOException("目标是目录，不能写入：" + rel); }
+        Directory.CreateDirectory(Path.GetDirectoryName(full) ?? root);
         using (var fs = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None))
         {
             while (got < len)
             {
-                int n = await ns.ReadAsync(buf, 0, (int)Math.Min(buf.Length, len - got));
+                // ★ R3：异步读不受 NetworkStream.ReadTimeout 约束，必须显式加超时 ——
+                //   否则"声明 5GB 只发 100 字节"的连接会把 .part 永久占住（D 子代理实测 11 秒后仍在）。
+                int n = await ns.ReadAsync(buf, 0, (int)Math.Min(buf.Length, len - got)).WaitAsync(TimeSpan.FromSeconds(60));
                 if (n <= 0) { break; }
                 fs.Write(buf, 0, n);
                 got += n;
             }
             fs.Flush(true);
         }
+        if (got != len)
+        {
+            try { File.Delete(part); } catch { }
+            await WriteJsonAsync(ns, new { ok = false, bytes = got, error = "传输未完成（连接中断/超时），已丢弃半截文件" });
+            return;
+        }
+        File.Move(part, full, overwrite: true);      // 同卷原子替换（★ 也挪进 try：原来在 try 外，出错就是零响应）
     }
     catch (Exception ex)
     {
@@ -613,13 +694,6 @@ async Task ReceiveFileAsync(NetworkStream ns, string rel, Dictionary<string, str
         await WriteJsonAsync(ns, new { ok = false, error = ex.Message });
         return;
     }
-    if (got != len)
-    {
-        try { File.Delete(part); } catch { }
-        await WriteJsonAsync(ns, new { ok = false, bytes = got, error = "传输未完成（连接中断？），已丢弃半截文件" });
-        return;
-    }
-    File.Move(part, full, overwrite: true);      // 同卷原子替换
     await WriteJsonAsync(ns, new { ok = true, bytes = got, path = rel });
 }
 
@@ -717,6 +791,9 @@ async Task ListFilesAsync(NetworkStream ns, string rel)
 async Task DeletePathAsync(NetworkStream ns, string rel)
 {
     if (!ResolveSafe(rel, out string full, out string err)) { await WriteJsonAsync(ns, new { ok = false, error = err }); return; }
+    // ★★ 绝不能删部署根自身！ResolveSafe 允许"root 自身"（列目录/统计要用），但删除必须显式拒绝 ——
+    //   否则 GET /files/delete?path=（空路径）会把整个部署目录递归删掉。D 子代理实测：{"ok":true} + root_gone=true。
+    if (IsRootItself(full)) { await WriteJsonAsync(ns, new { ok = false, error = "拒绝对部署根自身执行删除" }); return; }
     try
     {
         if (Directory.Exists(full)) { Directory.Delete(full, true); }

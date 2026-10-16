@@ -14,6 +14,9 @@ public sealed class AgentFileBackend(string root) : IFileBackend
     public IReadOnlyList<FsEntry> List(string dir)
     {
         var list = new List<FsEntry>();
+        // ★ B 子代理的观察：agent 的 ResolveSafe 把 "/" 当盘根判越界，所以列【根】必须传空串。
+        //   管理器有时会用 "/"（例如 root 还没从 /ping 取回来时的占位值），这里统一映射成空串。
+        if (dir is "/" or "\\" or "") { dir = ""; }
         string? s = AgentClient.GetText("/files/list?path=" + Uri.EscapeDataString(dir));
         if (s is null) { return list; }
         try
@@ -57,14 +60,15 @@ public sealed class AgentFileBackend(string root) : IFileBackend
     public bool WriteText(string path, string text)
         => AgentClient.PutBytes(System.Text.Encoding.UTF8.GetBytes(text), path);
 
+    // ★ 破坏性操作走 POST：daemon 端已禁止这些端点用 GET（防跨站 GET 触发删除/改名）
     public bool CreateDirectory(string dir)
-        => Ok(AgentClient.GetText("/fs/mkdir?path=" + Uri.EscapeDataString(dir)));
+        => Ok(AgentClient.PostText("/fs/mkdir?path=" + Uri.EscapeDataString(dir)));
 
     public bool Rename(string from, string to)
-        => Ok(AgentClient.GetText("/fs/rename?path=" + Uri.EscapeDataString(from) + "&to=" + Uri.EscapeDataString(to)));
+        => Ok(AgentClient.PostText("/fs/rename?path=" + Uri.EscapeDataString(from) + "&to=" + Uri.EscapeDataString(to)));
 
     public bool Delete(string path)
-        => Ok(AgentClient.GetText("/files/delete?path=" + Uri.EscapeDataString(path)));
+        => Ok(AgentClient.PostText("/files/delete?path=" + Uri.EscapeDataString(path)));
 
     public bool Upload(string localPath, string targetPath, Action<string>? progress = null, Func<bool>? cancelled = null)
         => AgentClient.Alive && AgentClient.Upload(localPath, targetPath, progress, cancelled);

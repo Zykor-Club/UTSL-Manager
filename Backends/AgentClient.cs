@@ -184,6 +184,22 @@ public static class AgentClient
         catch { return null; }
     }
 
+    /// <summary>对 agent 发一个 POST（破坏性端点如 /files/delete、/fs/mkdir、/fs/rename 只接受非 GET，
+    /// 见 daemon 里"禁止 GET 做破坏性操作"的说明：浏览器里任意页面都能发起跨站 GET）。</summary>
+    public static string? PostText(string path)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, Base + path);
+            if (Token.Length > 0) { req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", Token); }
+            req.Content = new ByteArrayContent([]);          // 带空体，确保是"有体的 POST"
+            using var resp = LocalHttp.Send(req);
+            if (!resp.IsSuccessStatusCode) { return null; }
+            return resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        }
+        catch { return null; }
+    }
+
     /// <summary>把内存里的字节 PUT 到 agent 的 /files/put（直连模式下没有 scp，小文件走这个）。</summary>
     public static bool PutBytes(byte[] data, string remoteRel)
     {
