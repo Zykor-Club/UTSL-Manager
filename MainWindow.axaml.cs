@@ -2573,6 +2573,9 @@ public partial class MainWindow : Window
     //   指标值是 double?（PluginMetricInfo.Provider），状态值是 string（PluginStatusInfo.Provider）。
     private readonly Dictionary<string, double?> pluginMetricCache = [];
     private readonly Dictionary<string, string?> pluginStatusCache = [];
+    // ★ 这两个缓存是"后台线程写、UI 线程读"，Dictionary 本身不是线程安全的 ——
+    //   必须加锁：写入端每项加锁，UI 端一次性快照后离线使用（缓存很小，快照成本可忽略）。
+    private readonly object pluginCacheLock = new();
     private int pluginSampling;
 
     private static string PluginKey(string kind, string plugin, string name) => kind + "|" + plugin + "|" + name;
@@ -2590,12 +2593,16 @@ public partial class MainWindow : Window
                 foreach (var m in metrics)
                 {
                     string k = PluginKey("m", m.PluginName, m.Name);
-                    try { pluginMetricCache[k] = m.Provider(); } catch { pluginMetricCache[k] = null; }
+                    double? v = null;
+                    try { v = m.Provider(); } catch { v = null; }
+                    lock (pluginCacheLock) { pluginMetricCache[k] = v; }
                 }
                 foreach (var s in statuses)
                 {
                     string k = PluginKey("s", s.PluginName, s.Name);
-                    try { pluginStatusCache[k] = s.Provider() ?? "—"; } catch { pluginStatusCache[k] = "—"; }
+                    string sv = "—";
+                    try { sv = s.Provider() ?? "—"; } catch { sv = "—"; }
+                    lock (pluginCacheLock) { pluginStatusCache[k] = sv; }
                 }
             }
             finally { Volatile.Write(ref pluginSampling, 0); }
@@ -2609,6 +2616,10 @@ public partial class MainWindow : Window
         //   现在：后台线程调 Provider 写缓存，UI 线程只读缓存、只做界面更新。
         //   契约变化：Provider 可能从【后台线程】被调用（见 PluginHost 里的说明），插件不要在 Provider 里碰 UI。
         KickPluginSample();
+        // ★ 快照（加锁）后再离线使用，避免与后台写入并发访问 Dictionary
+        Dictionary<string, double?> metricSnap;
+        Dictionary<string, string?> statusSnap;
+        lock (pluginCacheLock) { metricSnap = new(pluginMetricCache); statusSnap = new(pluginStatusCache); }
         IReadOnlyList<PluginMetricInfo> metrics = pluginHost is null ? Array.Empty<PluginMetricInfo>() : pluginHost.Metrics;
         IReadOnlyList<PluginStatusInfo> statuses = pluginHost is null ? Array.Empty<PluginStatusInfo>() : pluginHost.Statuses;
         if (PluginMetricsHeader is not null) { PluginMetricsHeader.IsVisible = metrics.Count > 0 || statuses.Count > 0; }
@@ -2621,13 +2632,13 @@ public partial class MainWindow : Window
             for (int i = 0; i < metrics.Count; i++)
             {
                 var m = metrics[i];
-                m.Value = pluginMetricCache.TryGetValue(PluginKey("m", m.PluginName, m.Name), out double? cv) ? cv : null;
+                m.Value = metricSnap.TryGetValue(PluginKey("m", m.PluginName, m.Name), out double? cv) ? cv : null;
                 pluginRowCache[i].Val.Text = m.Display;
             }
             for (int i = 0; i < statuses.Count; i++)
             {
                 var s = statuses[i];
-                s.Value = pluginStatusCache.TryGetValue(PluginKey("s", s.PluginName, s.Name), out string? sv) ? (sv ?? "—") : "—";
+                s.Value = statusSnap.TryGetValue(PluginKey("s", s.PluginName, s.Name), out string? sv) ? (sv ?? "—") : "—";
                 pluginRowCache[metrics.Count + i].Val.Text = s.Value;
             }
             return;
@@ -2637,7 +2648,7 @@ public partial class MainWindow : Window
         PluginMetricsHost.Children.Clear();
         foreach (var m in metrics)
         {
-            m.Value = pluginMetricCache.TryGetValue(PluginKey("m", m.PluginName, m.Name), out double? cv) ? cv : null;
+            m.Value = metricSnap.TryGetValue(PluginKey("m", m.PluginName, m.Name), out double? cv) ? cv : null;
             var row = new Grid { ColumnDefinitions = new Avalonia.Controls.ColumnDefinitions("*,Auto") };
             var name = new TextBlock { Text = m.Name, FontSize = 11, Foreground = GetBrush("#9A9AA0") };
             var val = new TextBlock { Text = m.Display, FontSize = 11, Foreground = GetBrush("#66CCFF") };
@@ -2653,7 +2664,7 @@ public partial class MainWindow : Window
         // 文本状态项（P2-15：状态胶囊）
         foreach (var s in statuses)
         {
-            s.Value = pluginStatusCache.TryGetValue(PluginKey("s", s.PluginName, s.Name), out string? sv) ? (sv ?? "—") : "—";
+            s.Value = statusSnap.TryGetValue(PluginKey("s", s.PluginName, s.Name), out string? sv) ? (sv ?? "—") : "—";
             var row = new Grid { ColumnDefinitions = new Avalonia.Controls.ColumnDefinitions("*,Auto") };
             var name = new TextBlock { Text = s.Name, FontSize = 11, Foreground = GetBrush("#9A9AA0") };
             var val = new TextBlock { Text = s.Value, FontSize = 11, Foreground = GetBrush("#7EE787"), TextWrapping = Avalonia.Media.TextWrapping.NoWrap };
