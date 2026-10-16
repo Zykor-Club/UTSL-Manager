@@ -3668,8 +3668,13 @@ public partial class MainWindow : Window
         MapPicker.SelectedIndex = items.Count == 0 ? -1 : Math.Max(0, items.IndexOf(sel));
     }
 
-    /// <summary>取世界文件：只从服务端世界目录取；远端模式才落一份本地副本供解析。rel 是相对 worlds 目录的路径。</summary>
-    private static string? ResolveWorldFile(string rel)
+    /// <summary>
+    /// 取世界文件：只从服务端世界目录取；远端模式才落一份本地副本供解析。rel 是相对 worlds 目录的路径。
+    /// ★ 两个关键点（实测"点地图卡半天、进度条不动"就是这里）：
+    ///   1) **先比大小，缓存一致就不下载** —— 否则每次开地图都把 24~72 MB 重拉一遍（按 1.3 MB/s 要几十秒）；
+    ///   2) 下载时把进度/状态报出来 —— 原来不传 progress，进度条一直停在 0，看着像卡死。
+    /// </summary>
+    private static string? ResolveWorldFile(string rel, Action<string>? status = null)
     {
         string full = Path.Combine(WorldsDir, rel);
         if (!Env.IsRemote) { return File.Exists(full) ? full : null; }
@@ -3677,7 +3682,21 @@ public partial class MainWindow : Window
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(cache)!);
-            if (FileBackend.Download(full, cache) || File.Exists(cache)) { return cache; }
+            long remoteSize = 0;
+            try
+            {
+                string dir = Path.GetDirectoryName(full) ?? "";
+                string name = Path.GetFileName(full);
+                remoteSize = FsList(dir).Where(e => !e.IsDir && e.Name == name).Select(e => e.Size).FirstOrDefault();
+            }
+            catch { }
+            if (File.Exists(cache) && remoteSize > 0 && new FileInfo(cache).Length == remoteSize)
+            {
+                status?.Invoke(Path.GetFileName(rel) + "：本地缓存已是最新，跳过下载");
+                return cache;
+            }
+            status?.Invoke(Path.GetFileName(rel) + "：正在从远端下载" + (remoteSize > 0 ? "（" + (remoteSize / 1048576.0).ToString("F1") + " MB）" : "") + "…");
+            if (FileBackend.Download(full, cache, remoteSize, s => status?.Invoke(Path.GetFileName(rel) + "：" + s)) || File.Exists(cache)) { return cache; }
         }
         catch { }
         return null;
@@ -3870,6 +3889,13 @@ public partial class MainWindow : Window
                 ShowMapProgress(true, lastProg);
             });
 
+            // 状态文字（下载/缓存命中/渲染阶段）——可能来自后台线程，统一在这里切回 UI 线程
+            void MapStatus(string s)
+            {
+                if (Dispatcher.UIThread.CheckAccess()) { MapInfo.Text = s; }
+                else { Dispatcher.UIThread.Post(() => MapInfo.Text = s); }
+            }
+
             var result = await Task.Run(() =>
             {
                 if (!WorldMapRenderer.EnsureReady())
@@ -3889,7 +3915,9 @@ public partial class MainWindow : Window
                     var missing = new List<string>();
                     for (int i = 0; i < chain.Length; i++)
                     {
-                        string? p = ResolveWorldFile(chain[i] + ".wld");
+                        // 下载阶段也让进度条动起来（渲染进度是 0..1 单调钳制，这里最多报到 0.4 让位给渲染）
+                        ShowMapProgress(true, 0.05 + 0.35 * i / Math.Max(1, chain.Length));
+                        string? p = ResolveWorldFile(chain[i] + ".wld", MapStatus);
                         if (p is null) { missing.Add(chain[i]); continue; }
                         slices.Add(new StitchSlice(chain[i], p, spacing > 0 ? i * spacing : -1));
                     }
@@ -3907,7 +3935,8 @@ public partial class MainWindow : Window
                 }
                 // ---- 单个世界（服务端世界 / 假世界 / 世界基线）----
                 string rel = relThisLoad;
-                string? path = ResolveWorldFile(rel);
+                ShowMapProgress(true, 0.05);
+                string? path = ResolveWorldFile(rel, MapStatus);
                 if (path is null) { return (Bmp: (SKBitmap?)null, Error: "找不到文件 " + rel, Stats: (MapRenderStats?)null); }
 
                 var sw = System.Diagnostics.Stopwatch.StartNew();

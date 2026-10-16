@@ -92,12 +92,9 @@ public sealed class RemoteFileBackend(ISshTransport ssh, string root) : IFileBac
 
     public bool Download(string sourcePath, string localPath, long knownTotal = 0, Action<string>? progress = null, Func<bool>? cancelled = null)
     {
-        if (AgentClient.Alive)
-        {
-            progress?.Invoke("经 agent 下载（真实进度）…");
-            if (AgentClient.Download(sourcePath, localPath, knownTotal, progress, cancelled)) { return true; }
-            progress?.Invoke("agent 下载未成功，回落到 scp…");
-        }
+        // ★ 下载【故意】不用 agent：实测 agent 0.67 MB/s vs scp 1.31 MB/s（同样的隧道、同样的 RTT），
+        //   而大文件（世界文件 24~72 MB）正是最吃吞吐的场景。scp 的进度是按本地文件大小估算的，
+        //   显示足够用；agent 的价值在【上传】的真实进度与取消（scp 上传同样只能估）。
         return ssh.CopyFromRemote(sourcePath, localPath, knownTotal, progress, cancelled);
     }
 }
