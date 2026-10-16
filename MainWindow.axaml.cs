@@ -3180,7 +3180,9 @@ public partial class MainWindow : Window
                 ChainHost.Children.Add(new TextBlock { Text = "未找到 EdgeStitch 配置（未安装该插件）—— 上方按当前已加载世界顺序展示", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#6E7681")), TextWrapping = Avalonia.Media.TextWrapping.Wrap });
             }
             ChainInfo.Text = $"{chain.Count} 个世界" + (edge is null ? "（EdgeStitch 未安装）" : "");
-            ShowView("chain");
+            // ★★ 这里原来又调了一次 ShowView("chain") —— 数据的读取要 5~6 秒（远端冷缓存时是 ssh 往返），
+            //   用户等不及切到别的页面后，这行会把页面【抢回】世界链（实机反馈的问题）。
+            //   页面在 L3106 点击时已经切过去了，异步完成后只需填内容，绝不能再切视图。
         }
         catch (Exception ex) { ERR("生成世界链失败: " + ex.Message); }
     }
@@ -3874,7 +3876,8 @@ public partial class MainWindow : Window
                 bool? en = (isDll || isOff) ? isDll : (bool?)null;
                 Row("\uE7C3", x.Name, $"{x.Size / 1024} KB", x.Mtime.ToString("MM-dd HH:mm") + (isOff ? " · 已停用" : ""), false, Path.Combine(fileCwd, x.Name), en);
             }
-            ShowView("plugins");
+            // ★ 同世界链：这里是【异步读取完成】路径，原来又调 ShowView("plugins")，
+            //   用户在读取期间切走会被抢回来。视图切换只由点击入口（OnShowPlugins）负责。
         }
         catch (Exception ex) { ERR("读取目录失败: " + ex.Message); }
     }
