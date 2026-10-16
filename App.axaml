@@ -4,6 +4,9 @@
              x:Class="UTSLManager.App"
              RequestedThemeVariant="Dark">
   <Application.Styles>
+    <!-- ★ AvaloniaEdit 必须显式引入它的主题样式，否则 TextEditor 的模板不渲染 → 编辑区一片空白（实机踩到）。
+         资源路径从 AvaloniaEdit.dll 里扫出来的真实值：/Themes/Fluent/AvaloniaEdit.xaml（另有 Simple 与 Base）。 -->
+    <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml"/>
     <mac:DevolutionsMacOsTheme />
     <mac:DevolutionsMacOsThemeGlobalStyles />
 

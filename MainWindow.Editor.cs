@@ -93,6 +93,10 @@ public partial class MainWindow
             ShowLineNumbers = true,
             FontFamily = new FontFamily("Cascadia Mono, Consolas, Microsoft YaHei"),
             FontSize = 12.5,
+            // 显式前景色 + 透明背景：本应用是深色主题，写死前景可避免"文字与背景同色看不见"；
+            // 背景保持透明，主题的当前行高亮/选中色才能正常透出来。
+            Foreground = new SolidColorBrush(Color.Parse("#E6E6E6")),
+            Background = Avalonia.Media.Brushes.Transparent,
             WordWrap = false,
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
