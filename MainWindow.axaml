@@ -294,7 +294,8 @@
           </StackPanel>
         </Grid>
         <TextBlock x:Name="EditHint" Grid.Row="1" Text="" FontSize="11" Foreground="#FEBC2E" Margin="0,0,0,6" TextWrapping="Wrap"/>
-        <Border Grid.Row="2" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" ClipToBounds="True">
+        <!-- 编辑区背景：深藏青（与编辑器控件内背景一致，避免边缘露出灰色底） -->
+        <Border Grid.Row="2" Background="#101B2E" BorderBrush="#22314D" BorderThickness="1" CornerRadius="14" ClipToBounds="True">
           <Panel x:Name="EditHost"/>
         </Border>
         <TextBlock x:Name="EditStatus" Grid.Row="3" Text="—" FontSize="11" Foreground="#7C7C82" Margin="0,6,0,0" TextWrapping="NoWrap"/>

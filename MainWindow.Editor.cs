@@ -48,6 +48,47 @@ public partial class MainWindow
     private bool editorBackedUp;
     private string editorLoadedText = "";
 
+    /// <summary>编辑器背景（深藏青；用户明确要求"藏青色或深蓝色"）。</summary>
+    private const string EditorBgHex = "#101B2E";
+
+    /// <summary>
+    /// 统一给高亮定义调色（内置 xshd 是按【浅色背景】写的，直接用在深色背景上会"标点看不见、红绿刺眼"）。
+    /// 规则：① 低饱和度（多半是标点/分隔符）→ 换成柔和蓝灰 #8FA3BF，保证可见；
+    ///       ② 其余颜色若相对亮度低于 0.55 → 按比例提亮（保留色相），把"太重的深红/深绿"变柔和。
+    /// 这样 C#/XML/JS/PowerShell 也一起受益，不必逐个语言硬编码。
+    /// </summary>
+    private static void TuneHighlighting(IHighlightingDefinition def)
+    {
+        try
+        {
+            foreach (var c in def.NamedHighlightingColors)
+            {
+                if (c.Foreground is not SimpleHighlightingBrush sh) { continue; }
+                // 该端口的 GetColor 需要 ITextRunConstructionContext；SimpleHighlightingBrush 会忽略它（此处只为拿颜色），
+                // 且返回可空 Color —— 取不到就跳过这一类。
+                Color col;
+                try { Color? c0 = sh.GetColor(null!); if (c0 is null) { continue; } col = c0.Value; } catch { continue; }
+                Color tuned = TuneColor(col);
+                if (tuned != col) { c.Foreground = new SimpleHighlightingBrush(tuned); }
+            }
+        }
+        catch { }   // 定义若被冻结（不可改）就保持原样，不影响功能
+    }
+
+    private static Color TuneColor(Color c)
+    {
+        int mx = Math.Max(c.R, Math.Max(c.G, c.B));
+        int mn = Math.Min(c.R, Math.Min(c.G, c.B));
+        // ① 近灰色 → 标点类，直接给蓝灰
+        if (mx - mn <= 26) { return Color.FromArgb(c.A, 0x8F, 0xA3, 0xBF); }
+        // ② 太暗 → 提亮到可读区间
+        double lum = (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B) / 255.0;
+        if (lum >= 0.55) { return c; }
+        double k = 0.55 / Math.Max(0.06, lum);
+        byte Up(byte v) => (byte)Math.Clamp(v * k, 0, 255);
+        return Color.FromArgb(c.A, Up(c.R), Up(c.G), Up(c.B));
+    }
+
     /// <summary>可编辑的文本扩展名（其余一律当二进制/不支持，点击时给出明确原因）。</summary>
     private static readonly string[] TextExts =
     {
@@ -93,10 +134,10 @@ public partial class MainWindow
             ShowLineNumbers = true,
             FontFamily = new FontFamily("Cascadia Mono, Consolas, Microsoft YaHei"),
             FontSize = 12.5,
-            // 显式前景色 + 透明背景：本应用是深色主题，写死前景可避免"文字与背景同色看不见"；
-            // 背景保持透明，主题的当前行高亮/选中色才能正常透出来。
-            Foreground = new SolidColorBrush(Color.Parse("#E6E6E6")),
-            Background = Avalonia.Media.Brushes.Transparent,
+            // ★ 编辑器配色（用户反馈：内置高亮按浅色背景配色，深色下标点几乎看不见、数字红绿太刺眼）。
+            //   背景改成深藏青；正文字色用柔和的蓝灰；行号用更暗一档的蓝灰。
+            Foreground = new SolidColorBrush(Color.Parse("#C7D2E0")),
+            Background = new SolidColorBrush(Color.Parse(EditorBgHex)),
             WordWrap = false,
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
@@ -118,6 +159,10 @@ public partial class MainWindow
                 await SaveEditorAsync();
             }
         }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        // 行号颜色（深色下才看得见但又不抢）
+        try { ed.LineNumbersForeground = new SolidColorBrush(Color.Parse("#54688A")); } catch { }
+        // 文本渲染：深色背景上用灰度抗锯齿比 ClearType 更干净（避免彩边/发虚）
+        try { Avalonia.Media.RenderOptions.SetTextRenderingMode(ed, Avalonia.Media.TextRenderingMode.Antialias); } catch { }
         try { AvaloniaEdit.Search.SearchPanel.Install(ed); } catch { }
         EditHost.Children.Add(ed);
         editor = ed;
@@ -181,7 +226,13 @@ public partial class MainWindow
             }
             catch { }
 
-            try { ed.SyntaxHighlighting = HighlightFor(name); } catch { }
+            try
+            {
+                var def = HighlightFor(name);
+                if (def is not null) { TuneHighlighting(def); }
+                ed.SyntaxHighlighting = def;
+            }
+            catch { }
             EditTitle.Text = "编辑 · " + name;
             EditPathText.Text = (FileBackend.IsRemote ? "远端 " : "") + full;
             EditHint.Text = "";
