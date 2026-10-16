@@ -215,6 +215,7 @@ internal sealed class LuaScriptBridge
             ["year"] = n.Year, ["month"] = n.Month, ["day"] = n.Day,
             ["hour"] = n.Hour, ["min"] = n.Minute, ["sec"] = n.Second,
             ["wday"] = (int)n.DayOfWeek == 0 ? 7 : (int)n.DayOfWeek,   // 1=周一 … 7=周日（与 Lua os.date 的习惯一致）
+            ["epoch"] = new DateTimeOffset(n).ToUnixTimeSeconds(),      // "间隔 N 分钟"这类模式要算差值
             ["str"] = n.ToString("yyyy-MM-dd HH:mm:ss"),
         };
     }
@@ -240,7 +241,9 @@ internal sealed class LuaScriptBridge
         {
             Directory.CreateDirectory(_ctx.DataDir);
             var node = TableToJson(t);
-            File.WriteAllText(ConfigPath, node?.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) ?? "{}", new System.Text.UTF8Encoding(false));
+            // ★ 用 UnsafeRelaxedJsonEscaping：默认会把中文转成 \uXXXX 转义，配置文件是给人手改的，必须保持可读。
+            var jo = new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+            File.WriteAllText(ConfigPath, node?.ToJsonString(jo) ?? "{}", new System.Text.UTF8Encoding(false));
         }
         catch (Exception ex) { _ctx.Log("[Lua] 写配置失败: " + ex.Message); }
     }

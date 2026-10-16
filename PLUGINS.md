@@ -506,6 +506,65 @@ public sealed class ScriptHello : IManagerPlugin
 
 ---
 
+
+## 12.5 Lua 插件（v6 —— 社区里有 Lua 作者，所以专门支持）
+
+放 `plugins\xxx.lua`（扁平）或 `plugins\<名>\plugin.lua`（推荐，可带同名 `plugin.manifest.json`，与 dll 插件**同一套**清单）。
+顶层直接写代码即可，宿主把 `ctx` 注入为全局变量；`ctx:meta{...}` 可覆盖插件名/图标/说明/作者。
+
+```lua
+ctx:meta{ name = "我的 Lua 插件", icon = "🎐", description = "一句话", author = "你" }
+
+ctx:log("加载完成")
+ctx:every(60, function() ctx:log("每分钟一次：" .. ctx:now().str) end)   -- 计时器（后台线程执行）
+```
+
+**ctx 能力一览**（与 C# 插件的 `IManagerContext` 一一对应）：
+
+| Lua | 说明 |
+|---|---|
+| `ctx:log(s)` | 写进管理器终端 |
+| `ctx:now()` | `{year,month,day,hour,min,sec,wday,epoch,str}`（`wday` 1=周一…7=周日；所以 `os` 可以整个禁掉） |
+| `ctx:every(sec, fn)` / `ctx:after(sec, fn)` / `ctx:cancel(id)` | 周期 / 一次性 / 取消（**回调都在后台线程**，见下方安全边界） |
+| `ctx:get_config()` / `ctx:save_config(t)` | Lua 表 ↔ `<DataRoot>\<插件名>\config.json`（中文按原样写，方便手改） |
+| `ctx:register_command(name, desc, fn)` | 终端里 `!name 参数` 触发；`fn(raw, world)` |
+| `ctx:register_metric(name, unit, fn)` / `ctx:register_status(name, fn)` | 右侧「插件指标」区（宿主会**从后台线程**调用，别做慢操作） |
+| `ctx:rest_get(url)` / `ctx:rest_post(url)` | 当前连接的 UTSL REST（自动带令牌，需 `rest` 权限） |
+| `ctx:run_command(ps, timeoutMs)` | 在部署主机执行 PowerShell（需 `exec` 权限，**能力很强**） |
+| `ctx:read_text/ write_text/ exists/ list_files` | 部署目录文件（需 `fs` 权限；远端/本机统一） |
+| `ctx:worlds()` | 世界列表快照 |
+| `ctx:L(key, fallback)` | i18n |
+| `ctx:register_panel(title, fn)` + `ctx:on_action(fn)` | **声明式界面**（见下） |
+
+**界面是"声明式"的**：Lua **不能**返回 Avalonia 控件（那会踩类型身份分裂），而是返回一份控件描述，宿主渲染**真控件**：
+
+```lua
+ctx:register_panel("我的面板", function()
+  return {
+    { kind = "text",   label = "状态", value = "运行中" },
+    { kind = "select", id = "mode", label = "模式", options = { "间隔", "每天" }, value = "间隔" },
+    { kind = "number", id = "every", label = "间隔(分钟)", value = 30 },
+    { kind = "buttons", items = { { text = "保存", action = "save" } } },
+  }
+end)
+ctx:on_action(function(action, values)   -- values.mode / values.every … 就是上面各控件当前值
+  ctx:log("点了 " .. action .. "，间隔=" .. tostring(values.every))
+end)
+```
+
+**安全边界（实测，探针 `probes/LuaSpike`）**：用 MoonSharp 官方**软沙箱**，并在宿主里**额外剔除** `os`、`package`
+（实测软沙箱仍保留这两个）；`io / load / loadstring / dofile / require / debug` 均不可用。
+宿主**不注册任何 .NET 类型**给 Lua，唯一的通道就是 `ctx` 上的那些函数。
+
+★ **诚实的边界**：MoonSharp 没有内建指令计数 → 写错的死循环会**占满一个 CPU 核**；
+  但所有 Lua 回调都在**后台线程**执行（实测：Lua 死循环期间管理器计时器照常跳动），所以**界面不会被冻住**。
+  这与"C# 插件本来就能 `RunCommand` 执行任意 PowerShell"是同一级信任模型：**插件是你自己装的，就该信任它**。
+
+**完整示例：`extensions\LuaTaskScheduler`（定时任务）** —— 间隔 N 分钟 / 每天 HH:mm / 每周几 / 每月几号，
+动作支持 PowerShell 命令或 UTSL REST；带任务列表、编辑表单、保存/立即执行/新增/删除/上一个/下一个。
+它的排程判定是纯函数并**导出给自动化测试**：`probes/LuaSchedCheck` 会加载**真实发布的那份 plugin.lua**，
+用桩 ctx 跑 14 个用例（间隔边界 / 定点 / 星期 / 月日 / 同日不重复 / 非法输入不抛异常）——**当前 14/14 通过**。
+另有 `extensions\LuaSmoke`（自检插件）：把"加载次数/心跳次数"写进配置，可**从磁盘客观验证** Lua 通道是否工作。
 ## 13. 示例
 
 | 示例 | 位置 | 演示内容 |

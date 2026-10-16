@@ -1,0 +1,16 @@
+{
+  "name": "定时任务",
+  "version": "1.0.0",
+  "author": "Zykor-Club",
+  "description": "间隔 / 每天 / 每周 / 每月定时执行 PowerShell 命令或 UTSL REST（Lua 示例插件）",
+  "entry": "plugin.lua",
+  "type": "view",
+  "apiVersion": 5,
+  "permissions": [
+    "fs",
+    "config",
+    "rest",
+    "exec"
+  ],
+  "dependencies": []
+}
