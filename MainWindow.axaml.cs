@@ -1951,7 +1951,10 @@ public partial class MainWindow : Window
             //   因此缓存不会让速率被高估。
             long sent = 0, recv = 0;
             long nowMs2 = Environment.TickCount64;
-            if (netCacheAtMs == 0 || nowMs2 - netCacheAtMs > 3000)
+            // TTL 取 5 秒：网卡枚举 75~174ms/次，5 秒一次即每 5 拍只做 1 次（省约 60%）；
+            // 速率用"两次采样的真实间隔"做分母（见 netSecs），所以 TTL 不会让速率失真，
+            // 代价只是"网络曲线的时间分辨率变粗"（本机模式才走这条；远端模式用的是 agent 的 /metrics）。
+            if (netCacheAtMs == 0 || nowMs2 - netCacheAtMs > 5000)
             {
                 long s0 = 0, r0 = 0;
                 try
