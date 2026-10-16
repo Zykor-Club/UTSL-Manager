@@ -2610,6 +2610,8 @@ public partial class MainWindow : Window
     // ===== 连接设置：本机管理 / 远端管理 两张卡片 + 模式切换 =====
     private void OnShowConn(object? sender, RoutedEventArgs e)
     {
+        // ★ 先切页面再填内容：填充过程万一抛异常，页面本身仍然打得开（错误由下面的 catch 报到控制台）。
+        ShowView("conn");
         try
         {
             ConnHostPanel.Children.Clear();
@@ -2706,8 +2708,9 @@ public partial class MainWindow : Window
             var btnTest = Btn("测试连接");
             var btnSave = Btn("保存并应用");
             Row(ConnHostPanel, btnTest, btnSave);
-            ConnInfo.Margin = new Avalonia.Thickness(0, 8, 0, 0);
-            ConnHostPanel.Children.Add(ConnInfo);
+            // ★ 不要把 ConnInfo 加进来：它在 XAML（MainWindow.axaml:287）里已经挂在可视树上，
+            //   再 Add 到 ConnHostPanel 会因为"控件已有父级"抛异常 —— 而 ShowView 原本在方法最后，
+            //   于是整个连接设置页都打不开（这就是本次回归的原因）。它一直显示在页面顶部，直接改 Text 即可。
 
             // ---- 模式切换：只显示当前模式那张卡片 ----
             void ApplyMode()
@@ -2841,7 +2844,6 @@ public partial class MainWindow : Window
             ConnInfo.Text = UseRemote
                 ? $"当前：远端管理（SSH {SshUser}@{SshHost}）· 配置存于 {ConnFile}"
                 : $"当前：本机管理（{LocalDir}）· 配置存于 {ConnFile}";
-            ShowView("conn");
         }
         catch (Exception ex) { ERR("连接设置失败: " + ex.Message); }
     }
