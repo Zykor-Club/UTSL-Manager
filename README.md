@@ -49,6 +49,49 @@
 
 ---
 
+### 云管演进：UTSLDaemon（P0 已落地）
+
+现在的模型是「控制面走 SSH、每次动作新开一条 ssh」（实测握手 1.6 s；40+ 进程时劣化到 14~18 s），
+日志靠轮询文件（远端限流 12 s）、指标靠 45 s 合并快照。MCSManager 那套能推送，是因为它远端常驻一个 daemon，
+但它的代价是**要把 daemon 端口暴露出去**。
+
+本项目把两者合体：**agent 装进已有的那条常驻 SSH 隧道**（多一条 `-L 17879:127.0.0.1:7879`），
+能力与 MCSManager 相当，公网暴露面仍然是零。
+
+`daemon/UTSLDaemon`（只读，只绑回环）：
+
+| 接口 | 用途 |
+|---|---|
+| `GET /ping` | 探活 + 版本 + 部署根（管理器用它判断"这台装了 agent 没有"，没装就回落现在的 SSH 路径） |
+| `GET /metrics` | 进程/整机指标：CPU 单核%、私有内存、工作集、线程、句柄、网卡累计字节 |
+| `GET /stream/log` | SSE 推送 `logs\*.log` 的新增行 |
+
+实现：`TcpListener` 手写极简 HTTP/1.1（不用 `HttpListener`，避开需要管理员权限的 URL ACL）；
+日志只把完整行计入已消费位置；自带 `--selftest`（进程内起监听并自己连自己量延迟，用系统分配的空闲端口）。
+
+**部署（远端没有 .NET 10 时用自包含单文件）**：
+
+```powershell
+dotnet publish daemon/UTSLDaemon -c Release -r win-x64 --self-contained true `
+  -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:DebugType=none -o out
+# 上传后常驻（开机自启）：
+schtasks /Create /TN UTSLAgent /TR "\"C:\utsl-agent\UTSLDaemon.exe\" --root C:\utsl-deploy" /SC ONSTART /RU SYSTEM /RL HIGHEST /F
+schtasks /Run /TN UTSLAgent
+```
+
+### 实测（本机 + 真实远端）
+
+| 场景 | 数据 |
+|---|---|
+| 本机 agent 推送延迟 | 5 次 159/155/155/155/156 ms → **平均 156 ms** |
+| 远端 agent 推送延迟 | 5 次 149/154/156/156/156 ms → **平均 154 ms** |
+| 经隧道 `/metrics` 往返 | 222 / 154 / 132 ms |
+| 经隧道 SSE 端到端 | 远端写入 → 本机收到 **1 行命中** ✓ |
+| 自包含 agent 体积 | 单文件 **35.9 MB**（远端只有 .NET 9，实测可跑） |
+| 部署同步 186 MB | scp **2.7 MB/s** / 68.9 s；远端解压 428 文件 407.6 MB 用 2 s |
+
+对比现状：远端日志靠 **12 s 限流**的 ssh 轮询、指标靠 **45 s** 合并快照 → 推送 **154 ms**。
+
 ## 构建与发布
 
 ### 环境要求
