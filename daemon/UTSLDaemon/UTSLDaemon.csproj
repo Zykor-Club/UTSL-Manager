@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    UTSLDaemon —— 管理器在【被管机器】上的只读 agent（P0：日志流 + 指标）。
+
+    为什么要有它：管理器原来"控制面走 SSH、每次动作新开一条 ssh"（实测握手 1.6s，40+ 进程时 14~18s），
+    日志只能轮询文件（远端限流 12s）、指标靠 45s 合并快照。MCSManager 那套能推送，是因为它远端常驻一个 daemon。
+
+    本 agent 只做只读两件事，且**只绑回环**：
+      GET /ping        探活 + 版本 + 部署根（管理器用它判断"这台机器装了 agent 没有"）
+      GET /metrics     进程/整机指标（CPU 单核%、私有内存、工作集、线程、句柄、网卡累计字节）
+      GET /stream/log  SSE 推送最新 logs\*.log 的新增行（<0.2s 级）
+
+    ★ 传输：管理器那条【已有的常驻 SSH 隧道】多转发一个端口即可（-L 17879:127.0.0.1:7879），
+      所以公网暴露面仍然是零 —— 能力像 MCSManager，暴露面保持原来的安全模型。
+
+    ★ 用 TcpListener 手写极简 HTTP/1.1，不用 HttpListener：后者的非 localhost 前缀需要 URL ACL（管理员），
+      而我们要的只是"回环上的三个只读接口"，没必要引入那个依赖。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>UTSLDaemon</AssemblyName>
+    <RootNamespace>UTSLDaemon</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+</Project>
