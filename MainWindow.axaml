@@ -190,7 +190,7 @@
         <Border Grid.Row="2" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" ClipToBounds="True">
           <DockPanel>
             <StackPanel DockPanel.Dock="Top">
-              <TextBlock Text="插件 .dll 行右侧可直接勾选启用/停用（停用=改名 .dll.disabled，不删除，需重启服务端）；文件夹点名称进入" FontSize="10.5" Foreground="#7C7C82" Margin="14,10,14,8" TextWrapping="Wrap"/>
+              <TextBlock Text="点【文件名】可在线编辑并保存（带 JSON 语法校验、自动备份、保留 BOM/行尾）；点【文件夹名】进入；插件 .dll 行右侧可勾选启用/停用（停用=改名 .dll.disabled，不删除，需重启服务端）" FontSize="10.5" Foreground="#7C7C82" Margin="14,10,14,8" TextWrapping="Wrap"/>
               <Grid ColumnDefinitions="*,90,130,64,120" Margin="14,0,14,6">
                 <TextBlock Grid.Column="0" Text="名称" FontSize="10.5" FontWeight="SemiBold" Foreground="#6E7681"/>
                 <TextBlock Grid.Column="1" Text="大小" FontSize="10.5" FontWeight="SemiBold" Foreground="#6E7681"/>
@@ -280,6 +280,25 @@
 
 
       <!-- 连接设置视图（远端管理） -->
+      <!-- ===== 文件编辑（类 MCSManager：一次一个文件，保存 / 重新加载 / 返回；编辑器控件在代码里创建） ===== -->
+      <Grid x:Name="EditView" IsVisible="False" RowDefinitions="Auto,Auto,*,Auto">
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,4,0,8">
+          <StackPanel Grid.Column="0" VerticalAlignment="Center">
+            <TextBlock x:Name="EditTitle" Text="编辑文件" FontSize="19" FontWeight="SemiBold" Foreground="#F2F2F5"/>
+            <TextBlock x:Name="EditPathText" Text="—" FontSize="11" Foreground="#7C7C82" Margin="0,3,0,0"/>
+          </StackPanel>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+            <Button x:Name="BtnEditSave" Content="保存 (Ctrl+S)" FontSize="11.5" Padding="12,5" CornerRadius="9" Click="OnEditSave"/>
+            <Button Content="↻ 重新加载" FontSize="11.5" Padding="12,5" CornerRadius="9" Click="OnEditReload"/>
+            <Button Content="← 返回文件列表" FontSize="11.5" Padding="12,5" CornerRadius="9" Click="OnEditBack"/>
+          </StackPanel>
+        </Grid>
+        <TextBlock x:Name="EditHint" Grid.Row="1" Text="" FontSize="11" Foreground="#FEBC2E" Margin="0,0,0,6" TextWrapping="Wrap"/>
+        <Border Grid.Row="2" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" ClipToBounds="True">
+          <Panel x:Name="EditHost"/>
+        </Border>
+        <TextBlock x:Name="EditStatus" Grid.Row="3" Text="—" FontSize="11" Foreground="#7C7C82" Margin="0,6,0,0" TextWrapping="NoWrap"/>
+      </Grid>
       <Grid x:Name="ConnView" IsVisible="False" RowDefinitions="Auto,*">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,4,0,12">
           <StackPanel Grid.Column="0" VerticalAlignment="Center">

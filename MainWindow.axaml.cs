@@ -3542,6 +3542,16 @@ public partial class MainWindow : Window
     // ===== 视图切换（不弹窗，直接换中间面板）=====
     private void ShowView(string which)
     {
+        // ★ 编辑器里有未保存改动时，拦截一切离开"编辑页"的导航（否则切页面会丢编辑内容）
+        if (which != "edit" && editorDirty && !editorLeaveOk)
+        {
+            EditHint.Text = "有未保存的修改 —— 请先点「保存 (Ctrl+S)」；若确实要放弃，请再点一次左侧目标页面。";
+            ERR("编辑器里有未保存的修改：已拦截切页。再点一次左侧目标页面即可放弃修改并离开。");
+            editorLeaveOk = true;                 // 再点一次就放行（与本程序其它确认操作一致的两步确认风格）
+            return;
+        }
+        editorLeaveOk = false;
+        EditView.IsVisible = which == "edit";
         ConsoleView.IsVisible = which == "console";
         ConfigView.IsVisible = which == "config";
         ChainView.IsVisible = which == "chain";
@@ -3809,7 +3819,7 @@ public partial class MainWindow : Window
             }
             FileInfo.Text = $"{dirs.Count} 个文件夹 · {files.Count} 个文件" + truncNote;
 
-            void Row(string icon, string name, string sizeText, string timeText, bool isDir, string full, bool? enabled)
+            void Row(string icon, string name, string sizeText, string timeText, bool isDir, string full, bool? enabled, long sizeBytes = -1)
             {
                 // 表格行：名称(*) | 大小(90) | 修改时间(130) | 启用(64)
                 var rowWrap = new Border { BorderBrush = new SolidColorBrush(Color.Parse("#1E1E23")), BorderThickness = new Avalonia.Thickness(0, 0, 0, 1), Padding = new Avalonia.Thickness(14, 0, 14, 0) };
@@ -3892,6 +3902,12 @@ public partial class MainWindow : Window
                 Avalonia.Controls.Grid.SetColumn(actSp, 4);
                 sp.Children.Add(actSp);
                 if (isDir) { tb.PointerPressed += (_, _) => { fileCwd = full; ShowFiles(); }; }
+                else if (sizeBytes >= 0)
+                {
+                    // ★ 点文件名 → 进在线编辑器（类 MCSManager 的用法）。是否可编辑由编辑器自己判定并给出原因。
+                    tb.Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand);
+                    tb.PointerPressed += (_, _) => OpenInEditor(full, sizeBytes, name);
+                }
                 rowWrap.Child = sp;
                 PluginList.Children.Add(rowWrap);
             }
@@ -3902,7 +3918,7 @@ public partial class MainWindow : Window
                 bool isDll = x.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && !x.Name.StartsWith("TShockAPI", StringComparison.OrdinalIgnoreCase);
                 bool isOff = x.Name.EndsWith(".dll.disabled", StringComparison.OrdinalIgnoreCase) && !x.Name.StartsWith("TShockAPI", StringComparison.OrdinalIgnoreCase);
                 bool? en = (isDll || isOff) ? isDll : (bool?)null;
-                Row("\uE7C3", x.Name, $"{x.Size / 1024} KB", x.Mtime.ToString("MM-dd HH:mm") + (isOff ? " · 已停用" : ""), false, Path.Combine(fileCwd, x.Name), en);
+                Row("\uE7C3", x.Name, $"{x.Size / 1024} KB", x.Mtime.ToString("MM-dd HH:mm") + (isOff ? " · 已停用" : ""), false, Path.Combine(fileCwd, x.Name), en, x.Size);
             }
             // ★ 同世界链：这里是【异步读取完成】路径，原来又调 ShowView("plugins")，
             //   用户在读取期间切走会被抢回来。视图切换只由点击入口（OnShowPlugins）负责。

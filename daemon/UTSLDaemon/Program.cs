@@ -487,10 +487,14 @@ async Task ProcStartAsync(NetworkStream ns, string consoleMode = "")
         var psi = new ProcessStartInfo(ServerExePath())
         {
             WorkingDirectory = root,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
+            // ★★ 必须让服务端拿到【一个真控制台】：UnifierTSL 的 headless 控制台构造函数仍会读 Console.WindowHeight，
+            //   而 agent 自己通常没有控制台（被重定向/隐藏启动）→ 子进程继承不到 → IOException「句柄无效」→
+            //   TShockAPI.TShock 静态构造失败 → 服务端根本起不来（实测：日志里就是这个栈）。
+            //   实测结论：CreateNoWindow=false 不够（agent 无控制台可继承），ProcessStartInfo 也无法请求 CREATE_NEW_CONSOLE；
+            //   只有 UseShellExecute=true 这条路会让系统为子进程分配独立控制台（代价：拿不到 stdout 重定向）。
+            //   实测代价可接受：正常部署下 /stream/stdout 本来就是 ring=0，界面看的是【日志流】（日志文件那条不受影响）。
+            UseShellExecute = true,
+            WindowStyle = ProcessWindowStyle.Minimized,   // 独立控制台，但最小化（不开每世界窗口靠 UTSL_CONSOLE_MODE=headless）
         };
         psi.ArgumentList.Add("-joinserver");
         psi.ArgumentList.Add("first");
@@ -498,16 +502,35 @@ async Task ProcStartAsync(NetworkStream ns, string consoleMode = "")
         psi.ArgumentList.Add("txt");
         // ★ headless：不开每世界控制台窗口（否则多世界宿主给每个有会话的世界开一个 ConsoleClient，
         //   且其驱动是 while(true) 循环 —— 手动关窗口还会被重新拉起）。
-        if (string.Equals(consoleMode, "headless", StringComparison.OrdinalIgnoreCase))
+        //   注意：UseShellExecute=true 时不能写 psi.Environment（.NET 直接抛），所以用【进程级】环境变量 ——
+        //   子进程会继承；设完立刻还原，不影响本进程后续启动的其它子进程。
+        string? prevConsoleMode = Environment.GetEnvironmentVariable("UTSL_CONSOLE_MODE");
+        Environment.SetEnvironmentVariable("UTSL_CONSOLE_MODE",
+            string.Equals(consoleMode, "headless", StringComparison.OrdinalIgnoreCase) ? "headless" : null);
+        Process? p = null;
+        try { p = Process.Start(psi); }
+        catch
         {
-            psi.Environment["UTSL_CONSOLE_MODE"] = "headless";
+            // ★ 回退：服务端若要管理员权限，ShellExecute 会弹 UAC；在无人应答的上下文里会被取消。
+            //   这时退回旧方式（不弹 UAC，能起来但没有控制台 —— 那种情况下服务端自己可能因读不到
+            //   Console.WindowHeight 而起不来，日志会明确写出原因，比"什么都没发生"更好诊断）。
+            var psi2 = new ProcessStartInfo(ServerExePath())
+            {
+                WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true,
+            };
+            psi2.ArgumentList.Add("-joinserver"); psi2.ArgumentList.Add("first");
+            psi2.ArgumentList.Add("-logmode"); psi2.ArgumentList.Add("txt");
+            if (string.Equals(consoleMode, "headless", StringComparison.OrdinalIgnoreCase)) { psi2.Environment["UTSL_CONSOLE_MODE"] = "headless"; }
+            try { p = Process.Start(psi2); } catch { }
         }
-        var p = Process.Start(psi);
+        finally { Environment.SetEnvironmentVariable("UTSL_CONSOLE_MODE", prevConsoleMode); }
         if (p is null) { await WriteJsonAsync(ns, new { ok = false, error = "启动失败" }); return; }
         serverProc = p;
-        _ = Task.Run(() => PumpAsync(p.StandardOutput, "[out] "));
-        _ = Task.Run(() => PumpAsync(p.StandardError, "[err] "));
-        Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] agent 拉起服务端 pid=" + p.Id + "（无控制台 + 重定向 stdout）");
+        // UseShellExecute=true 时拿不到重定向流（会抛），所以只在拿到流时泵（保持代码对两种方式都安全）
+        try { if (p.StartInfo.RedirectStandardOutput) { _ = Task.Run(() => PumpAsync(p.StandardOutput, "[out] ")); } } catch { }
+        try { if (p.StartInfo.RedirectStandardError) { _ = Task.Run(() => PumpAsync(p.StandardError, "[err] ")); } } catch { }
+        Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] agent 拉起服务端 pid=" + p.Id + "（新控制台 + 重定向 stdout + headless=" + psi.Environment.ContainsKey("UTSL_CONSOLE_MODE") + "）");
         await WriteJsonAsync(ns, new { ok = true, pid = p.Id });
     }
     catch (Exception ex) { await WriteJsonAsync(ns, new { ok = false, error = ex.Message }); }
