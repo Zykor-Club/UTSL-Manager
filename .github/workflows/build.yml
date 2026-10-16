@@ -42,13 +42,11 @@ jobs:
         # 不要用仓库默认的 PublishDir（会输出到仓库外），CI 里显式指到 publish/
         run: dotnet publish UTSLManager.Avalonia.csproj -c Release --no-build -p:PublishDir=${{ github.workspace }}/publish/
 
-        - name: Publish agent (UTSLDaemon → publish/agent/)
-          shell: pwsh
-          # 「安装/更新云端 agent」按钮用的就是 publish/agent/UTSLDaemon.exe。
-          # 必须是【自包含单文件】：被管机器通常没有 .NET 10（实测远端只有 .NET 9）。
-          run: ./scripts/publish-agent.ps1 -ManagerDir "${{ github.workspace }}/publish"
-${{ github.workspace }}
-/publish"
+      - name: Publish agent (UTSLDaemon → publish/agent/)
+        shell: pwsh
+        # 「安装/更新云端 agent」按钮用的就是 publish/agent/UTSLDaemon.exe。
+        # 必须是【自包含单文件】：被管机器通常没有 .NET 10（实测远端只有 .NET 9）。
+        run: ./scripts/publish-agent.ps1 -ManagerDir "${{ github.workspace }}/publish"
 
       - name: Build extensions (官方扩展插件)
         # 扩展工程默认按相对路径找管理器 DLL；CI 里用 -p:ManagerDir 指到刚发布出来的目录
