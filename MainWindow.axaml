@@ -293,6 +293,7 @@
             <Button x:Name="BtnEditSave" Content="保存 (Ctrl+S)" FontSize="11.5" Padding="12,5" CornerRadius="9" Click="OnEditSave"/>
             <Button Content="↻ 重新加载" FontSize="11.5" Padding="12,5" CornerRadius="9" Click="OnEditReload"/>
             <Button Content="← 返回文件列表" FontSize="11.5" Padding="12,5" CornerRadius="9" Click="OnEditBack"/>
+            <CheckBox x:Name="ChkEditorWrap" Content="自动换行" FontSize="11.5" VerticalAlignment="Center" Margin="6,0,0,0" Click="OnEditorWrapChanged"/>
           </StackPanel>
         </Grid>
         <TextBlock x:Name="EditHint" Grid.Row="1" Text="" FontSize="11" Foreground="#FEBC2E" Margin="0,0,0,6" TextWrapping="Wrap"/>

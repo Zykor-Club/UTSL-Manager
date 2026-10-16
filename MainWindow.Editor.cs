@@ -45,6 +45,7 @@ public partial class MainWindow
     private bool editorHadBom;
     private string editorEol = "\r\n";
     private bool editorSaving;
+    private bool editorForceSave;    // ② JSON 语法错时"确认后按原样保存"的第二次确认
     private bool editorBackedUp;
     private string editorLoadedText = "";
 
@@ -185,6 +186,21 @@ public partial class MainWindow
         };
         // ★ P3：波浪线渲染器（AvaloniaEdit 的 IBackgroundRenderer，画在文本层之上）
         try { ed.TextArea.TextView.BackgroundRenderers.Add(new SquiggleRenderer(this)); } catch { }
+        // ★ ⑤ 当前行淡蓝底色（KnownLayer.Background = 画在文本层【之下】，绝不会遮住字）
+        try { ed.TextArea.TextView.BackgroundRenderers.Add(new CurrentLineRenderer(this)); } catch { }
+        // ★ ③ 点状态栏的语法提示 → 跳到第一个问题所在行（错误可能在屏幕外，波浪线根本看不到）
+        try
+        {
+            EditStatus.Cursor = new Cursor(StandardCursorType.Hand);
+            EditStatus.PointerPressed += (_, _) =>
+            {
+                EditorDiag? first = null;
+                lock (editorDiagLock) { if (editorDiags.Count > 0) { first = editorDiags[0]; } }
+                if (first is null) { return; }
+                try { ed.ScrollTo(first.Line, first.Col); ed.Focus(); } catch { }
+            };
+        }
+        catch { }
         // Ctrl+S 保存；Ctrl+F 打开查找面板
         ed.AddHandler(KeyDownEvent, async (s, e) =>
         {
@@ -220,33 +236,43 @@ public partial class MainWindow
                 return;
             }
 
+            // ★ ① 先切页面 + 显示"读取中…"，再异步读内容：冷缓存/远链路下读取要 1~2 秒，
+            //   原来"读完才切页面"会让点击看起来像没反应（这是用户反馈过两次的同一类问题）。
+            var ed = EnsureEditor();
+            editorPath = full;
+            editorName = name;
+            editorDir = System.IO.Path.GetDirectoryName(full) ?? FsRoot;
+            editorForceSave = false;
+            EditTitle.Text = "编辑 · " + name;
+            EditPathText.Text = (FileBackend.IsRemote ? "远端 " : "") + full;
+            EditHint.Text = "读取中…";
+            ShowView("edit");
+            ed.Focus();
+
             string text;
             try { text = await Task.Run(() => FsReadText(full)); }
-            catch (Exception ex) { ERR("读取失败: " + ex.Message); return; }
+            catch (Exception ex) { EditHint.Text = "⚠ 读取失败：" + ex.Message; ERR("读取失败: " + ex.Message); return; }
 
             // ★ 二进制嗅探：NUL 字节、或大量无法解码的替换字符 U+FFFD（UTF-8 解码失败会产生它）
             if (text.Contains('\0') || text.Count(c => c == '\uFFFD') > Math.Max(8, text.Length / 100))
             {
-                ERR($"{name} 看起来是二进制文件（含 NUL 或大量无法解码的字节），不能在线编辑。");
+                string why = $"{name} 看起来是二进制文件（含 NUL 或大量无法解码的字节），不能在线编辑。";
+                EditHint.Text = "⚠ " + why;      // 已经切到编辑页了，把原因显示在页面上（不只丢到控制台）
+                ERR(why);
                 return;
             }
 
             bool hadBom = text.Length > 0 && text[0] == '\uFEFF';
             string body = hadBom ? text[1..] : text;
 
-            var ed = EnsureEditor();
             editorSaving = true;
             ed.Text = body;
             editorSaving = false;
 
-            editorPath = full;
-            editorName = name;
-            editorDir = System.IO.Path.GetDirectoryName(full) ?? FsRoot;
             editorHadBom = hadBom;
             editorEol = DominantEol(text);
             editorDirty = false;
             editorLeaveOk = false;
-            editorBackedUp = false;
             editorLoadedText = body;
 
             // 记录"打开时"的大小与修改时间（保存前比对，检测外部修改）
@@ -268,13 +294,10 @@ public partial class MainWindow
                 ed.SyntaxHighlighting = def;
             }
             catch { }
-            EditTitle.Text = "编辑 · " + name;
-            EditPathText.Text = (FileBackend.IsRemote ? "远端 " : "") + full;
             EditHint.Text = "";
-            ShowView("edit");
-            ed.Focus();
             UpdateEditorStatus();
             ScheduleLint();          // 打开即校验一次
+            UpdateEditorWrapToggle();
         }
         catch (Exception ex) { ERR("打开编辑器失败: " + ex.Message); }
     }
@@ -338,9 +361,16 @@ public partial class MainWindow
             try { using var _ = JsonDocument.Parse(body); }
             catch (JsonException jx)
             {
-                ERR($"保存被拦下：{editorName} 不是合法 JSON —— {jx.Message}（行 {jx.LineNumber}，列 {jx.BytePositionInLine}）");
-                EditHint.Text = $"⚠ JSON 语法错误：{jx.Message}（行 {jx.LineNumber + 1}，列 {jx.BytePositionInLine + 1}）—— 已阻止保存，避免服务端读取失败。";
-                return;
+                // ★ ② 两步逃生：有些插件配置允许注释/尾逗号，不能把人锁死；确认一次就按原样保存。
+                if (!editorForceSave)
+                {
+                    editorForceSave = true;
+                    ERR($"保存被拦下：{editorName} 不是合法 JSON —— {jx.Message}（行 {jx.LineNumber}，列 {jx.BytePositionInLine}）。确认要按原样保存请再点一次「保存」。");
+                    EditHint.Text = $"⚠ JSON 语法错误：{jx.Message}（行 {jx.LineNumber + 1}，列 {jx.BytePositionInLine + 1}）—— 已阻止保存；若这个配置文件本来就允许注释/尾逗号，**再点一次「保存」**即可按原样写入。";
+                    return;
+                }
+                editorForceSave = false;
+                ERR($"⚠ 已按你的确认按原样保存（JSON 语法错误未修）：{jx.Message}");
             }
         }
 
@@ -575,6 +605,42 @@ public partial class MainWindow
             if (text[i] == '\n') { line++; col = 1; } else { col++; }
         }
         return (line, col);
+    }
+
+    /// <summary>④ 自动换行开关：勾选状态在控件上，切换文件时保持一致。</summary>
+    private void UpdateEditorWrapToggle()
+    {
+        if (editor is null || ChkEditorWrap is null) { return; }
+        try { editor.WordWrap = ChkEditorWrap.IsChecked == true; } catch { }
+    }
+
+    private void OnEditorWrapChanged(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => UpdateEditorWrapToggle();
+
+    /// <summary>⑤ 当前行的淡蓝底色（用户希望一眼看出光标在哪一行；画在文本层之下）。</summary>
+    private sealed class CurrentLineRenderer(MainWindow owner) : AvaloniaEdit.Rendering.IBackgroundRenderer
+    {
+        public AvaloniaEdit.Rendering.KnownLayer Layer => AvaloniaEdit.Rendering.KnownLayer.Background;
+
+        public void Draw(AvaloniaEdit.Rendering.TextView textView, DrawingContext dc)
+        {
+            if (!textView.VisualLinesValid) { return; }
+            var ed = owner.editor;
+            if (ed is null) { return; }
+            int off;
+            try { off = ed.TextArea.Caret.Offset; } catch { return; }
+            var brush = new SolidColorBrush(Color.Parse("#16233A"));
+            foreach (var line in textView.VisualLines)
+            {
+                if (off < line.FirstDocumentLine.Offset || off > line.LastDocumentLine.EndOffset) { continue; }
+                var seg = new AvaloniaEdit.Document.TextSegment
+                {
+                    StartOffset = line.FirstDocumentLine.Offset,
+                    Length = Math.Max(1, line.LastDocumentLine.EndOffset - line.FirstDocumentLine.Offset),
+                };
+                foreach (var r in AvaloniaEdit.Rendering.BackgroundGeometryBuilder.GetRectsForSegment(textView, seg)) { dc.FillRectangle(brush, r); }
+                break;
+            }
+        }
     }
 
     /// <summary>红色波浪线渲染器（AvaloniaEdit 的 IBackgroundRenderer）。</summary>
