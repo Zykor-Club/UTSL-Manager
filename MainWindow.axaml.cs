@@ -1158,16 +1158,17 @@ public partial class MainWindow : Window
     private const int AgentRemotePort = 7879;    // 远端 agent 端口（只绑回环）
     private static bool AgentAlive;
     private static long AgentProbedMs;
+    private static string AgentBaseUsed = "";   // ★ 当前流连的是哪个 base（本机 7879 / 远端 17879）；切换时必须重连
     private static CancellationTokenSource? agentLogCts;
     private static string AgentBase => UseRemote ? "http://127.0.0.1:" + AgentLocalPort : "http://127.0.0.1:" + AgentRemotePort;
 
     /// <summary>探测 agent 是否可用（2 秒超时；不可用不抛异常）。</summary>
-    private static async Task<bool> ProbeAgentAsync()
+    private static async Task<bool> ProbeAgentAsync(string baseUrl)
     {
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
-            string s = await http.GetStringAsync(AgentBase + "/ping");
+            string s = await http.GetStringAsync(baseUrl + "/ping");
             bool ok = s.Contains("\"ok\":true");
             AgentProbedMs = Environment.TickCount64;
             return ok;
@@ -1183,7 +1184,7 @@ public partial class MainWindow : Window
             try
             {
                 using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-                using var resp = await http.GetAsync(AgentBase + "/stream/log", HttpCompletionOption.ResponseHeadersRead, ct);
+                using var resp = await http.GetAsync(AgentBaseUsed + "/stream/log", HttpCompletionOption.ResponseHeadersRead, ct);
                 resp.EnsureSuccessStatusCode();
                 using var stream = await resp.Content.ReadAsStreamAsync(ct);
                 using var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
@@ -1212,9 +1213,14 @@ public partial class MainWindow : Window
     /// <summary>探活 + 起停日志流；由隧道定时器调用。状态变化时在控制台留一行日志（不刷屏）。</summary>
     private async Task TickAgentAsync()
     {
-        bool ok = await ProbeAgentAsync();
-        if (ok == AgentAlive) { return; }
+        string want = AgentBase;
+        bool ok = await ProbeAgentAsync(want);
+        // ★ 不仅要看"活不活"，还要看"连的是不是同一个 base"：
+        //   启动时配置可能还没加载完（UseRemote=false → 探到本机 agent），之后切到远端 →
+        //   若只看 AgentAlive 就会一直 true == true 直接 return，流永远留在本机（实测踩到）。
+        if (ok == AgentAlive && want == AgentBaseUsed) { return; }
         AgentAlive = ok;
+        AgentBaseUsed = want;
         if (ok)
         {
             Dispatcher.UIThread.Post(() => ERR("✓ 已连接 UTSLDaemon（云端 agent）—— 控制台日志改为推送，实测延迟约 150 ms；不再轮询日志文件"));
