@@ -170,7 +170,17 @@ public static class AgentClient
 
     // ===== 直连（无 SSH）模式需要的原语 =====
 
-    /// <summary>对 agent 发一个 GET 并取回响应体（带认证头）。失败/非 2xx 返回 null。</summary>
+    /// <summary>
+    /// 最近一次 agent 请求/解析的错误原因。
+    /// ★ R9（D 子代理）：原来 AgentFileBackend 把"HTTP 401 / 响应畸形"和"确实不存在"都吞成
+    ///   空列表/false，用户会以为目录是空的。现在把原因记在这里，界面可以提示。
+    /// </summary>
+    public static string LastError { get; private set; } = "";
+
+    /// <summary>由 AgentFileBackend 等调用方补记错误（例如响应不是合法 JSON）。</summary>
+    public static void NoteError(string message) { LastError = message; }
+
+    /// <summary>对 agent 发一个 GET 并取回响应体（带认证头）。失败/非 2xx 返回 null，原因记在 LastError。</summary>
     public static string? GetText(string path)
     {
         try
@@ -178,10 +188,16 @@ public static class AgentClient
             using var req = new HttpRequestMessage(HttpMethod.Get, Base + path);
             if (Token.Length > 0) { req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", Token); }
             using var resp = LocalHttp.Send(req);
-            if (!resp.IsSuccessStatusCode) { return null; }
+            if (!resp.IsSuccessStatusCode)
+            {
+                LastError = "agent 返回 HTTP " + (int)resp.StatusCode
+                    + (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized ? "（令牌缺失或错误）" : "");
+                return null;
+            }
+            LastError = "";
             return resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
         }
-        catch { return null; }
+        catch (Exception ex) { LastError = "agent 请求失败: " + ex.Message; return null; }
     }
 
     /// <summary>对 agent 发一个 POST（破坏性端点如 /files/delete、/fs/mkdir、/fs/rename 只接受非 GET，
@@ -194,10 +210,16 @@ public static class AgentClient
             if (Token.Length > 0) { req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", Token); }
             req.Content = new ByteArrayContent([]);          // 带空体，确保是"有体的 POST"
             using var resp = LocalHttp.Send(req);
-            if (!resp.IsSuccessStatusCode) { return null; }
+            if (!resp.IsSuccessStatusCode)
+            {
+                LastError = "agent 返回 HTTP " + (int)resp.StatusCode
+                    + (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized ? "（令牌缺失或错误）" : "");
+                return null;
+            }
+            LastError = "";
             return resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
         }
-        catch { return null; }
+        catch (Exception ex) { LastError = "agent 请求失败: " + ex.Message; return null; }
     }
 
     /// <summary>把内存里的字节 PUT 到 agent 的 /files/put（直连模式下没有 scp，小文件走这个）。</summary>

@@ -2199,30 +2199,38 @@ public partial class MainWindow : Window
         {
             string root = LocalDir;
             string outDir = Path.Combine(root, "backup");
-            Directory.CreateDirectory(outDir);
-            string zipPath = Path.Combine(outDir, "backup_" + DateTime.Now.ToString("yyyy-MM-dd_HHmmss") + ".zip");
-            int n = 0, skip = 0;
-            using (var zip = System.IO.Compression.ZipFile.Open(zipPath, System.IO.Compression.ZipArchiveMode.Create))
+            string stamp = DateTime.Now.ToString("yyyy-MM-dd_HHmmss");
+            ERR("本机备份中（压缩 Worlds + config），大存档请稍候…");
+            // ★ K4（审查报告）：整段压缩原来直接做在 async void 的 UI 事件处理器里 ——
+            //   十几 MB 存档 + 全部配置会冻界面 1~3 秒。现在放后台线程，UI 更新在 await 之后回主线程。
+            (int n, int skip, string zipName) = await Task.Run(() =>
             {
-                foreach (var f in Directory.GetFiles(Path.Combine(root, "Worlds"), "*.wld"))
+                Directory.CreateDirectory(outDir);
+                string zipPath = Path.Combine(outDir, "backup_" + stamp + ".zip");
+                int n = 0, skip = 0;
+                using (var zip = System.IO.Compression.ZipFile.Open(zipPath, System.IO.Compression.ZipArchiveMode.Create))
                 {
-                    try { zip.CreateEntryFromFile(f, "Worlds/" + Path.GetFileName(f)); n++; } catch { skip++; }
-                }
-                string cfgDir = Path.Combine(root, "config");
-                if (Directory.Exists(cfgDir))
-                {
-                    foreach (var f in Directory.GetFiles(cfgDir, "*.json", SearchOption.AllDirectories))
+                    foreach (var f in Directory.GetFiles(Path.Combine(root, "Worlds"), "*.wld"))
                     {
-                        try
+                        try { zip.CreateEntryFromFile(f, "Worlds/" + Path.GetFileName(f)); n++; } catch { skip++; }
+                    }
+                    string cfgDir = Path.Combine(root, "config");
+                    if (Directory.Exists(cfgDir))
+                    {
+                        foreach (var f in Directory.GetFiles(cfgDir, "*.json", SearchOption.AllDirectories))
                         {
-                            string rel = "config/" + Path.GetRelativePath(cfgDir, f).Replace('\\', '/');
-                            zip.CreateEntryFromFile(f, rel); n++;
+                            try
+                            {
+                                string rel = "config/" + Path.GetRelativePath(cfgDir, f).Replace('\\', '/');
+                                zip.CreateEntryFromFile(f, rel); n++;
+                            }
+                            catch { skip++; }
                         }
-                        catch { skip++; }
                     }
                 }
-            }
-            ERR($"备份完成: {Path.GetFileName(zipPath)}（{n} 个文件" + (skip > 0 ? $"，{skip} 个被占用跳过" : "") + "）");
+                return (n, skip, Path.GetFileName(zipPath));
+            });
+            ERR($"备份完成: {zipName}（{n} 个文件" + (skip > 0 ? $"，{skip} 个被占用跳过" : "") + "）");
         }
         catch (Exception ex) { ERR("备份失败: " + ex.Message); }
     }
@@ -2561,9 +2569,46 @@ public partial class MainWindow : Window
     //   现在：名称集合同样就只改 Text，变了才重建。
     private readonly List<(TextBlock Val, string Name)> pluginRowCache = [];
 
+    // ★ K2：插件指标的后台采样缓存与在飞闩锁（键 = 类型|插件|名称）。
+    //   指标值是 double?（PluginMetricInfo.Provider），状态值是 string（PluginStatusInfo.Provider）。
+    private readonly Dictionary<string, double?> pluginMetricCache = [];
+    private readonly Dictionary<string, string?> pluginStatusCache = [];
+    private int pluginSampling;
+
+    private static string PluginKey(string kind, string plugin, string name) => kind + "|" + plugin + "|" + name;
+
+    /// <summary>在后台线程调用插件的 Provider 并写进缓存（UI 线程只读缓存）。</summary>
+    private void KickPluginSample()
+    {
+        if (Interlocked.CompareExchange(ref pluginSampling, 1, 0) != 0) { return; }
+        IReadOnlyList<PluginMetricInfo> metrics = pluginHost is null ? Array.Empty<PluginMetricInfo>() : pluginHost.Metrics;
+        IReadOnlyList<PluginStatusInfo> statuses = pluginHost is null ? Array.Empty<PluginStatusInfo>() : pluginHost.Statuses;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                foreach (var m in metrics)
+                {
+                    string k = PluginKey("m", m.PluginName, m.Name);
+                    try { pluginMetricCache[k] = m.Provider(); } catch { pluginMetricCache[k] = null; }
+                }
+                foreach (var s in statuses)
+                {
+                    string k = PluginKey("s", s.PluginName, s.Name);
+                    try { pluginStatusCache[k] = s.Provider() ?? "—"; } catch { pluginStatusCache[k] = "—"; }
+                }
+            }
+            finally { Volatile.Write(ref pluginSampling, 0); }
+        });
+    }
+
     private void RefreshPluginMetrics()
     {
         if (PluginMetricsHost is null) { return; }
+        // ★ K2（审查报告）：Provider 可能做 ssh/REST（单个实测 98~147ms，且没有超时），原来在 2 秒的 UI tick 上同步调用。
+        //   现在：后台线程调 Provider 写缓存，UI 线程只读缓存、只做界面更新。
+        //   契约变化：Provider 可能从【后台线程】被调用（见 PluginHost 里的说明），插件不要在 Provider 里碰 UI。
+        KickPluginSample();
         IReadOnlyList<PluginMetricInfo> metrics = pluginHost is null ? Array.Empty<PluginMetricInfo>() : pluginHost.Metrics;
         IReadOnlyList<PluginStatusInfo> statuses = pluginHost is null ? Array.Empty<PluginStatusInfo>() : pluginHost.Statuses;
         if (PluginMetricsHeader is not null) { PluginMetricsHeader.IsVisible = metrics.Count > 0 || statuses.Count > 0; }
@@ -2576,13 +2621,13 @@ public partial class MainWindow : Window
             for (int i = 0; i < metrics.Count; i++)
             {
                 var m = metrics[i];
-                try { m.Value = m.Provider(); } catch { m.Value = null; }
+                m.Value = pluginMetricCache.TryGetValue(PluginKey("m", m.PluginName, m.Name), out double? cv) ? cv : null;
                 pluginRowCache[i].Val.Text = m.Display;
             }
             for (int i = 0; i < statuses.Count; i++)
             {
                 var s = statuses[i];
-                try { s.Value = s.Provider(); } catch { s.Value = "—"; }
+                s.Value = pluginStatusCache.TryGetValue(PluginKey("s", s.PluginName, s.Name), out string? sv) ? (sv ?? "—") : "—";
                 pluginRowCache[metrics.Count + i].Val.Text = s.Value;
             }
             return;
@@ -2592,7 +2637,7 @@ public partial class MainWindow : Window
         PluginMetricsHost.Children.Clear();
         foreach (var m in metrics)
         {
-            try { m.Value = m.Provider(); } catch { m.Value = null; }
+            m.Value = pluginMetricCache.TryGetValue(PluginKey("m", m.PluginName, m.Name), out double? cv) ? cv : null;
             var row = new Grid { ColumnDefinitions = new Avalonia.Controls.ColumnDefinitions("*,Auto") };
             var name = new TextBlock { Text = m.Name, FontSize = 11, Foreground = GetBrush("#9A9AA0") };
             var val = new TextBlock { Text = m.Display, FontSize = 11, Foreground = GetBrush("#66CCFF") };
@@ -2608,7 +2653,7 @@ public partial class MainWindow : Window
         // 文本状态项（P2-15：状态胶囊）
         foreach (var s in statuses)
         {
-            try { s.Value = s.Provider(); } catch { s.Value = "—"; }
+            s.Value = pluginStatusCache.TryGetValue(PluginKey("s", s.PluginName, s.Name), out string? sv) ? (sv ?? "—") : "—";
             var row = new Grid { ColumnDefinitions = new Avalonia.Controls.ColumnDefinitions("*,Auto") };
             var name = new TextBlock { Text = s.Name, FontSize = 11, Foreground = GetBrush("#9A9AA0") };
             var val = new TextBlock { Text = s.Value, FontSize = 11, Foreground = GetBrush("#7EE787"), TextWrapping = Avalonia.Media.TextWrapping.NoWrap };
@@ -3695,10 +3740,33 @@ public partial class MainWindow : Window
             // ★ 远端模式下 FsList 是 SSH 调用，必须离开 UI 线程，否则窗口会「未响应」
             var entries = await Task.Run(() => FsList(fileCwd));
             PluginList.Children.Clear();   // 数据到手才替换
-            if (entries.Count == 0 && !await Task.Run(() => FsExists(fileCwd))) { fileCwd = root2; return; }
+            if (entries.Count == 0)
+            {
+                // ★ R9：列表为空时必须说清【原因】—— 否则"令牌错/响应畸形"看起来就跟"目录本来就是空的"一样
+                string why = AgentClient.LastError;
+                if (!await Task.Run(() => FsExists(fileCwd)))
+                {
+                    if (why.Length > 0) { ERR("读取 " + fileCwd + " 失败：" + why); }
+                    else { fileCwd = root2; return; }   // 目录真的不存在 → 退回根目录
+                }
+                else if (why.Length > 0) { ERR("文件列表为空（agent 未返回条目）：" + why); }
+            }
             var dirs = entries.Where(e => e.IsDir).OrderBy(e => e.Name).ToList();
             var files = entries.Where(e => !e.IsDir).OrderBy(e => e.Name).ToList();
-            FileInfo.Text = $"{dirs.Count} 个文件夹 · {files.Count} 个文件";
+            // ★ K6：行数封顶 —— 大目录逐行建 5 个控件会卡住列表（无虚拟化）。
+            //   但必须在标题里【明确标注】被截断，绝不能悄悄少显示（那会让人以为文件丢了）。
+            const int MaxRows = 400;
+            int totalRows = dirs.Count + files.Count;
+            string truncNote = "";
+            if (totalRows > MaxRows)
+            {
+                int keepDirs = Math.Min(dirs.Count, MaxRows);
+                int keepFiles = Math.Max(0, MaxRows - keepDirs);
+                dirs = dirs.Take(keepDirs).ToList();
+                files = files.Take(keepFiles).ToList();
+                truncNote = $"（共 {totalRows} 项，此处仅显示前 {MaxRows} 项）";
+            }
+            FileInfo.Text = $"{dirs.Count} 个文件夹 · {files.Count} 个文件" + truncNote;
 
             void Row(string icon, string name, string sizeText, string timeText, bool isDir, string full, bool? enabled)
             {
@@ -4633,22 +4701,30 @@ public partial class MainWindow : Window
             restoreArmed = false;
             BtnRestore.Content = "恢复中…";
             string root = @"C:\Users\星梦\Desktop\utsl-deploy";
-            int n = 0, skipped = 0;
-            string rootFull = Path.GetFullPath(root);
-            string rootWithSep = rootFull.EndsWith(Path.DirectorySeparatorChar) ? rootFull : rootFull + Path.DirectorySeparatorChar;
-            using (var zip = ZipFile.OpenRead(latest.FullName))
+            string zipName = latest.Name;
+            ERR("恢复中（解压到 " + root + "）…");
+            // ★ K5（审查报告）：解压是几十 MB 的磁盘 I/O + 解压，原来直接压在 UI 线程上 → 移到后台线程。
+            //   zip-slip 校验原样保留在循环里（归一化后必须落在 utsl-deploy 之内）。
+            (int n, int skipped) = await Task.Run(() =>
             {
-                foreach (var entry in zip.Entries)
+                int n = 0, skipped = 0;
+                string rootFull = Path.GetFullPath(root);
+                string rootWithSep = rootFull.EndsWith(Path.DirectorySeparatorChar) ? rootFull : rootFull + Path.DirectorySeparatorChar;
+                using (var zip = ZipFile.OpenRead(latest.FullName))
                 {
-                    if (string.IsNullOrEmpty(entry.Name)) { continue; }
-                    // ★ 修 bug#2（zip-slip）：先归一化，再校验目标必须落在 utsl-deploy 之内
-                    string target = Path.GetFullPath(Path.Combine(rootFull, entry.FullName.Replace('/', Path.DirectorySeparatorChar)));
-                    if (!target.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase)) { skipped++; continue; }
-                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                    try { entry.ExtractToFile(target, true); n++; } catch { }
+                    foreach (var entry in zip.Entries)
+                    {
+                        if (string.IsNullOrEmpty(entry.Name)) { continue; }
+                        // ★ 修 bug#2（zip-slip）：先归一化，再校验目标必须落在 utsl-deploy 之内
+                        string target = Path.GetFullPath(Path.Combine(rootFull, entry.FullName.Replace('/', Path.DirectorySeparatorChar)));
+                        if (!target.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase)) { skipped++; continue; }
+                        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                        try { entry.ExtractToFile(target, true); n++; } catch { }
+                    }
                 }
-            }
-            ERR($"已从 {latest.Name} 恢复 {n} 个文件" + (skipped > 0 ? $"（{skipped} 个越界条目已跳过）" : "") + " —— 建议重启服务端使其生效");
+                return (n, skipped);
+            });
+            ERR($"已从 {zipName} 恢复 {n} 个文件" + (skipped > 0 ? $"（{skipped} 个越界条目已跳过）" : "") + " —— 建议重启服务端使其生效");
         }
         catch (Exception ex) { ERR("恢复失败: " + ex.Message); }
         await Task.Delay(2000);

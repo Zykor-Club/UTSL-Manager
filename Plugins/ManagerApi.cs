@@ -62,6 +62,12 @@ public sealed class PluginMetricInfo
     public required string PluginName { get; init; }
     public required string Name { get; init; }
     public required string Unit { get; init; }
+    /// <summary>
+    /// 取当前值。★ 宿主会【从后台线程】调用它（每 2 秒一次），所以：
+    ///   · 不要在这里碰 UI/控件（需要更新界面请用 ctx 提供的 Dispatcher 或事件）；
+    ///   · 必须是线程安全的（通常是读一个 volatile 字段或做一次快照）；
+    ///   · 不要在这里做慢操作 —— 它每 2 秒被调用一次，慢操作会拖住采样（需要 ssh/REST 请自己后台轮询后缓存）。
+    /// </summary>
     public required Func<double?> Provider { get; init; }
     public double? Value { get; set; }
 
@@ -73,6 +79,7 @@ public sealed class PluginStatusInfo
 {
     public required string PluginName { get; init; }
     public required string Name { get; init; }
+    /// <summary>取当前状态文本。约束同 PluginMetricInfo.Provider：可能从后台线程调用、必须线程安全、不要碰 UI。</summary>
     public required Func<string> Provider { get; init; }
     public string Value { get; set; } = "";
 }

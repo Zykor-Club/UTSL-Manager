@@ -9,11 +9,16 @@ namespace UTSLManager.Backends;
 public sealed class RemoteFileBackend(ISshTransport ssh, string root) : IFileBackend
 {
     /// <summary>
-    /// EncodedCommand 有命令行长度上限（base64(UTF-16(script)) ≈ 2.7 倍膨胀，CreateProcess 上限 32767 字符），
-    /// 写入按此大小分块追加。★ 原来是 1400：写 5KB 配置要 5 趟 ssh（约 8 秒），100KB 要 98 趟（约 2.6 分钟）；
-    /// 提到 8000 后 5KB 只需 1 趟。（更大文件的正确做法是走 Upload 的 scp/agent 通道，见 TODO。）
+    /// 每次 ssh 写入携带的 base64 字符数。★ 这个值**不能随便调大** —— 实测（2026-10-16，远端 43.249.195.13）：
+    ///   EncodedCommand 长度 = 脚本 × 约 2.67，而**远端 cmd.exe / CreateProcess 的 8191 硬上限**会直接拒绝：
+    ///     base64 2800 → Encoded 7728 → OK
+    ///     base64 3000 → Encoded 8260 → 远端报「命令行太长。」
+    ///   之前这里被"优化"成 8000（只算到本地 32767 上限），导致 EncodedCommand ≈ 22K，
+    ///   **凡是最大那块超过约 2.7K base64（即任何 > 2KB 的文件）在 SSH 模式下都写不进去** —— 包括 4.7KB 的 TShock 配置。
+    ///   2400 是留足余量的实测安全值（Encoded ≈ 7.3K）。
+    ///   （更大文件的正确做法是走 Upload 的 scp/agent 通道，见 TODO。）
     /// </summary>
-    private const int WriteChunk = 8000;
+    private const int WriteChunk = 2400;
 
     /// <summary>
     /// 写操作统一入口：脚本必须输出 OK 或 ERR:原因，方法按真实结果返回。
@@ -63,14 +68,10 @@ public sealed class RemoteFileBackend(ISshTransport ssh, string root) : IFileBac
     {
         string b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
         string tmp = path + ".tmp";
-        // 先写临时文件，全部写完再改名覆盖：中途失败不会留下半个配置文件
-        ssh.Run(Quiet + " [IO.File]::WriteAllBytes('" + Ps.Q(tmp) + "', [Convert]::FromBase64String('" + b64.Substring(0, Math.Min(WriteChunk, b64.Length)) + "'))", 30000);
-        for (int i = WriteChunk; i < b64.Length; i += WriteChunk)
-        {
-            string chunk = b64.Substring(i, Math.Min(WriteChunk, b64.Length - i));
-            ssh.Run(Quiet + " $p='" + Ps.Q(tmp) + "'; $b=[IO.File]::ReadAllBytes($p); [IO.File]::WriteAllBytes($p, $b + [Convert]::FromBase64String('" + chunk + "'))", 30000);
-        }
-        // 三步（首块/追加块/改名）任一失败都算失败
+        // ★ E2（审查报告）：这里原来有一整段"先写一遍 + 逐块追加"的死代码（返回值全丢），
+        //   紧接着又执行一遍真正的写入 —— 等于每次写文件都发两遍 ssh。已删除。
+        //   追加块也从 `$b=[IO.File]::ReadAllBytes($p); WriteAllBytes($p, $b + 新块)`（O(n²)、每块重读整个文件）
+        //   改成 FileStream 追加（O(n)），PowerShell 5.1 / .NET 9 都支持。
         if (b64.Length <= WriteChunk)
         {
             if (!RunWrite("[IO.File]::WriteAllBytes('" + Ps.Q(tmp) + "', [Convert]::FromBase64String('" + b64 + "'));", 30000)) { return false; }
@@ -81,7 +82,8 @@ public sealed class RemoteFileBackend(ISshTransport ssh, string root) : IFileBac
             for (int i = WriteChunk; i < b64.Length; i += WriteChunk)
             {
                 string chunk = b64.Substring(i, Math.Min(WriteChunk, b64.Length - i));
-                if (!RunWrite("$p='" + Ps.Q(tmp) + "'; $b=[IO.File]::ReadAllBytes($p); [IO.File]::WriteAllBytes($p, $b + [Convert]::FromBase64String('" + chunk + "'));", 30000)) { return false; }
+                // ★ E2：FileStream 追加，避免每块都把整个文件读回内存再拼一个新数组
+                if (!RunWrite("$p='" + Ps.Q(tmp) + "'; $fs=[IO.File]::Open($p,[IO.FileMode]::Append); $bb=[Convert]::FromBase64String('" + chunk + "'); $fs.Write($bb,0,$bb.Length); $fs.Close();", 30000)) { return false; }
             }
         }
         return RunWrite("Move-Item -LiteralPath '" + Ps.Q(tmp) + "' -Destination '" + Ps.Q(path) + "' -Force;", 30000);

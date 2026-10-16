@@ -22,7 +22,11 @@ public sealed class AgentFileBackend(string root) : IFileBackend
         try
         {
             using var doc = System.Text.Json.JsonDocument.Parse(s);
-            if (!doc.RootElement.TryGetProperty("entries", out var arr)) { return list; }
+            if (!doc.RootElement.TryGetProperty("entries", out var arr))
+            {
+                AgentClient.NoteError("agent 的列表响应缺少 entries 字段（前 80 字符: " + s[..Math.Min(80, s.Length)] + "）");
+                return list;
+            }
             foreach (var e in arr.EnumerateArray())
             {
                 string name = e.GetProperty("name").GetString() ?? "";
@@ -33,14 +37,21 @@ public sealed class AgentFileBackend(string root) : IFileBackend
                 list.Add(new FsEntry(name, isDir, size, mt));
             }
         }
-        catch { }
+        // ★ R9：响应不是合法 JSON 时必须留下原因，不能静默返回空列表（否则与"目录本来就是空的"无法区分）
+        catch (Exception ex) { AgentClient.NoteError("agent 的列表响应不是合法 JSON: " + ex.Message); }
         return list;
     }
 
     public bool Exists(string path)
     {
         string? s = AgentClient.GetText("/fs/exists?path=" + Uri.EscapeDataString(path));
-        return s is not null && s.Contains("\"exists\":true");
+        if (s is null) { return false; }                      // 请求失败，原因已在 LastError
+        if (!s.Contains("\"exists\""))
+        {
+            AgentClient.NoteError("agent 的 exists 响应异常（前 80 字符: " + s[..Math.Min(80, s.Length)] + "）");
+            return false;
+        }
+        return s.Contains("\"exists\":true");
     }
 
     public string ReadText(string path)
@@ -53,7 +64,8 @@ public sealed class AgentFileBackend(string root) : IFileBackend
             if (doc.RootElement.TryGetProperty("ok", out var ok) && ok.GetBoolean()
                 && doc.RootElement.TryGetProperty("text", out var t)) { return t.GetString() ?? ""; }
         }
-        catch { }
+        // ★ R9：同上 —— 读不到内容时留下原因（越界被拒、文件不存在、响应畸形都记下来）
+        catch (Exception ex) { AgentClient.NoteError("agent 的读取响应不是合法 JSON: " + ex.Message); }
         return "";
     }
 
