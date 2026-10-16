@@ -61,4 +61,12 @@
     <!-- P2-12：.csx 脚本插件（Roslyn） -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.9.0" />
   </ItemGroup>
+  <!-- daemon/ 是独立工程（UTSLDaemon），别被管理器的 SDK 通配顺手编进来 -->
+  <ItemGroup>
+    <Compile Remove="daemon/**" />
+    <None Remove="daemon/**" />
+    <EmbeddedResource Remove="daemon/**" />
+    <AvaloniaResource Remove="daemon/**" />
+  </ItemGroup>
+
 </Project>

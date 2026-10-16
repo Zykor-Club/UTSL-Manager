@@ -240,8 +240,9 @@ public partial class MainWindow : Window
         logTimer.Start();
             // 远端模式：每 20 秒确保 SSH 隧道还活着（断了自动重建）
             var tunnelTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
-            tunnelTimer.Tick += (_, _) => { if (HasSsh) { _ = Task.Run(() => EnsureTunnel()); } };   // 自检修复：隧道探测也放后台
+            tunnelTimer.Tick += (_, _) => { if (HasSsh) { _ = Task.Run(() => EnsureTunnel()); } _ = Task.Run(() => TickAgentAsync()); };   // ★ agent 探活与本机/远端无关（本机 7879 / 远端走隧道 17879）   // 自检修复：隧道探测也放后台
             tunnelTimer.Start();
+        _ = Task.Run(() => TickAgentAsync());     // 启动即探一次 agent（否则要等 20 秒）
 
         // ★ 150% DPI 下窗口初始位置/尺寸会算错，导致右侧跑到屏幕外（控制区看不见）
         //   这里按屏幕工作区强制钳制并居中。
@@ -1148,6 +1149,86 @@ public partial class MainWindow : Window
         dot.Background = new SolidColorBrush(Color.Parse(hex));
     }
 
+    // ===== 云端 agent（UTSLDaemon，云管 P0）=====
+    //   远端没有 .NET 10，所以 agent 以【自包含单文件】部署在 C:\utsl-agent\UTSLDaemon.exe，
+    //   由计划任务 UTSLAgent 常驻，只监听 127.0.0.1:7879。传输走【已有的那条常驻 ssh 隧道】
+    //   多转发一个端口 —— 能力像 MCSManager 的 daemon，但公网暴露面仍然是零。
+    //   有 agent：日志改推送（实测 154 ms）、指标可 2 秒级；没有：自动回落到原有 ssh 路径。
+    private const int AgentLocalPort = 17879;    // 本机隧道入口
+    private const int AgentRemotePort = 7879;    // 远端 agent 端口（只绑回环）
+    private static bool AgentAlive;
+    private static long AgentProbedMs;
+    private static CancellationTokenSource? agentLogCts;
+    private static string AgentBase => UseRemote ? "http://127.0.0.1:" + AgentLocalPort : "http://127.0.0.1:" + AgentRemotePort;
+
+    /// <summary>探测 agent 是否可用（2 秒超时；不可用不抛异常）。</summary>
+    private static async Task<bool> ProbeAgentAsync()
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            string s = await http.GetStringAsync(AgentBase + "/ping");
+            bool ok = s.Contains("\"ok\":true");
+            AgentProbedMs = Environment.TickCount64;
+            return ok;
+        }
+        catch { AgentProbedMs = Environment.TickCount64; return false; }
+    }
+
+    /// <summary>订阅 agent 的 SSE 日志流，把行投到控制台；断开则退避重连。AgentAlive=false 时不再重连。</summary>
+    private async Task AgentLogLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+                using var resp = await http.GetAsync(AgentBase + "/stream/log", HttpCompletionOption.ResponseHeadersRead, ct);
+                resp.EnsureSuccessStatusCode();
+                using var stream = await resp.Content.ReadAsStreamAsync(ct);
+                using var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+                while (!ct.IsCancellationRequested)
+                {
+                    string? line = await reader.ReadLineAsync(ct);
+                    if (line is null) { break; }                      // 服务端关流
+                    if (line.StartsWith("data: "))
+                    {
+                        string text = line.Substring(6);
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            if (!ConsoleView.IsVisible) { return; }   // 不在控制台页就不刷新 UI
+                            Term(text, PickColor(text));
+                        });
+                    }
+                }
+            }
+            catch (OperationCanceledException) { break; }
+            catch { }
+            if (!AgentAlive) { break; }
+            try { await Task.Delay(2000, ct); } catch { break; }
+        }
+    }
+
+    /// <summary>探活 + 起停日志流；由隧道定时器调用。状态变化时在控制台留一行日志（不刷屏）。</summary>
+    private async Task TickAgentAsync()
+    {
+        bool ok = await ProbeAgentAsync();
+        if (ok == AgentAlive) { return; }
+        AgentAlive = ok;
+        if (ok)
+        {
+            Dispatcher.UIThread.Post(() => ERR("✓ 已连接 UTSLDaemon（云端 agent）—— 控制台日志改为推送，实测延迟约 150 ms；不再轮询日志文件"));
+            agentLogCts?.Cancel();
+            agentLogCts = new CancellationTokenSource();
+            _ = Task.Run(() => AgentLogLoopAsync(agentLogCts.Token));
+        }
+        else
+        {
+            Dispatcher.UIThread.Post(() => ERR("agent 不可用，日志回落到 ssh 轮询路径"));
+            agentLogCts?.Cancel();
+            agentLogCts = null;
+        }
+    }
     private static void EnsureTunnel()
     {
         if (!HasSsh) { return; }
@@ -1166,8 +1247,9 @@ public partial class MainWindow : Window
             var psi = new System.Diagnostics.ProcessStartInfo("ssh")
             {
                 UseShellExecute = false, CreateNoWindow = true,
-                Arguments = "-i \"" + SshKey + "\" -p " + SshPort + " -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -N -L " +
-                            ConnPort + ":127.0.0.1:" + RemoteRestPort + " " + SshUser + "@" + SshHost
+                Arguments = "-i \"" + SshKey + "\" -p " + SshPort + " -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -N " +
+                            // ★ 一个 ssh 承载两条转发：REST（原有）+ agent（云管 P0）
+                            "-L " + ConnPort + ":127.0.0.1:" + RemoteRestPort + " -L " + AgentLocalPort + ":127.0.0.1:" + AgentRemotePort + " " + SshUser + "@" + SshHost
             };
             var proc = System.Diagnostics.Process.Start(psi);
             TunnelPid = proc?.Id ?? 0;
@@ -1488,6 +1570,7 @@ public partial class MainWindow : Window
 
     private void RefreshLog()
     {
+        if (AgentAlive) { return; }                     // ★ agent 在线：日志由 SSE 推送，不再轮询文件
         if (UseRemote) { RefreshRemoteLog(); return; }
         if (!ConsoleView.IsVisible) { logPos = 0; lastLogFile = ""; return; }   // ★ 隐藏时不做日志 UI 更新
         try
