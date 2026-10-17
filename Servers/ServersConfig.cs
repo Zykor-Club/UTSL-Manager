@@ -47,6 +47,17 @@ public sealed class ServerProfile
 
     // ===== paths 段 =====
     public string LocalDir { get; set; } = "";
+
+    /// <summary>★ 本机档启动参数（原样传给 UnifierTSL.exe；空 = 不带任何参数）。
+    ///   原来所有本机部署都写死 `-joinserver first -logmode txt`，第二份部署带这套参数会打印 banner 后直接退出（实测）。</summary>
+    public string StartArgs { get; set; } = "";
+
+    /// <summary>本机档启动时额外注入的环境变量（每行 KEY=VALUE；空 = 不加）。</summary>
+    public string StartEnv { get; set; } = "";
+
+    /// <summary>旧版本写死的启动参数：只有「主档」（本机档里的第一台）在缺键时才默认用它。</summary>
+    public const string LegacyStartArgs = "-joinserver first -logmode txt";
+
     public bool Watchdog { get; set; } = true;
     public bool ForceLocal { get; set; }
     public bool WorldConsoles { get; set; }
@@ -70,7 +81,7 @@ public sealed class ServerProfile
     public long RestMs = -1;
     /// <summary>最近一次切到这一档的耗时（ms，-1=没切过）。</summary>
     public long LastSwitchMs = -1;
-    /// <summary>用户在本档上手动停了机 —— 看门狗不再自动拉起，直到用户再次点启动（或重启管理器）。</summary>
+    /// <summary>用户在本档上手动停了机 —— 掉线自启不再自动拉起，直到用户再次点启动（或重启管理器）。</summary>
     public bool UserStopped;
     /// <summary>该档读到过明文令牌（加载后要立刻重新加密落盘）。</summary>
     public bool PlainToken;
@@ -155,6 +166,7 @@ public sealed class ServersConfig
             Host = "127.0.0.1", Port = 7878,
             LocalDir = Path.Combine(desktop, "utsl-deploy"),
             ForceLocal = true, Watchdog = true,
+            StartArgs = ServerProfile.LegacyStartArgs,
         };
     }
 
@@ -169,6 +181,7 @@ public sealed class ServersConfig
             RemoteRestPort = src.RemoteRestPort, AgentPort = agentPort,
             Direct = src.Direct, DirectHost = src.DirectHost, DirectPort = src.DirectPort, DirectToken = src.DirectToken,
             LocalDir = src.LocalDir, Watchdog = src.Watchdog, ForceLocal = src.ForceLocal, WorldConsoles = src.WorldConsoles,
+            StartArgs = src.StartArgs, StartEnv = src.StartEnv,
         };
 
     // ===== 读写 =====
@@ -274,6 +287,7 @@ public sealed class ServersConfig
         };
         if (o["servers"] is JsonArray arr)
         {
+            bool localSeen = false;      // 本机档里的第一台 = 主档（缺启动参数键时才给它默认旧参数）
             foreach (var n in arr)
             {
                 if (n is not JsonObject so) { continue; }
@@ -323,6 +337,16 @@ public sealed class ServersConfig
                         if (p.DirectToken.Length > 0) { cfg.HadPlainToken = true; }
                     }
                 }
+                // ★ 启动参数（多档必需）：老文件没有这两个键。缺键时的默认——
+                //   本机档里第一台（历史上唯一的本机档 = 现在的主档）沿用旧写死参数，其余本机部署留空
+                //   （第二份部署带 -joinserver first -logmode txt 会起不来，实测）。
+                p.StartArgs = so["paths"]?["startArgs"]?.ToString() ?? "";
+                p.StartEnv = so["paths"]?["startEnv"]?.ToString() ?? "";
+                if (!p.IsRemote)
+                {
+                    if (so["paths"]?["startArgs"] is null && !localSeen) { p.StartArgs = ServerProfile.LegacyStartArgs; }
+                    localSeen = true;
+                }
                 cfg.Servers.Add(p);
             }
         }
@@ -355,6 +379,8 @@ public sealed class ServersConfig
                 {
                     ["localDir"] = p.LocalDir, ["watchdog"] = p.Watchdog,
                     ["forceLocal"] = p.ForceLocal, ["worldConsoles"] = p.WorldConsoles,
+                    // 本机档启动参数/环境变量（空串也要落盘：靠键在不在区分"没配过"和"故意清空"）
+                    ["startArgs"] = p.StartArgs, ["startEnv"] = p.StartEnv,
                 },
             };
             // ★ 安全：令牌一律 DPAPI 加密后落盘（同机的其他用户读到也解不开）；加密不可用才退回明文。

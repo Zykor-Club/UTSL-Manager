@@ -153,7 +153,7 @@ public partial class MainWindow : Window
     /// </summary>
     private static bool ShowWorldConsoles { get => ActiveSrv.WorldConsoles; set => ActiveSrv.WorldConsoles = value; }
 
-    /// <summary>掉线自启（看门狗）：服务端进程消失时自动拉起。默认开，可关并记住。</summary>
+    /// <summary>掉线自启：服务端进程消失时自动拉起。默认开，可关并记住。</summary>
     private static bool WatchdogEnabled { get => ActiveSrv.Watchdog; set => ActiveSrv.Watchdog = value; }
     private static string Logs => Path.Combine(LocalDir, "logs");
     private static int RemoteRestPort { get => ActiveSrv.RemoteRestPort; set => ActiveSrv.RemoteRestPort = value; }   // 远端 TShock REST 端口（隧道另一端）
@@ -425,7 +425,7 @@ public partial class MainWindow : Window
     private async Task RefreshWorldsAsync()
     {
         // ★ 原来没有防重入：REST 未就绪（换图/加载期）时每 2 秒再发一次 GET，最多 7 个并发在飞；
-        //   而每个 catch 都会 downTicks++，于是"连续 2 次失败"被同一个真实故障快速凑满 → 看门狗误判/重复触发。
+        //   而每个 catch 都会 downTicks++，于是"连续 2 次失败"被同一个真实故障快速凑满 → 掉线自启误判/重复触发。
         if (WorldsFetching) { return; }
         WorldsFetching = true;
         try { await RefreshWorldsCoreAsync(); }
@@ -491,14 +491,14 @@ public partial class MainWindow : Window
             ActiveSrv.Status = aliveNow ? 2 : 3;
             UpdateServerCards();
             if (SrvDot is not null) { SrvDot.Background = new SolidColorBrush(Color.Parse(aliveNow ? "#FEBC2E" : "#6B6B70")); }
-            // 看门狗：本来在跑 → 现在没了 → 自动拉起
+            // 掉线自启：本来在跑 → 现在没了 → 自动拉起
             downTicks++;
             // ★ 存活判据改成「进程是否还在」，不再用「REST 通不通」——
             //   世界加载/换图期间 REST 本来就没就绪，用 REST 判会把"正在加载"误判成"掉线"→ 重启循环（调研 D-6 的坑）。
             bool procAlive = aliveNow;
             if (procAlive)
             {
-                downTicks = 0;      // 进程还在 → 只是 REST 未就绪（加载中），看门狗不介入
+                downTicks = 0;      // 进程还在 → 只是 REST 未就绪（加载中），掉线自启不介入
             }
             else if (WatchdogEnabled && !ActiveSrv.UserStopped && serverWasUp && downTicks >= 2)
             {
@@ -507,34 +507,34 @@ public partial class MainWindow : Window
                 if (Environment.TickCount64 < watchdogProtectUntilMs)
                 {
                     int left = (int)((watchdogProtectUntilMs - Environment.TickCount64) / 1000);
-                    ERR($"看门狗：进程不在，但仍在启动/换图保护窗口内（剩余约 {left} 秒），暂不自动重启");
+                    ERR($"掉线自启：进程不在，但仍在启动/换图保护窗口内（剩余约 {left} 秒），暂不自动重启");
                 }
                 else if (!LivenessKnown())
                 {
                     // ★ 看不到服务端状态时不能"猜"它挂了：agent 掉线/快照过期时也报"未运行"，
                     //   原来的逻辑会因此把好好的服务端重启一遍（本地 agent 升级时真实发生过）。
-                    ERR("看门狗：暂时看不到服务端状态（agent 或快照不可用），本轮不自动重启");
+                    ERR("掉线自启：暂时看不到服务端状态（agent 或快照不可用），本轮不自动重启");
                 }
                 else
                 {
-                    // 看门狗只决定"要不要重启"（保护窗口与熔断）；重启动作交给进程后端
+                    // 掉线自启只决定"要不要重启"（保护窗口与熔断）；重启动作交给进程后端
                     watchdogFailures++;
                     if (watchdogFailures >= 3)
                     {
                         ChkWatchdog!.IsChecked = false;
                         watchdogFailures = 0;
-                        ERR("⚠ 看门狗熔断：连续 3 次自动重启后服务端仍未存活，已停止重试（请手动检查）");
+                        ERR("⚠ 掉线自启已熔断：连续 3 次自动重启后服务端仍未存活，已停止重试（请手动检查）");
                     }
                     else
                     {
                         ERR(ProcessBackend.IsRemote
-                            ? $"看门狗：远端服务端进程消失，正在自动重启…（第 {watchdogFailures}/3 次）"
-                            : $"看门狗：检测到服务端退出，正在自动重启…（第 {watchdogFailures}/3 次）");
+                            ? $"掉线自启：远端服务端进程已不在，正在自动重启…（第 {watchdogFailures}/3 次）"
+                            : $"掉线自启：服务端已退出，正在自动重启…（第 {watchdogFailures}/3 次）");
                         ProtectWatchdog(600, "watchdog");
                         _ = Task.Run(async () =>
                         {
                             ProcessResult r = await ProcessBackend.StartAsync();
-                            if (!r.Ok) { Dispatcher.UIThread.Post(() => ERR("看门狗：" + r.Message)); }
+                            if (!r.Ok) { Dispatcher.UIThread.Post(() => ERR("掉线自启：" + r.Message)); }
                         });
                     }
                 }
@@ -646,11 +646,14 @@ public partial class MainWindow : Window
         get
         {
             var p = _proc;
-            if (p is null || p.IsRemote != UseRemote)
+            // ★ 启动参数/环境变量是「档上的配置」：改了就重建后端，否则还会拿上一次的参数去起进程。
+            bool argsChanged = p is LocalProcessBackend lb
+                && (lb.StartArgs != (ActiveSrv.StartArgs ?? "").Trim() || lb.StartEnv != (ActiveSrv.StartEnv ?? "").Trim());
+            if (p is null || p.IsRemote != UseRemote || argsChanged)
             {
                 p = UseRemote
                     ? new RemoteProcessBackend(new UtslSshTransport(), RemoteStartScript, RemoteStopScript)
-                    : new LocalProcessBackend(ServerExe, ServerDir);
+                    : new LocalProcessBackend(ServerExe, ServerDir, ActiveSrv.StartArgs, ActiveSrv.StartEnv);
                 _proc = p;
             }
             return p;
@@ -2573,7 +2576,7 @@ public partial class MainWindow : Window
                 Worlds = RowsSnapshot,
                 Log = PluginLog,
                 // ★ v6：服务端进程控制。在线状态用管理器的**心跳探测结果**（本机/远端同一语义），
-                //   起停复用与「启动/停止服务端」按钮完全相同的路径（含远端 SSH/控制台启动器与看门狗保护）。
+                //   起停复用与「启动/停止服务端」按钮完全相同的路径（含远端 SSH/控制台启动器与掉线自启保护）。
                 ServerOnline = () => lastServerUp == true,
                 StartServer = reason => PluginStartServerAsync(reason),
                 StopServer = reason => PluginStopServerAsync(reason),
@@ -4360,6 +4363,10 @@ public partial class MainWindow : Window
             var tbHost = Field(bodyLocal, "REST 主机:", ConnHost, 200);
             var tbPort = Field(bodyLocal, "REST 端口:", ConnPort.ToString(), 90);
             var tbTok = Field(bodyLocal, "令牌:", Token, 300);
+            var tbStartArgs = Field(bodyLocal, "启动参数:", ActiveSrv.StartArgs, 380);
+            bodyLocal.Children.Add(Hint("空 = 不带参数启动。★ 第二份本机部署（如 utsl-deploy-b）必须留空 —— 带 -joinserver first -logmode txt 会打印 banner 后直接退出（实测）；主档沿用这套参数。"));
+            var tbStartEnv = Field(bodyLocal, "启动环境变量:", ActiveSrv.StartEnv, 380);
+            bodyLocal.Children.Add(Hint("每行一条 KEY=VALUE；空 = 不加。UTSL_CONSOLE_MODE 由上面「显示世界控制台」开关自动管理，不要写这里。"));
             var btnAuto = Btn("自动检测（读本机 TShock 配置）");
             Row(bodyLocal, btnAuto);
             bodyLocal.Children.Add(Hint("⚠ 安全提示：REST 请勿直接暴露公网 —— 仅监听内网 / 走 SSH 隧道 / 用强令牌。令牌在 servers.json 里以 DPAPI 加密保存（同机其它用户读到也解不开）。"));
@@ -4515,6 +4522,8 @@ public partial class MainWindow : Window
                 ConnHost = tbHost.Text ?? "127.0.0.1";
                 ConnPort = int.TryParse(tbPort.Text, out int p) && p > 0 ? p : 7878;
                 Token = tbTok.Text ?? "";
+                ActiveSrv.StartArgs = (tbStartArgs.Text ?? "").Trim();
+                ActiveSrv.StartEnv = (tbStartEnv.Text ?? "").Trim().Replace("\r\n", "\n");
                 LocalDir = (tbLocal.Text ?? "").Trim().Length > 0 ? (tbLocal.Text ?? "").Trim() : LocalDir;
                 SshHost = (tbSshHost.Text ?? "").Trim();
                 SshPort = int.TryParse(tbSshPort.Text, out int sp) && sp > 0 ? sp : 22;
@@ -6801,7 +6810,7 @@ public partial class MainWindow : Window
     //   世界加载期间 REST 本来就不通，若用"REST 通不通"当存活判据会误判掉线 → 重启循环。
     private static long watchdogProtectUntilMs;
 
-    /// <summary>开启保护窗口：启动/重启/整链重置后的一段时间内，看门狗不介入。</summary>
+    /// <summary>开启保护窗口：启动/重启/整链重置后的一段时间内，掉线自启不介入。</summary>
     private static void ProtectWatchdog(int seconds, string why)
     {
         watchdogProtectUntilMs = Environment.TickCount64 + seconds * 1000L;
@@ -6842,21 +6851,23 @@ public partial class MainWindow : Window
     private static string ServerDir => LocalDir;
     private static string ServerExe => Path.Combine(LocalDir, "UnifierTSL.exe");
 
-    private static bool ServerRunning => LocalProcessBackend.AnyAlive();   // ★ 用 !HasExited 判，别按名字判（僵尸条目会让看门狗失效）
+    // ★ 必须按【本档部署目录】判（AnyAliveIn），不能按"本机有没有 UnifierTSL"判：
+    //   同机跑着主档时，第二份部署点「启动」会被"服务端在跑"挡回去 —— 这就是 7898 一直起不来的真因。
+    private static bool ServerRunning => ServerDir.Length > 0 && LocalProcessBackend.AnyAliveIn(ServerDir);   // ★ 用 !HasExited 判，别按名字判（僵尸条目会让掉线自启失效）
 
     private async void OnStartServer(object? sender, RoutedEventArgs e)
     {
-        ActiveSrv.UserStopped = false;      // 用户主动启动 → 恢复看门狗
+        ActiveSrv.UserStopped = false;      // 用户主动启动 → 恢复掉线自启
         bool remote = ProcessBackend.IsRemote;
         if (remote)
         {
-            ProtectWatchdog(600, "remote-start");   // 启动后 10 分钟内看门狗不介入（世界加载可能很久）
+            ProtectWatchdog(600, "remote-start");   // 启动后 10 分钟内掉线自启不介入（世界加载可能很久）
             Term("--- 远端启动中（SSH + WMI + 控制台启动器），请稍候 ---", "#79C0FF");
             ErrText.Text = "远端启动中…";
         }
         else
         {
-            if (ServerRunning) { return; }
+            if (ServerRunning) { return; }   // 只挡"本档已在跑"，同机另一份部署不算
             ProtectWatchdog(600, "local-start");
         }
         ProcessResult r = await ProcessBackend.StartAsync();
@@ -6874,7 +6885,7 @@ public partial class MainWindow : Window
             ErrText.Text = "远端停止中…";
         }
         ProcessResult r = await ProcessBackend.StopAsync();
-        // ★ 用户手动停机：明确告诉看门狗"这一次不要自动拉起"（重新点启动会清掉这个标记）
+        // ★ 用户手动停机：明确告诉掉线自启"这一次不要自动拉起"（重新点启动会清掉这个标记）
         ActiveSrv.UserStopped = true;
         if (remote)
         {
@@ -6887,7 +6898,7 @@ public partial class MainWindow : Window
 
     private async void OnRestartServer(object? sender, RoutedEventArgs e)
     {
-        ProtectWatchdog(600, "restart");   // ★ 重启后给世界加载留出时间，避免看门狗介入造成重启循环
+        ProtectWatchdog(600, "restart");   // ★ 重启后给世界加载留出时间，避免掉线自启介入造成重启循环
         OnStopServer(sender, e);
         await Task.Delay(4000);
         OnStartServer(sender, e);

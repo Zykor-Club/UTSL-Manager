@@ -4,26 +4,40 @@ using System.Runtime.InteropServices;
 namespace UTSLManager.Backends;
 
 /// <summary>本机服务端的进程操作。</summary>
-public sealed class LocalProcessBackend(string exePath, string workDir) : IProcessBackend
+public sealed class LocalProcessBackend(string exePath, string workDir, string startArgs = "", string startEnv = "") : IProcessBackend
 {
+    /// <summary>本档的启动参数（原样传给 exe；空 = 不带任何参数）。</summary>
+    public string StartArgs { get; } = (startArgs ?? "").Trim();
+
+    /// <summary>本档要注入的环境变量（每行 KEY=VALUE；空 = 不加）。</summary>
+    public string StartEnv { get; } = (startEnv ?? "").Trim();
     private const string ProcName = "UnifierTSL";
+
+    /// <summary>
+    /// 该 exe 路径是否就在 dir 目录【之内】。
+    /// ★ 不能直接 StartsWith 目录名：utsl-deploy-b 也以 utsl-deploy 开头，会被当成同一份部署
+    ///   —— 停主档时把第二份部署一起杀掉（实测：重启主档 → 7898 变成 REST 不通）。
+    /// </summary>
+    private static bool InDir(string? file, string dir)
+    {
+        if (file is null || string.IsNullOrWhiteSpace(dir)) { return false; }
+        string root = Path.GetFullPath(dir).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+        return file.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+    }
 
     public bool IsRemote => false;
 
     /// <summary>
     /// 有没有【活着】的服务端进程。
     /// ★ 不能只看"名字在不在进程列表里"：这台机器上被杀掉的进程会留下工作集 0、线程 0 的
-    ///   僵尸条目（实测 HasExited=True），按名字判会以为服务端还活着 —— 看门狗因此永远不触发。
+    ///   僵尸条目（实测 HasExited=True），按名字判会以为服务端还活着 —— 掉线自启因此永远不触发。
     /// </summary>
     /// <summary>该进程是否属于"这个部署目录"（本机可能同时跑着多份部署，绝不能按名字一刀切）。</summary>
     private bool BelongsHere(Process p, string workDir)
     {
         try
         {
-            string? fp = p.MainModule?.FileName;
-            if (fp is null) { return false; }
-            string root = Path.GetFullPath(workDir).TrimEnd('\\', '/');
-            return fp.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+            return InDir(p.MainModule?.FileName, workDir);
         }
         catch { return false; }
     }
@@ -41,9 +55,7 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
                 {
                     if (p.HasExited) { continue; }
                     if (root is null) { return true; }
-                    string? fp = p.MainModule?.FileName;
-                    if (fp is null) { continue; }
-                    if (fp.StartsWith(Path.GetFullPath(root).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)) { return true; }
+                    if (InDir(p.MainModule?.FileName, root!)) { return true; }
                 }
                 catch { }
             }
@@ -73,9 +85,19 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
             var psi = new ProcessStartInfo(exePath)
             {
                 WorkingDirectory = workDir,
-                Arguments = "-joinserver first -logmode txt",
+                // ★ 参数按档来（原来写死 -joinserver first -logmode txt）：第二份本机部署带这套参数会打印 banner 后直接退出。
+                Arguments = StartArgs,
             };
             if (HeadlessConsole) { psi.Environment["UTSL_CONSOLE_MODE"] = "headless"; }
+            // 档上配的环境变量（每行 KEY=VALUE）。UTSL_CONSOLE_MODE 由上面的开关决定，这里不覆盖它。
+            foreach (string line in StartEnv.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                int eq = line.IndexOf('=');
+                if (eq <= 0) { continue; }
+                string k = line[..eq].Trim();
+                if (k.Length == 0 || k == "UTSL_CONSOLE_MODE") { continue; }
+                psi.Environment[k] = line[(eq + 1)..].Trim();
+            }
             Process.Start(psi);
             return Task.FromResult(new ProcessResult(true, ""));
         }
@@ -97,9 +119,7 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
                     // ★ 只杀"本档部署目录下"的进程：以前按名字一刀切，停本机服务端会把同机另一份部署
                     //   （例如测试用的 deploy-b）一起杀掉，那张卡就一直"REST 不通"。
                     if (p.HasExited) { continue; }
-                    string? fp = p.MainModule?.FileName;
-                    if (fp is null) { continue; }
-                    if (!fp.StartsWith(Path.GetFullPath(workDir).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)) { continue; }
+                    if (!InDir(p.MainModule?.FileName, workDir)) { continue; }
                     p.Kill(); p.WaitForExit(3000); killed++;
                 }
                 catch { failed++; }
