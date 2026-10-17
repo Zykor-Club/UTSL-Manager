@@ -13,7 +13,14 @@
       <Setter Property="HorizontalAlignment" Value="Stretch"/>
       <Setter Property="HorizontalContentAlignment" Value="Left"/>
       <Setter Property="Padding" Value="12,9"/>
-      <Setter Property="FontSize" Value="12.5"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+    <!-- ★ P2：导航按钮的 hover / pressed 反馈（原来只有"选中"态有反馈，鼠标划过毫无变化 → 不像可点） -->
+    <Style Selector="Button.menu:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#1E232B"/>
+    </Style>
+    <Style Selector="Button.menu:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#252B34"/>
     </Style>
     <!-- ★ 当前视图高亮 #66CCFF（用户指定）；圆角必须同时设到模板内的 ContentPresenter 上 -->
     <Style Selector="Button.menu /template/ ContentPresenter#PART_ContentPresenter">

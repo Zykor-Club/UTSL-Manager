@@ -3928,6 +3928,19 @@ public partial class MainWindow : Window
                 PluginList.Children.Add(rowWrap);
             }
 
+            // ★ P2：空态（原来空目录就是一片空白，看不出是"空"还是"没加载出来"）
+            if (dirs.Count == 0 && files.Count == 0)
+            {
+                var empty = new Border { Padding = new Avalonia.Thickness(14, 20, 14, 20) };
+                empty.Child = new TextBlock
+                {
+                    Text = "这个目录是空的。",
+                    FontSize = 11,
+                    Foreground = new SolidColorBrush(Color.Parse("#848D9A")),
+                };
+                PluginList.Children.Add(empty);
+            }
+
             foreach (var d in dirs) { Row("\uE8B7", d.Name, "", d.Mtime.ToString("MM-dd HH:mm"), true, Path.Combine(fileCwd, d.Name), null); }
             foreach (var x in files)
             {
