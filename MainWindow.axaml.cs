@@ -2174,7 +2174,8 @@ public partial class MainWindow : Window
         }
         else
         {
-            var srv = System.Diagnostics.Process.GetProcessesByName("UnifierTSL").FirstOrDefault(p => { try { return !p.HasExited; } catch { return false; } });   // ★ 排除僵尸条目，否则监控读到 0
+            // ★ 按"当前激活档的部署目录"找进程（本机挂两份部署时，不能再取第一个同名进程）
+            var srv = LocalServerProc(ActiveSrv);   // ★ 排除僵尸条目，否则监控读到 0
             if (srv is not null)
             {
                 try
@@ -3671,10 +3672,32 @@ public partial class MainWindow : Window
             }
         }
 
-        // ③ 指标（agent /metrics：CPU 单核% / 私有内存 / 网卡累计字节 -> 差分算速率）
+        // ③ 指标（远端走 agent /metrics；本机档直接量"该档目录下的那个进程"）
         if (now - st.LastAgentMs >= BgAgentIntervalMs)
         {
             st.LastAgentMs = now;
+            if (!p.IsRemote)
+            {
+                // ★ 本机档：不能借用 7879 的 agent（它只认主部署），否则两个本机档读数完全一样
+                var lm = LocalMetrics(p);
+                if (lm is null) { ApplyBackgroundMetrics(p, 0, 0, 0, 0); }
+                else
+                {
+                    double up0 = 0, down0 = 0;
+                    var (sent, recv) = NetTotals();
+                    double secs0 = st.LastNetMs > 0 ? Math.Max(0.5, (now - st.LastNetMs) / 1000.0) : 0;
+                    if (secs0 > 0 && sent >= 0 && st.LastSent >= 0)
+                    {
+                        up0 = Math.Max(0, (sent - st.LastSent) / 1024.0 / secs0);
+                        down0 = Math.Max(0, (recv - st.LastRecv) / 1024.0 / secs0);
+                    }
+                    st.LastSent = sent; st.LastRecv = recv; st.LastNetMs = now;
+                    double memMbLocal = lm.Value.memMb;
+                    p.Status = 1;
+                    ApplyBackgroundMetrics(p, lm.Value.cpu, memMbLocal / 1024.0, up0, down0);
+                }
+                return;
+            }
             try
             {
                 string txt = await BgHttp.GetStringAsync(agentBase + "/metrics");
@@ -3752,6 +3775,91 @@ public partial class MainWindow : Window
         });
     }
 
+
+    // ===== 本机档：按"部署目录"定位它自己的服务端进程 =====
+    //   ★ 原来用 Process.GetProcessesByName("UnifierTSL").FirstOrDefault()：本机挂两份部署时，
+    //     两个档都会读到同一个进程 → 卡片内存/CPU 完全一样（用户 2026-10-17 报的现象）。
+    private readonly Dictionary<string, (TimeSpan cpu, long ms)> localCpuPrev = [];
+    private readonly Dictionary<string, (int pid, string key)> localPidCache = [];
+
+    private System.Diagnostics.Process? LocalServerProc(ServerProfile p)
+    {
+        try
+        {
+            string want = (p.LocalDir ?? "").TrimEnd('\\', '/');
+            if (want.Length == 0) { return null; }
+            if (localPidCache.TryGetValue(p.Id, out var cached) && cached.key == want && cached.pid > 0)
+            {
+                try
+                {
+                    var cp = System.Diagnostics.Process.GetProcessById(cached.pid);
+                    if (!cp.HasExited) { return cp; }
+                }
+                catch { }
+            }
+            foreach (var pr in System.Diagnostics.Process.GetProcessesByName("UnifierTSL"))
+            {
+                try
+                {
+                    if (pr.HasExited) { continue; }
+                    string? path = pr.MainModule?.FileName;
+                    if (path is null) { continue; }
+                    if (path.StartsWith(want, StringComparison.OrdinalIgnoreCase))
+                    {
+                        localPidCache[p.Id] = (pr.Id, want);
+                        return pr;
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    /// <summary>整机网卡累计字节（排除回环，避免隧道流量重复计）。后台线程用，~75~174ms/次。</summary>
+    private static (long sent, long recv) NetTotals()
+    {
+        long s = 0, r = 0;
+        try
+        {
+            foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) { continue; }
+                if (ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback) { continue; }
+                var stat = ni.GetIPStatistics();
+                s += stat.BytesSent; r += stat.BytesReceived;
+            }
+        }
+        catch { }
+        return (s, r);
+    }
+
+    /// <summary>本机档自己那份服务端的 (单核 CPU%, 私有内存 MB)；进程不在返回 null。</summary>
+    private (double cpu, double memMb)? LocalMetrics(ServerProfile p)
+    {
+        var pr = LocalServerProc(p);
+        if (pr is null) { return null; }
+        try
+        {
+            pr.Refresh();
+            long nowMs = Environment.TickCount64;
+            double cpuPct = 0;
+            TimeSpan cpuNow = pr.TotalProcessorTime;
+            if (localCpuPrev.TryGetValue(p.Id, out var prev) && nowMs > prev.ms)
+            {
+                double secs = (nowMs - prev.ms) / 1000.0;
+                if (secs >= 0.2)
+                {
+                    cpuPct = Math.Max(0, (cpuNow - prev.cpu).TotalMilliseconds / (secs * 1000.0) * 100.0);
+                    cpuPct = Math.Min(cpuPct, 100.0);
+                }
+            }
+            localCpuPrev[p.Id] = (cpuNow, nowMs);
+            return (cpuPct, pr.PrivateMemorySize64 / 1048576.0);
+        }
+        catch { return null; }
+    }
 
     // ===== 非激活档的后台日志流（去掉"切到新档终端空 1 秒"这段） =====
     //   每个非激活的远端档起一条 /stream/log SSE，行先攒在本地，300ms 批量灌进"该档自己的"终端集合。
