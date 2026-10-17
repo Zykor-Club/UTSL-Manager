@@ -478,7 +478,7 @@ public partial class MainWindow : Window
         "#E3B341" => "warning",
         "#7EE787" => "success",
         "#9AA0A6" or "#8E8E93" => "info",
-        "#6E7681" => "debug",
+        "#848D9A" => "debug",
         _ => "normal",
     };
 
@@ -488,7 +488,7 @@ public partial class MainWindow : Window
         if (line.Contains("[Warning]") || line.Contains("[Warn]")) { return "#E3B341"; }
         if (line.Contains("[Success]")) { return "#7EE787"; }
         if (line.Contains("[Info]")) { return "#9AA0A6"; }
-        if (line.Contains("[Debug]")) { return "#6E7681"; }
+        if (line.Contains("[Debug]")) { return "#848D9A"; }
         return "#B9B9C0";
     }
 
@@ -1295,7 +1295,7 @@ public partial class MainWindow : Window
         if (!HasSsh)
         {
             AgentStatusText.Text = "云端 agent：本机模式不需要（本机直接读日志/进程）";
-            AgentStatusText.Foreground = GetBrush("#7C7C82");
+            AgentStatusText.Foreground = GetBrush("#9BA3AE");
             return;
         }
         if (AgentAlive)
@@ -1689,7 +1689,7 @@ public partial class MainWindow : Window
         {
             lastLogFile = "remote:" + header;
             lastRemoteLine = "";
-            Term("——— 远端日志 " + header + " ———", "#6E7681");
+            Term("——— 远端日志 " + header + " ———", "#848D9A");
         }
         int start = 1;
         if (lastRemoteLine.Length > 0)
@@ -1720,7 +1720,7 @@ public partial class MainWindow : Window
             {
                 lastLogFile = f.FullName;
                 logPos = 0;
-                Term("——— 日志文件 " + f.Name + " ———", "#6E7681");
+                Term("——— 日志文件 " + f.Name + " ———", "#848D9A");
             }
             using var fs = new FileStream(f.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             if (fs.Length < logPos) { logPos = 0; }
@@ -2339,7 +2339,7 @@ public partial class MainWindow : Window
         {
             var b = new Button
             {
-                Content = p.Icon + "  " + p.Name, FontFamily = new Avalonia.Media.FontFamily("Segoe MDL2 Assets, Microsoft YaHei"), FontSize = 12.5,
+                Content = p.Icon + "  " + p.Name, FontFamily = new Avalonia.Media.FontFamily("Segoe MDL2 Assets, Microsoft YaHei"), FontSize = 13,
                 HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Left,
                 Padding = new Avalonia.Thickness(12, 9), CornerRadius = new Avalonia.CornerRadius(9),
@@ -2371,8 +2371,8 @@ public partial class MainWindow : Window
             }
             ExtContent.Content = view ?? new TextBlock
             {
-                Text = p.Name + " 是纯动作/服务型插件（未提供界面）。", FontSize = 12.5,
-                Foreground = GetBrush("#7C7C82"), TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                Text = p.Name + " 是纯动作/服务型插件（未提供界面）。", FontSize = 13,
+                Foreground = GetBrush("#9BA3AE"), TextWrapping = Avalonia.Media.TextWrapping.Wrap,
             };
         }
         catch (Exception ex)
@@ -2480,7 +2480,7 @@ public partial class MainWindow : Window
         {
             Text = "作者 " + p.Instance.Author + "   ·   " + p.SourceFile + "   ·   权限 " + p.PermissionsText
                    + (p.Commands.Count > 0 ? "   ·   命令 " + string.Join(" ", p.Commands.Keys.Select(k => "!" + k)) : ""),
-            FontSize = 10.5, Foreground = GetBrush("#7C7C82"), TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            FontSize = 11, Foreground = GetBrush("#9BA3AE"), TextWrapping = Avalonia.Media.TextWrapping.Wrap,
         });
         left.Children.Add(new TextBlock
         {
@@ -2509,7 +2509,7 @@ public partial class MainWindow : Window
     private static Control FailedRow(FailedPlugin f)
     {
         var sp = new StackPanel { Spacing = 2 };
-        sp.Children.Add(new TextBlock { Text = "✗ " + Path.GetFileName(f.DllPath), FontSize = 12.5, Foreground = GetBrush("#FF7B72") });
+        sp.Children.Add(new TextBlock { Text = "✗ " + Path.GetFileName(f.DllPath), FontSize = 13, Foreground = GetBrush("#FF7B72") });
         sp.Children.Add(new TextBlock { Text = f.Reason, FontSize = 11, Foreground = GetBrush("#9A9AA0"), TextWrapping = Avalonia.Media.TextWrapping.Wrap });
         return Card(sp);
     }
@@ -2519,11 +2519,11 @@ public partial class MainWindow : Window
         bool disabled = file.EndsWith(".disabled", StringComparison.OrdinalIgnoreCase);
         string real = disabled ? file[..^".disabled".Length] : file;
         var sp = new StackPanel { Spacing = 2 };
-        sp.Children.Add(new TextBlock { Text = (disabled ? "⏸ " : "… ") + Path.GetFileName(real), FontSize = 12.5, Foreground = GetBrush("#B9B9C0") });
+        sp.Children.Add(new TextBlock { Text = (disabled ? "⏸ " : "… ") + Path.GetFileName(real), FontSize = 13, Foreground = GetBrush("#B9B9C0") });
         sp.Children.Add(new TextBlock
         {
             Text = disabled ? "已停用（.disabled）—— 点「启用」恢复" : "存在但未加载（不是插件，或加载被跳过）",
-            FontSize = 10.5, Foreground = GetBrush("#6E7681"),
+            FontSize = 11, Foreground = GetBrush("#848D9A"),
         });
         var btn = new Button
         {
@@ -2567,12 +2567,12 @@ public partial class MainWindow : Window
     private static TextBlock GroupLabel(string t) => new()
     {
         Text = t, FontSize = 11, FontWeight = Avalonia.Media.FontWeight.SemiBold,
-        Foreground = GetBrush("#7C7C82"), Margin = new Avalonia.Thickness(2, 12, 0, 4),
+        Foreground = GetBrush("#9BA3AE"), Margin = new Avalonia.Thickness(2, 12, 0, 4),
     };
 
     private static TextBlock Plain(string t) => new()
     {
-        Text = t, FontSize = 12, Foreground = GetBrush("#7C7C82"),
+        Text = t, FontSize = 12, Foreground = GetBrush("#9BA3AE"),
         TextWrapping = Avalonia.Media.TextWrapping.Wrap, Margin = new Avalonia.Thickness(2, 3, 0, 3),
     };
 
@@ -2716,7 +2716,7 @@ public partial class MainWindow : Window
         {
             Term("插件命令（输入 !名字 参数）：", "#79C0FF");
             var cmds = pluginHost.Commands;
-            if (cmds.Count == 0) { Term("  （没有插件注册命令）", "#7C7C82"); }
+            if (cmds.Count == 0) { Term("  （没有插件注册命令）", "#9BA3AE"); }
             foreach (var c in cmds) { Term("  !" + c.Name + "  —— " + c.Description + "（" + c.Plugin + "）", "#7EE787"); }
             return true;
         }
@@ -2840,7 +2840,7 @@ public partial class MainWindow : Window
             TextBox Field(StackPanel host, string label, string val, double w)
             {
                 var sp = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, Margin = new Avalonia.Thickness(0, 3, 0, 3) };
-                sp.Children.Add(new TextBlock { Text = label, FontSize = 11.5, Width = 110, Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center });
+                sp.Children.Add(new TextBlock { Text = label, FontSize = 12, Width = 110, Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center });
                 var tb = new TextBox { Text = val, FontSize = 12, Width = w, CornerRadius = new Avalonia.CornerRadius(8) };
                 sp.Children.Add(tb);
                 host.Children.Add(sp);
@@ -2852,10 +2852,10 @@ public partial class MainWindow : Window
                 inner.Children.Add(new TextBlock { Text = title, FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = new SolidColorBrush(Color.Parse("#E6E6EA")) });
                 if (sub.Length > 0)
                 {
-                    inner.Children.Add(new TextBlock { Text = sub, FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#8A8A90")), TextWrapping = Avalonia.Media.TextWrapping.Wrap, Margin = new Avalonia.Thickness(0, 0, 0, 4) });
+                    inner.Children.Add(new TextBlock { Text = sub, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#8A8A90")), TextWrapping = Avalonia.Media.TextWrapping.Wrap, Margin = new Avalonia.Thickness(0, 0, 0, 4) });
                 }
                 // 「✓ 当前正在使用」徽标：两张卡片都常驻显示，用它 + 边框色指出当前模式
-                badge = new TextBlock { Text = "✓ 当前正在使用", FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#0A84FF")), IsVisible = false, Margin = new Avalonia.Thickness(0, 2, 0, 2) };
+                badge = new TextBlock { Text = "✓ 当前正在使用", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#0A84FF")), IsVisible = false, Margin = new Avalonia.Thickness(0, 2, 0, 2) };
                 inner.Children.Add(badge);
                 body = new StackPanel { Spacing = 2 };
                 inner.Children.Add(body);
@@ -2877,9 +2877,9 @@ public partial class MainWindow : Window
                 host.Children.Add(sp);
             }
             Button Btn(string text)
-                => new() { Content = text, FontSize = 11.5, Padding = new Avalonia.Thickness(14, 5), CornerRadius = new Avalonia.CornerRadius(9) };
+                => new() { Content = text, FontSize = 12, Padding = new Avalonia.Thickness(14, 5), CornerRadius = new Avalonia.CornerRadius(9) };
             TextBlock Hint(string text, string color = "#8A8A90")
-                => new() { Text = text, FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse(color)), TextWrapping = Avalonia.Media.TextWrapping.Wrap, Margin = new Avalonia.Thickness(0, 6, 0, 0) };
+                => new() { Text = text, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse(color)), TextWrapping = Avalonia.Media.TextWrapping.Wrap, Margin = new Avalonia.Thickness(0, 6, 0, 0) };
 
             // ---- 顶部：模式切换（切到本机不会丢掉已填的 SSH 配置，只是暂时不用）----
             var modeSwitch = new Avalonia.Controls.ToggleSwitch
@@ -2918,7 +2918,7 @@ public partial class MainWindow : Window
             var chkDirect = new CheckBox
             {
                 Content = "直连模式（面板式：agent 暴露端口 + 令牌认证，不走 SSH 隧道）",
-                IsChecked = DirectMode, FontSize = 11.5, Margin = new Avalonia.Thickness(0, 12, 0, 2),
+                IsChecked = DirectMode, FontSize = 12, Margin = new Avalonia.Thickness(0, 12, 0, 2),
             };
             bodyRemote.Children.Add(chkDirect);
             var tbDirectHost = Field(bodyRemote, "直连地址:", DirectHost, 220);
@@ -2931,7 +2931,7 @@ public partial class MainWindow : Window
             Row(bodyRemote, btnTestSsh, btnTunnel, btnAgent);
             var agentStatus = new TextBlock
             {
-                Text = "云端 agent：—", FontSize = 10.5, TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                Text = "云端 agent：—", FontSize = 11, TextWrapping = Avalonia.Media.TextWrapping.Wrap,
                 Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")), Margin = new Avalonia.Thickness(0, 6, 0, 0),
             };
             AgentStatusText = agentStatus;
@@ -2943,7 +2943,7 @@ public partial class MainWindow : Window
             var chkWorldConsoles = new CheckBox
             {
                 Content = "显示「世界控制台」窗口（每个已加载世界一个；默认关闭）",
-                IsChecked = ShowWorldConsoles, FontSize = 11.5, Margin = new Avalonia.Thickness(0, 12, 0, 0),
+                IsChecked = ShowWorldConsoles, FontSize = 12, Margin = new Avalonia.Thickness(0, 12, 0, 0),
             };
             chkWorldConsoles.IsCheckedChanged += (_, _) =>
             {
@@ -3157,11 +3157,11 @@ public partial class MainWindow : Window
                 box.Children.Add(new TextBlock { Text = w is null ? "未加载" : w.Size, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")) });
                 var dot = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 6 };
                 dot.Children.Add(new Border { Width = 7, Height = 7, CornerRadius = new Avalonia.CornerRadius(3.5), Background = new SolidColorBrush(Color.Parse(w?.Running == true ? "#32D74B" : "#6B6B70")), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center });
-                dot.Children.Add(new TextBlock { Text = w?.Running == true ? "运行中" : "未运行", FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")) });
+                dot.Children.Add(new TextBlock { Text = w?.Running == true ? "运行中" : "未运行", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")) });
                 box.Children.Add(dot);
                 if (le?[chain[i]] is JsonObject eo)
                 {
-                    box.Children.Add(new TextBlock { Text = $"西 {eo["西"]?.ToString() ?? "—"} · 东 {eo["东"]?.ToString() ?? "—"}", FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#7C7C82")) });
+                    box.Children.Add(new TextBlock { Text = $"西 {eo["西"]?.ToString() ?? "—"} · 东 {eo["东"]?.ToString() ?? "—"}", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#9BA3AE")) });
                 }
                 card.Child = box;
                 line.Children.Add(card);
@@ -3171,22 +3171,22 @@ public partial class MainWindow : Window
                     arrow.Children.Add(new TextBlock { Text = "⟶", FontSize = 22, Foreground = new SolidColorBrush(Color.Parse("#0A84FF")), HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center });
                     var mid = w is null ? "" : (le?[chain[i]]?["东"]?.ToString() ?? "");
                     var mid2 = le?[chain[i + 1]]?["西"]?.ToString() ?? "";
-                    arrow.Children.Add(new TextBlock { Text = $"{mid} / {mid2}", FontSize = 9.5, Foreground = new SolidColorBrush(Color.Parse("#6E7681")), HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center });
+                    arrow.Children.Add(new TextBlock { Text = $"{mid} / {mid2}", FontSize = 9.5, Foreground = new SolidColorBrush(Color.Parse("#848D9A")), HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center });
                     line.Children.Add(arrow);
                 }
             }
-            ChainHost.Children.Add(new TextBlock { Text = "链路（箭头间为两侧边缘触发值：出口 / 入口）", FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#6E7681")) });
+            ChainHost.Children.Add(new TextBlock { Text = "链路（箭头间为两侧边缘触发值：出口 / 入口）", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#848D9A")) });
             ChainHost.Children.Add(line);
 
             // 参数条
             if (edge is not null)
             {
-                ChainHost.Children.Add(new TextBlock { Text = "触发参数", FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#6E7681")), Margin = new Avalonia.Thickness(0, 6, 0, 0) });
+                ChainHost.Children.Add(new TextBlock { Text = "触发参数", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#848D9A")), Margin = new Avalonia.Thickness(0, 6, 0, 0) });
                 var p = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 10, Margin = new Avalonia.Thickness(0, 6, 0, 0) };
                 void Chip(string k, string v)
                 {
                     var b = new Border { Background = new SolidColorBrush(Color.Parse("#1C1C21")), BorderBrush = new SolidColorBrush(Color.Parse("#2E2E35")), BorderThickness = new Avalonia.Thickness(1), CornerRadius = new Avalonia.CornerRadius(9), Padding = new Avalonia.Thickness(12, 6) };
-                    b.Child = new TextBlock { Text = k + " " + v, FontSize = 11.5, Foreground = new SolidColorBrush(Color.Parse("#C9C9CE")) };
+                    b.Child = new TextBlock { Text = k + " " + v, FontSize = 12, Foreground = new SolidColorBrush(Color.Parse("#C9C9CE")) };
                     p.Children.Add(b);
                 }
                 Chip("切片间距", edge["切片间距_格"]?.ToString() ?? "—");
@@ -3235,13 +3235,13 @@ public partial class MainWindow : Window
 
     private TextBlock Section(string title) => new()
     {
-        Text = title, FontSize = 12.5, FontWeight = Avalonia.Media.FontWeight.SemiBold,
+        Text = title, FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold,
         Foreground = new SolidColorBrush(Color.Parse("#E8E8EC")), Margin = new Avalonia.Thickness(0, 14, 0, 2),
     };
 
     private static TextBlock Lbl(string t, double w = 90) => new()
     {
-        Text = t, FontSize = 11.5, Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")),
+        Text = t, FontSize = 12, Foreground = new SolidColorBrush(Color.Parse("#9A9AA0")),
         Width = w, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
     };
 
@@ -3254,8 +3254,8 @@ public partial class MainWindow : Window
     private StackPanel SizeStepper(TextBox tb)
     {
         var sp = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 4 };
-        var minus = new Button { Content = "◀", FontSize = 10, Width = 26, Height = 28, Padding = new Avalonia.Thickness(0), CornerRadius = new Avalonia.CornerRadius(7) };
-        var plus = new Button { Content = "▶", FontSize = 10, Width = 26, Height = 28, Padding = new Avalonia.Thickness(0), CornerRadius = new Avalonia.CornerRadius(7) };
+        var minus = new Button { Content = "◀", FontSize = 11, Width = 26, Height = 28, Padding = new Avalonia.Thickness(0), CornerRadius = new Avalonia.CornerRadius(7) };
+        var plus = new Button { Content = "▶", FontSize = 11, Width = 26, Height = 28, Padding = new Avalonia.Thickness(0), CornerRadius = new Avalonia.CornerRadius(7) };
         void Step(int d)
         {
             if (!int.TryParse(tb.Text, out int v)) { v = 4200; }
@@ -3389,7 +3389,7 @@ public partial class MainWindow : Window
             launcherRows.Clear(); edgeRows.Clear();
 
             ConfigHost.Children.Add(Section("启动器 config.json · 世界列表（" + Env.Describe(FsRoot) + "）"));
-            ConfigHost.Children.Add(new TextBlock { Text = "⚠ 这些改动【在下次整链重置时生效】（重置会重新生成源地图并按此列表切分）", FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#E3B341")) });
+            ConfigHost.Children.Add(new TextBlock { Text = "⚠ 这些改动【在下次整链重置时生效】（重置会重新生成源地图并按此列表切分）", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#E3B341")) });
             cfgLauncher = ParseJsonObj(await Task.Run(() => FsReadText(cfgLauncherPath)));   // ★ 解析失败不再抛异常（视图已切过去）
             ConfigHost.Children.Clear();   // 数据到手才重建
             worldData.Clear();
@@ -3401,8 +3401,8 @@ public partial class MainWindow : Window
             ConfigHost.Children.Add(worldRowsHost);
             RebuildWorldRows();
             var btns = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, Margin = new Avalonia.Thickness(0, 8, 0, 0) };
-            var btnAdd = new Button { Content = "+ 添加世界", FontSize = 11.5, Padding = new Avalonia.Thickness(12, 4), CornerRadius = new Avalonia.CornerRadius(9) };
-            var btnDel = new Button { Content = "− 删除最后一个", FontSize = 11.5, Padding = new Avalonia.Thickness(12, 4), CornerRadius = new Avalonia.CornerRadius(9) };
+            var btnAdd = new Button { Content = "+ 添加世界", FontSize = 12, Padding = new Avalonia.Thickness(12, 4), CornerRadius = new Avalonia.CornerRadius(9) };
+            var btnDel = new Button { Content = "− 删除最后一个", FontSize = 12, Padding = new Avalonia.Thickness(12, 4), CornerRadius = new Avalonia.CornerRadius(9) };
             btnAdd.Click += (_, _) =>
             {
                 int n = worldData.Count + 1;
@@ -3420,19 +3420,19 @@ public partial class MainWindow : Window
 
             // 总图格安全条
             ConfigHost.Children.Add(Section("总图格安全估算（自动计算）"));
-            safeText = new TextBlock { Text = "—", FontSize = 11.5, TextWrapping = Avalonia.Media.TextWrapping.Wrap };
+            safeText = new TextBlock { Text = "—", FontSize = 12, TextWrapping = Avalonia.Media.TextWrapping.Wrap };
             safeBar = new ProgressBar { Minimum = 0, Maximum = 100, Height = 10, CornerRadius = new Avalonia.CornerRadius(5), Margin = new Avalonia.Thickness(0, 6, 0, 0) };
             ConfigHost.Children.Add(safeText);
             ConfigHost.Children.Add(safeBar);
-            safeTip = new TextBlock { Text = "", FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#E3B341")), TextWrapping = Avalonia.Media.TextWrapping.Wrap, Margin = new Avalonia.Thickness(0, 6, 0, 0) };
+            safeTip = new TextBlock { Text = "", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#E3B341")), TextWrapping = Avalonia.Media.TextWrapping.Wrap, Margin = new Avalonia.Thickness(0, 6, 0, 0) };
             ConfigHost.Children.Add(safeTip);
-            ConfigHost.Children.Add(new TextBlock { Text = "安全上限来自实测：12000×2400(2880万) 可用，12800×2400(3072万) OOM；建议留 10% 余量", FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#6E7681")), Margin = new Avalonia.Thickness(0, 4, 0, 0) });
+            ConfigHost.Children.Add(new TextBlock { Text = "安全上限来自实测：12000×2400(2880万) 可用，12800×2400(3072万) OOM；建议留 10% 余量", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#848D9A")), Margin = new Avalonia.Thickness(0, 4, 0, 0) });
 
             // EdgeStitch（缺失时优雅提示，不报错）
             ConfigHost.Children.Add(Section("EdgeStitch · 世界链与边缘触发（可选）"));
             if (!await Task.Run(() => FsExists(cfgEdgePath)))
             {
-                ConfigHost.Children.Add(new TextBlock { Text = "未找到 EdgeStitch 配置（未安装该插件）—— 此区跳过，本管理器仍可正常管理多世界", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#6E7681")), TextWrapping = Avalonia.Media.TextWrapping.Wrap });
+                ConfigHost.Children.Add(new TextBlock { Text = "未找到 EdgeStitch 配置（未安装该插件）—— 此区跳过，本管理器仍可正常管理多世界", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#848D9A")), TextWrapping = Avalonia.Media.TextWrapping.Wrap });
                 cfgEdge = null;
             }
             else
@@ -3461,7 +3461,7 @@ public partial class MainWindow : Window
                 pendDelta!.TextChanged += (_, _) => UpdateSafety();
                 if (cfgEdge?["陆地边缘"] is JsonObject le)
                 {
-                    ConfigHost.Children.Add(new TextBlock { Text = "陆地边缘（西 / 东，留空=无边缘；41 与 宽-42 是常用值）", FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#6E7681")), Margin = new Avalonia.Thickness(0, 10, 0, 0) });
+                    ConfigHost.Children.Add(new TextBlock { Text = "陆地边缘（西 / 东，留空=无边缘；41 与 宽-42 是常用值）", FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#848D9A")), Margin = new Avalonia.Thickness(0, 10, 0, 0) });
                     foreach (var kv in le)
                     {
                         var v = kv.Value as JsonObject;
@@ -3848,12 +3848,12 @@ public partial class MainWindow : Window
                 var sizeTb = new TextBlock { Text = sizeText, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#8A8A90")), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
                 Avalonia.Controls.Grid.SetColumn(sizeTb, 1);
                 sp.Children.Add(sizeTb);
-                var timeTb = new TextBlock { Text = timeText, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#6E7681")), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
+                var timeTb = new TextBlock { Text = timeText, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#848D9A")), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
                 Avalonia.Controls.Grid.SetColumn(timeTb, 2);
                 sp.Children.Add(timeTb);
                 if (enabled is bool en)
                 {
-                    var cb = new CheckBox { IsChecked = en, FontSize = 11.5, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
+                    var cb = new CheckBox { IsChecked = en, FontSize = 12, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
                     // ★ 修 bug#5：只去掉结尾的 .disabled（Replace 会删掉名字里所有 .disabled），
                     //   且目标已存在时不再 overwrite（File.Move(...,true) 会静默覆盖 → 丢文件）
                     string baseName = name.EndsWith(".disabled", StringComparison.OrdinalIgnoreCase) ? name[..^".disabled".Length] : name;
@@ -3897,13 +3897,13 @@ public partial class MainWindow : Window
                 };
                 if (!isDir)
                 {
-                    var dl = new Button { Content = "下载", FontSize = 10, Padding = new Avalonia.Thickness(7, 1), CornerRadius = new Avalonia.CornerRadius(6) };
+                    var dl = new Button { Content = "下载", FontSize = 11, Padding = new Avalonia.Thickness(7, 1), CornerRadius = new Avalonia.CornerRadius(6) };
                     dl.Click += async (_, _) => await DownloadFileAsync(full, name);
                     actSp.Children.Add(dl);
                 }
                 var del = new Button
                 {
-                    Content = "删除", FontSize = 10, Padding = new Avalonia.Thickness(7, 1), CornerRadius = new Avalonia.CornerRadius(6),
+                    Content = "删除", FontSize = 11, Padding = new Avalonia.Thickness(7, 1), CornerRadius = new Avalonia.CornerRadius(6),
                     Foreground = new SolidColorBrush(Color.Parse("#FF7B72")),
                 };
                 bool armed = false;
@@ -4133,7 +4133,7 @@ public partial class MainWindow : Window
                 btn = new Button
                 {
                     Content = text,
-                    FontSize = 11.5,
+                    FontSize = 12,
                     Padding = new Avalonia.Thickness(10, 5),
                     CornerRadius = new Avalonia.CornerRadius(9),
                 };
@@ -4247,7 +4247,7 @@ public partial class MainWindow : Window
             try
             {
                 fp.ContributeFileActions(host);
-                Term($"[插件] {p.Name} 已向文件页注册右键动作", "#7C7C82");
+                Term($"[插件] {p.Name} 已向文件页注册右键动作", "#9BA3AE");
             }
             catch (Exception ex)
             {
@@ -4306,7 +4306,7 @@ public partial class MainWindow : Window
             try
             {
                 mp.ContributeMap(host);
-                Term($"[插件] {p.Name} 已向地图页注入界面", "#7C7C82");
+                Term($"[插件] {p.Name} 已向地图页注入界面", "#9BA3AE");
             }
             catch (Exception ex)
             {

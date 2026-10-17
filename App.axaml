@@ -10,6 +10,13 @@
     <mac:DevolutionsMacOsTheme />
     <mac:DevolutionsMacOsThemeGlobalStyles />
 
+    <!-- ★ P0 全局字体链：此前【没有指定中文字体】→ 中文吃系统默认（微软雅黑，笔画偏重、层次差）。
+         优先 Noto Sans SC（开源 OFL，本机已装），没装的机器依次降级，最后回退系统 UI 字体。
+         注意：图标按钮用的是 Segoe MDL2 Assets 且已显式写死 FontFamily → 不受影响。 -->
+    <Style Selector="Window">
+      <Setter Property="FontFamily" Value="Noto Sans SC, MiSans, HarmonyOS Sans SC, Microsoft YaHei UI, Segoe UI" />
+    </Style>
+
     <!--
       ★ 全局滚动条：**只留滑块，不要轨道**。
         主题自带的滚动槽位是一条贴边拉伸的长条（上下端点被裁掉，看着像"没闭口"）；

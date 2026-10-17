@@ -169,7 +169,7 @@ public partial class MainWindow
         {
             ShowLineNumbers = true,
             FontFamily = new FontFamily("Cascadia Mono, Consolas, Microsoft YaHei"),
-            FontSize = 12.5,
+            FontSize = 13,
             // ★ 编辑器配色（用户反馈：内置高亮按浅色背景配色，深色下标点几乎看不见、数字红绿太刺眼）。
             //   背景改成深藏青；正文字色用柔和的蓝灰；行号用更暗一档的蓝灰。
             Foreground = new SolidColorBrush(Color.Parse("#C7D2E0")),
