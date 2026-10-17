@@ -29,17 +29,25 @@ internal static class Program
         }
 
         // ★ 单实例：重复双击 exe 只唤醒已有窗口，不创建第二个（移植自 TSManager）
-        instanceMutex = new Mutex(true, InstanceKey, out bool createdNew);
-        if (!createdNew)
+        //   ⚠ 旧实现：抢不到 mutex 就找窗口，窗口没找到就【直接 return】——上一个实例正在退出/正在启动时
+        //     窗口可能还不存在，于是这次启动静默消失（用户："点了图标没反应"；自动化脚本白等 60 秒）。
+        //     现在：先重试找窗口（最多 6 秒），窗口始终没有就尝试接盘 mutex，接盘成功说明老实例真走了 → 继续启动。
+        instanceMutex = new Mutex(false, InstanceKey);
+        bool ownedMutex = instanceMutex.WaitOne(0);
+        if (!ownedMutex)
         {
-            IntPtr h = FindWindow(null, "UTSLManager");
-            if (h != IntPtr.Zero) { ShowWindow(h, 9); SetForegroundWindow(h); }   // 9 = SW_RESTORE
-            return;
+            for (int i = 0; i < 30; i++)
+            {
+                IntPtr h = FindWindow(null, "UTSLManager");
+                if (h != IntPtr.Zero) { ShowWindow(h, 9); SetForegroundWindow(h); return; }   // 9 = SW_RESTORE
+                if (instanceMutex.WaitOne(300)) { ownedMutex = true; break; }                 // 老实例已退出 → 接盘
+            }
+            if (!ownedMutex) { return; }   // 确实还有活着的实例：安静退出（这才是正确行为）
         }
 
         StartupArgs = args;
         try { BuildAvaloniaApp().StartWithClassicDesktopLifetime(args); }
-        finally { instanceMutex.ReleaseMutex(); instanceMutex.Dispose(); }
+        finally { try { if (ownedMutex) { instanceMutex.ReleaseMutex(); } } catch { } instanceMutex.Dispose(); }
     }
 
     public static AppBuilder BuildAvaloniaApp()

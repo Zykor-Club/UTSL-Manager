@@ -219,6 +219,15 @@ public partial class MainWindow : Window
         ServerCards.ItemsSource = srvCards;
         TermLines.ItemsSource = term;
         Term("UTSLManager 终端已就绪 —— 上方是服务端日志流，下方可直接输入指令", "#8E8E93");
+        // 启动打点：诊断"点了图标到底起没起来 / 什么时候起来的"（与 switchperf.log 同文件，写满自动清）
+        try
+        {
+            string pf = Path.Combine(AppContext.BaseDirectory, "switchperf.log");
+            var fi0 = new FileInfo(pf);
+            if (fi0.Exists && fi0.Length > 256 * 1024) { File.WriteAllText(pf, ""); }
+            File.AppendAllText(pf, $"{DateTime.Now:HH:mm:ss.fff}	start pid={Environment.ProcessId}	active={ActiveSrv.Id}	args={string.Join(" ", Program.StartupArgs)}" + Environment.NewLine);
+        }
+        catch { }
         if (ServersCfg.Migrated)
         {
             Term($"已把旧的 connection.json 迁移成 servers.json（{ServersCfg.Servers.Count} 台服务器；旧文件原样保留，回滚时拷回即可）", "#30D158");
