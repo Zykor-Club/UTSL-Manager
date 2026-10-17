@@ -331,7 +331,12 @@ public partial class MainWindow : Window
         //   效果：切到任何一台都是现成的（世界列表 + 三张图曲线 + 状态），不用等 REST。
         {
             var bgTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-            bgTimer.Tick += (_, _) => { if (switching) { return; } _ = Task.Run(PollBackgroundAsync); };
+            bgTimer.Tick += (_, _) =>
+            {
+                if (switching) { return; }
+                try { SyncBackgroundLogs(); } catch { }
+                _ = Task.Run(PollBackgroundAsync);
+            };
             bgTimer.Start();
             _ = Task.Run(async () => { await Task.Delay(4000); _ = PollBackgroundAsync(); });
         }
@@ -3671,6 +3676,103 @@ public partial class MainWindow : Window
         });
     }
 
+
+    // ===== 非激活档的后台日志流（去掉"切到新档终端空 1 秒"这段） =====
+    //   每个非激活的远端档起一条 /stream/log SSE，行先攒在本地，300ms 批量灌进"该档自己的"终端集合。
+    //   该档不是当前显示的那个 -> 它的集合没绑在 ListBox 上，追加不触发任何布局。
+    //   上限 4 条（与 MaxLiveTunnels 对齐），激活档不订阅（它走现有那条主日志流）。
+    private sealed class LogSub
+    {
+        public CancellationTokenSource Cts = new();
+    }
+    private readonly Dictionary<string, LogSub> logSubs = [];
+    private const int MaxBackgroundLogSubs = 4;
+
+    private ObservableCollection<TermLine> TermFor(string id)
+    {
+        if (id == ActiveSrv.Id) { return term; }
+        if (!termByServer.TryGetValue(id, out var c)) { c = []; termByServer[id] = c; }
+        return c;
+    }
+
+    private void StopBackgroundLog(string id)
+    {
+        if (logSubs.TryGetValue(id, out var sub))
+        {
+            try { sub.Cts.Cancel(); } catch { }
+            logSubs.Remove(id);
+        }
+    }
+
+    /// <summary>按当前档位情况增删后台日志订阅（由 5 秒定时器调用）。</summary>
+    private void SyncBackgroundLogs()
+    {
+        foreach (var p in ServersCfg.Servers.ToArray())
+        {
+            bool want = p.Id != ActiveSrv.Id && p.IsRemote && p.HasSsh;
+            if (!want) { StopBackgroundLog(p.Id); continue; }
+            if (logSubs.ContainsKey(p.Id)) { continue; }
+            if (logSubs.Count >= MaxBackgroundLogSubs) { continue; }
+            var sub = new LogSub();
+            logSubs[p.Id] = sub;
+            _ = Task.Run(() => BackgroundLogLoopAsync(p, sub.Cts.Token));
+        }
+    }
+
+    private async Task BackgroundLogLoopAsync(ServerProfile p, CancellationToken ct)
+    {
+        string baseUrl = p.DirectReady ? "http://" + p.DirectHost + ":" + p.DirectPort : "http://127.0.0.1:" + p.AgentPort;
+        var pending = new List<string>();
+        long lastFlush = Environment.TickCount64;
+        void Flush()
+        {
+            if (pending.Count == 0) { return; }
+            var batch = pending.ToArray();
+            pending.Clear();
+            Dispatcher.UIThread.Post(() =>
+            {
+                try
+                {
+                    var coll = TermFor(p.Id);
+                    foreach (var raw in batch)
+                    {
+                        coll.Add(new TermLine { Text = raw, Brush = GetBrush(PickColor(raw)) });
+                    }
+                    while (coll.Count > MaxTermLines) { coll.RemoveAt(0); }
+                }
+                catch { }
+            });
+        }
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                using var http = NewLocalHttp(Timeout.InfiniteTimeSpan);
+                using var resp = await http.GetAsync(baseUrl + "/stream/log", HttpCompletionOption.ResponseHeadersRead, ct);
+                resp.EnsureSuccessStatusCode();
+                using var stream = await resp.Content.ReadAsStreamAsync(ct);
+                using var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+                while (!ct.IsCancellationRequested)
+                {
+                    string? line = await reader.ReadLineAsync(ct);
+                    if (line is null) { break; }
+                    if (line.StartsWith("data: ")) { pending.Add(line.Substring(6)); }
+                    if (Environment.TickCount64 - lastFlush > 300)
+                    {
+                        lastFlush = Environment.TickCount64;
+                        Flush();
+                    }
+                }
+            }
+            catch (OperationCanceledException) { break; }
+            catch { }
+            Flush();
+            if (ct.IsCancellationRequested) { break; }
+            try { await Task.Delay(2000, ct); } catch { break; }
+        }
+        Flush();
+    }
+
     /// <summary>
     /// 切到另一台服务器。顺序是硬要求：先停旧流（agent 三条 + 日志游标）→ 停旧隧道 → 换档 →
     /// 重置缓存与指标历史 → 插件按新档重建（DataRoot 跟着档走）→ 起新隧道 → 重取世界/日志。
@@ -3703,7 +3805,9 @@ public partial class MainWindow : Window
             SaveHistFor(ActiveSrv.Id);
             if (rows.Count > 1) { ActiveSrv.WorldCount = rows.Count - 1; }
 
-            // ② 先停旧流（顺序不能反：旧档的 SSE 一旦先连上新 base，日志就串台了）
+            // ② 先停流（顺序不能反：旧档的 SSE 一旦先连上新 base，日志就串台了）
+            //   ★ 目标档若正跑着后台日志流，也要停掉：接下来主日志流会接管，否则会双写
+            StopBackgroundLog(target.Id);
             try { agentLogCts?.Cancel(); } catch { }
             agentLogCts = null;
             AgentAlive = false; AgentBaseUsed = ""; AgentProbeErr = "";
@@ -3804,6 +3908,7 @@ public partial class MainWindow : Window
         {
             switching = false;
             switchDoneMs = Environment.TickCount64;
+            try { SyncBackgroundLogs(); } catch { }     // 被切走的那台重新纳入后台日志订阅
             pendingActiveId = "";
             string next = pendingSwitchId;
             pendingSwitchId = "";
