@@ -302,6 +302,7 @@ public partial class MainWindow : Window
         metricsTimer.Tick += (_, _) =>
         {
             if (switching) { return; }                // ★ 切档期间一律不采样（否则旧档的数值会写进新档的图）
+            if (worldDlBusy) { return; }              // 下载世界文件时让路（同一根隧道）
             if (!UseRemote) { return; }
             if (Environment.TickCount64 < MetricsNextTryMs) { return; }
             RefreshMetricsAsync();
@@ -333,7 +334,7 @@ public partial class MainWindow : Window
             var bgTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
             bgTimer.Tick += (_, _) =>
             {
-                if (switching) { return; }
+                if (switching || worldDlBusy) { return; }   // 下载世界文件时让路，别抢隧道
                 try { SyncBackgroundLogs(); } catch { }
                 _ = Task.Run(PollBackgroundAsync);
             };
@@ -741,6 +742,7 @@ public partial class MainWindow : Window
 
     private static void RefreshSnapshot()
     {
+        if (worldDlBusy) { return; }      // 正在下载世界文件：别抢隧道
         // ★ 没有闩锁时：一次快照超过 45 秒，下一个 tick 会再起一个完整快照 —— 两者并发抢 SshGate，
         //   还会重复写同一批 Snap* 静态字段（速率差分基准被搅乱 → 指标忽高忽低）。
         if (Interlocked.CompareExchange(ref snapshotBusy, 1, 0) != 0) { return; }
@@ -977,8 +979,12 @@ public partial class MainWindow : Window
     {
         try
         {
+            // ★ 重下前先删掉旧文件：否则 scp 覆盖写入期间"文件大小"可能比上一轮还小，
+            //   进度条就会从 30% 掉回 20%（用户实测遇到的就是这个）。
+            try { if (File.Exists(localPath)) { File.Delete(localPath); } } catch { }
             // ★ 同上：不重定向（否则 stderr 写满会卡死下载循环，只能等 180 秒超时）
             var psi = new System.Diagnostics.ProcessStartInfo("scp") { UseShellExecute = false, CreateNoWindow = true };
+            psi.ArgumentList.Add("-C");     // ★ 压缩：实测 6.2MB 世界 1.11 → 1.54 MB/s（.wld 可压）
             psi.ArgumentList.Add("-i"); psi.ArgumentList.Add(SshKey);
             psi.ArgumentList.Add("-P"); psi.ArgumentList.Add(SshPort.ToString());
             psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("BatchMode=yes");
@@ -988,14 +994,17 @@ public partial class MainWindow : Window
             if (p is null) { return false; }
             // ★ 进度：scp 边传边写目标文件，轮询本地文件大小即可得到真实进度 + 预计剩余时间；并支持取消
             transferCancel = false;
+            worldDlBusy = true;          // 下载期间后台轮询让路
             var sw = System.Diagnostics.Stopwatch.StartNew();
             long total = knownTotal;
+            long lastReported = 0;
             while (!p.WaitForExit(400))
             {
                 if (transferCancel) { try { p.Kill(true); } catch { } Progress("传输已取消"); return false; }
                 if (sw.ElapsedMilliseconds > 180000) { try { p.Kill(true); } catch { } Progress("传输超时（180 秒）"); return false; }
                 long done = 0;
                 try { var fi = new FileInfo(localPath); if (fi.Exists) { done = fi.Length; } } catch { }
+                if (done < lastReported) { done = lastReported; } else { lastReported = done; }   // 单调不倒退
                 double secs = Math.Max(0.2, sw.Elapsed.TotalSeconds);
                 double mbps = done / secs / 1048576.0;
                 if (total > 0)
@@ -1006,6 +1015,7 @@ public partial class MainWindow : Window
                 else { Progress($"下载 {done / 1048576.0:F1} MB · {mbps:F2} MB/s（可点「取消传输」）"); }
             }
             Progress("");
+            worldDlBusy = false;
             // ★ 必须看 scp 退出码：原来只要目标文件存在就返回 true —— scp 失败（远端文件被删/权限不足）时
             //   会把上一次留下的旧文件或这次只写了一半的文件当成"下载成功"，调用方静默用错数据。
             return p.ExitCode == 0 && File.Exists(localPath);
@@ -1586,6 +1596,7 @@ public partial class MainWindow : Window
     /// <summary>探活 + 起停日志流；由隧道定时器调用。状态变化时在控制台留一行日志（不刷屏）。</summary>
     private async Task TickAgentAsync()
     {
+        if (worldDlBusy) { return; }      // 下载世界文件时不要重新建流/探活，别抢隧道
         string want = AgentBase;
         bool ok = await ProbeAgentAsync(want);
         // ★ 不仅要看"活不活"，还要看"连的是不是同一个 base"：
@@ -5587,7 +5598,14 @@ public partial class MainWindow : Window
             }
             if (File.Exists(cache) && forceWorldReload) { status?.Invoke(Path.GetFileName(rel) + "：强制重新下载（忽略缓存）"); }
             status?.Invoke(Path.GetFileName(rel) + "：正在从远端下载" + (remoteSize > 0 ? "（" + (remoteSize / 1048576.0).ToString("F1") + " MB）" : "") + "…");
-            if (FileBackend.Download(full, cache, remoteSize, s => status?.Invoke(Path.GetFileName(rel) + "：" + s)) || File.Exists(cache)) { return cache; }
+            if (FileBackend.Download(full, cache, remoteSize, s => status?.Invoke(Path.GetFileName(rel) + "：" + s)) || File.Exists(cache))
+            {
+                // ★ 下载完把本地缓存 mtime 对齐远端：否则 mtime 比对永远不通过，每次开地图都要重下一遍
+                if (remoteMtime != default)
+                {
+                    try { File.SetLastWriteTimeUtc(cache, remoteMtime.ToUniversalTime()); } catch { }
+                }
+                return cache; }
         }
         catch { }
         return null;
@@ -6039,7 +6057,6 @@ public partial class MainWindow : Window
         mapTransT.X = mapOffset.X;
         mapTransT.Y = mapOffset.Y;
         // 叠加层用同一套缩放/位移（它是独立元素，需要自己一份 transform）
-        RefreshMinimap();          // 小地图视口框跟着平移/缩放走
         if (MapOverlay is not null)
         {
             if (MapOverlay.RenderTransform is not Avalonia.Media.TransformGroup)
@@ -6076,42 +6093,11 @@ public partial class MainWindow : Window
     private bool mapGotoHooked;
     private bool mapPreviewShown;      // 这次加载是否给过"拼接预览"（决定最终换图时是否保持视图）
     private int mapLoadSeq;            // 加载序号：作废"迟到的预览"（预览是 Post 到 UI 线程的，可能晚于成品）
-    private Avalonia.Media.Imaging.WriteableBitmap? mapMiniThumb;   // 小地图缩略图（208 宽，换图时重建）
-    private string mapMiniKey2 = "";
 
-    /// <summary>从当前位图按整数步长抽样生成缩略图（纯内存拷贝，不走 Skia 缩放）。</summary>
-    private static unsafe Avalonia.Media.Imaging.WriteableBitmap? MakeThumbFromBitmap(Avalonia.Media.Imaging.WriteableBitmap src, int w, int h)
-    {
-        try
-        {
-            if (w < 2 || h < 2) { return null; }
-            var dst = new Avalonia.Media.Imaging.WriteableBitmap(new Avalonia.PixelSize(w, h), src.Dpi,
-                Avalonia.Platform.PixelFormat.Bgra8888, Avalonia.Platform.AlphaFormat.Premul);
-            using (var sf = src.Lock())
-            using (var df = dst.Lock())
-            {
-                int sw = sf.Size.Width, sh = sf.Size.Height;
-                int sx = Math.Max(1, sw / w), sy = Math.Max(1, sh / h);
-                byte* sp = (byte*)sf.Address;
-                byte* dp = (byte*)df.Address;
-                for (int y = 0; y < h; y++)
-                {
-                    byte* srow = sp + (long)(y * sy) * sf.RowBytes;
-                    byte* drow = dp + (long)y * df.RowBytes;
-                    for (int x = 0; x < w; x++)
-                    {
-                        byte* s = srow + (long)(x * sx) * 4;
-                        byte* d = drow + (long)x * 4;
-                        d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = 255;
-                    }
-                }
-            }
-            return dst;
-        }
-        catch { return null; }
-    }
     /// <summary>"刷新"按钮置位一次：下次取世界文件时忽略远端缓存（用户换过世界要强制重读时用）。</summary>
     private static bool forceWorldReload;
+    /// <summary>世界文件正在下载 —— 后台轮询先让路（同一根 SSH 隧道，抢起来实测会掉到 0.2 MB/s）。</summary>
+    private static volatile bool worldDlBusy;
 
     private void InitMapLayerPresets()
     {
@@ -6397,20 +6383,6 @@ public partial class MainWindow : Window
         // ★ 布局尺寸必须显式等于位图尺寸（否则会被容器夹成视口大小，只画左上角一块）。
         MapImage.Width = wb.PixelSize.Width;
         MapImage.Height = wb.PixelSize.Height;
-        // 小地图缩略图：在这里（bmp 还活着）缩好存起来，控件只负责 1:1 画它 + 叠视口框。
-        // 直接在控件里对 12000×2400 的位图做源矩形缩放在实测里出现过"右边一片黑"，这里绕开它。
-        try
-        {
-            var thumb = WorldMapRenderer.MakePreview(bmp, 208);
-            if (thumb is not null)
-            {
-                var twb = ToWriteableBitmap(thumb);
-                thumb.Dispose();
-                if (mapMiniThumb is IDisposable oldThumb) { oldThumb.Dispose(); }
-                mapMiniThumb = twb;
-            }
-        }
-        catch { }
         // 叠加层（网格/出生点）与图像同尺寸、同变换
         if (MapOverlay is not null)
         {
@@ -6473,75 +6445,6 @@ public partial class MainWindow : Window
     }
 
 
-
-    // ===== 小地图导航（A3）：右下角缩略图 + 视口框，点击跳转 =====
-    //   缩略图不另存副本：直接把当前位图交给 MapMiniMap 控件，由它在 Render 里按源矩形缩放画一次
-    //   （208px 宽，几毫秒；比每次生成一张缩略位图省得多）。
-    private void RefreshMinimap()
-    {
-        try
-        {
-            if (MapMiniBox is null || MapMini is null) { return; }
-            Avalonia.Size im = MapSourceSize, vp = MapViewport;
-            if (im.Width < 1 || vp.Width < 1 || MapImage?.Source is not Avalonia.Media.Imaging.WriteableBitmap bmp)
-            {
-                MapMiniBox.IsVisible = false;
-                return;
-            }
-            const double miniW = 208;
-            double miniH = Math.Max(24, Math.Round(miniW * im.Height / im.Width));
-            MapMini.Width = miniW;
-            MapMini.Height = miniH;
-            // 缩略图按"位图身份"重建：直接从当前 WriteableBitmap 抽样，不依赖任何中间 SKBitmap
-            string mind = $"{bmp.PixelSize.Width}x{bmp.PixelSize.Height}";
-            if (mapMiniKey2 != mind || mapMiniThumb is null)
-            {
-                var t = MakeThumbFromBitmap(bmp, (int)miniW, (int)miniH);
-                if (t is not null)
-                {
-                    if (mapMiniThumb is IDisposable oldT) { oldT.Dispose(); }
-                    mapMiniThumb = t;
-                    mapMiniKey2 = mind;
-                }
-            }
-            MapMini.Source = mapMiniThumb ?? bmp;
-            MapMini.ImageSize = im;
-            MapMini.ViewportInImage = new Avalonia.Rect(
-                Math.Max(0, (-mapOffset.X) / mapZoom),
-                Math.Max(0, (-mapOffset.Y) / mapZoom),
-                Math.Min(im.Width, vp.Width / mapZoom),
-                Math.Min(im.Height, vp.Height / mapZoom));
-            MapMiniBox.IsVisible = true;
-            if (MapMiniHint is not null)
-            {
-                MapMiniHint.Text = $"视野 {MapMini.ViewportInImage.Width:F0}×{MapMini.ViewportInImage.Height:F0} · 右键地图可跳转";
-            }
-        }
-        catch { }
-    }
-
-    /// <summary>点小地图 → 把该点移到视口中心。
-    /// 用 PointerPressed 而不是 Tapped：MapCard 上的 PointerPressed 会把事件标记 Handled，
-    /// Tapped 手势就不会再冒出来（实测"点小地图没反应"就是这个原因）。</summary>
-    private void OnMiniTapPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e)
-    {
-        try
-        {
-            if (MapMini is null || MapImage?.Source is null) { return; }
-            var ptp = e.GetCurrentPoint(MapMini);
-            if (!ptp.Properties.IsLeftButtonPressed) { return; }
-            Avalonia.Size im = MapSourceSize, vp = MapViewport;
-            double miniW = MapMini.Bounds.Width, miniH = MapMini.Bounds.Height;
-            if (miniW < 1 || miniH < 1) { return; }
-            var p = ptp.Position;
-            double ix = p.X * (im.Width / miniW), iy = p.Y * (im.Height / miniH);
-            mapOffset = new Avalonia.Vector(vp.Width / 2.0 - ix * mapZoom, vp.Height / 2.0 - iy * mapZoom);
-            ApplyMapTransform();
-            RefreshMapInfo();
-            e.Handled = true;
-        }
-        catch { }
-    }
 
     // ===== 地图增强：跳转 / 叠加层 / 图层 / 导出 =====
     /// <summary>A3：输入 "x,y" 跳到该世界坐标（居中显示）。</summary>
