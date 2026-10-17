@@ -1902,6 +1902,9 @@ public partial class MainWindow : Window
     private void RefreshLog()
     {
         if (AgentAlive) { return; }                     // ★ agent 在线：日志由 SSE 推送，不再轮询文件
+        // ★ 刚切完档的 5 秒里不要用 SSH 去捞远端日志尾巴：agent 通常 ~200ms 就接上 SSE 了，
+        //   那一次 ssh 要 1.5~8 秒（链路 RTT 1.7 秒），唯一效果是把终端刷 40 行 + 滚动跳一下。
+        if (UseRemote && Environment.TickCount64 - switchDoneMs < 5000) { return; }
         if (UseRemote) { RefreshRemoteLog(); return; }
         if (!ConsoleView.IsVisible) { logPos = 0; lastLogFile = ""; return; }   // ★ 隐藏时不做日志 UI 更新
         try
@@ -2455,6 +2458,19 @@ public partial class MainWindow : Window
     }
 
     // ===== 管理器插件系统 v2（宿主：加载/重载/命令/指标/事件/配置/权限/i18n）=====
+    /// <summary>切档重载插件期间，压掉"[插件] 已加载/[API 探针]"这类每档都一样的刷屏（约 40 行/次）。</summary>
+    private static volatile bool suppressPluginLog;
+
+    private void PluginLog(string m)
+    {
+        if (suppressPluginLog && (m.StartsWith("[插件] 已加载") || m.StartsWith("[API 探针]")
+            || m.StartsWith("[定时任务] 已加载") || m.StartsWith("[Lua] 定时任务 已加载")))
+        {
+            return;
+        }
+        Term(m, PickColor(m));
+    }
+
     private PluginHost? pluginHost;
     private readonly Dictionary<LoadedPlugin, Control?> pluginViews = [];
     private bool raisingTerminal;
@@ -2477,7 +2493,7 @@ public partial class MainWindow : Window
                 RestBase = () => Rest,
                 Token = () => Token,
                 Worlds = RowsSnapshot,
-                Log = m => Term(m, PickColor(m)),
+                Log = PluginLog,
                 // ★ v6：服务端进程控制。在线状态用管理器的**心跳探测结果**（本机/远端同一语义），
                 //   起停复用与「启动/停止服务端」按钮完全相同的路径（含远端 SSH/控制台启动器与看门狗保护）。
                 ServerOnline = () => lastServerUp == true,
@@ -3030,8 +3046,13 @@ public partial class MainWindow : Window
                 bool active = p.Id == showActiveId;
                 r.Id = p.Id;
                 r.Name = p.Name.Length > 0 ? p.Name : p.Id;
-                r.Address = p.AddressText + (p.DirectReady ? " · 直连" : p.IsRemote ? " · SSH" : " · 本机");
+                // 状态直接写进第二行（原来靠 tooltip，而 tooltip 会盖住卡片并吃掉点击）
+                string mode = p.DirectReady ? "直连" : p.IsRemote ? "SSH" : "本机";
                 bool isPending = p.Id == pendingActiveId;
+                string st = isPending ? "切换中" : active
+                    ? p.Status == 1 ? "在线" : p.Status == 2 ? "REST 不通" : "未运行"
+                    : p.ProbeAtMs == 0 ? "未探活" : p.ProbeOk ? "可达" : "不可达";
+                r.Address = p.AddressText + " · " + mode + " · " + st;
                 r.Worlds = isPending ? "切换中…" : p.WorldCount >= 0 ? p.WorldCount + " 世界" : "—";
                 // 激活档：绿=在线 / 黄=REST 不通 / 灰=未运行/未知；非激活档：绿=那台机器/端口可达（没开隧道）
                 string hex = isPending ? "#FEBC2E"
@@ -3268,6 +3289,9 @@ public partial class MainWindow : Window
     /// <summary>切档后"重活"去抖代号（世界/日志/agent/快照）。</summary>
     private static int postSwitchGen;
 
+    /// <summary>最近一次切档完成的时间（TickCount64）。用于"切完这几秒内别去 SSH 捞日志尾巴"。</summary>
+    private static long switchDoneMs;
+
     /// <summary>插件当前是按哪一档加载的。切回同一档时跳过重载（实测单次重载 2~13 秒，多为插件自己的 OnLoad）。</summary>
     private static string pluginLoadedProfileId = "";
 
@@ -3290,7 +3314,14 @@ public partial class MainWindow : Window
             if (my != postSwitchGen) { return; }
             // 日志要碰控件，回 UI 线程做
             Dispatcher.UIThread.Post(() => { try { RefreshLog(); UpdateServerCards(); RedrawChartsNow(); } catch { } });
-            _ = Task.Run(() => TickAgentAsync());      // 接日志/指标流
+            _ = Task.Run(async () =>
+            {
+                await TickAgentAsync();                // 接日志/指标流（探活 + 起 3 条流）
+                // ★ 立刻补两次采样：否则三张图要等 2 秒定时器（首帧还是基线）→ 最长 4 秒都显示"采样中…"
+                Dispatcher.UIThread.Post(() => { try { SampleMetrics(); } catch { } });
+                await Task.Delay(350);
+                Dispatcher.UIThread.Post(() => { try { SampleMetrics(); } catch { } });
+            });
             _ = Task.Run(() => RefreshSnapshot());     // 合并快照（ssh，后台）
         });
     }
@@ -3322,9 +3353,12 @@ public partial class MainWindow : Window
                 // 执行时再取一次：期间可能又换档了
                 pluginHost.Options.DataRoot = ActiveSrv.PluginDataRoot(AppContext.BaseDirectory);
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                pluginHost.Reload();
+                suppressPluginLog = true;
+                try { pluginHost.Reload(); }
+                finally { suppressPluginLog = false; }
                 sw.Stop();
                 pluginLoadedProfileId = ActiveSrv.Id;
+                Dispatcher.UIThread.Post(() => ERR($"插件已按「{ActiveSrv.Name}」重载：{pluginHost.Plugins.Count} 个，用时 {sw.ElapsedMilliseconds} ms（逐条加载日志已折叠）"));
                 try
                 {
                     string pf = Path.Combine(AppContext.BaseDirectory, "switchperf.log");
@@ -3530,6 +3564,7 @@ public partial class MainWindow : Window
         finally
         {
             switching = false;
+            switchDoneMs = Environment.TickCount64;
             pendingActiveId = "";
             string next = pendingSwitchId;
             pendingSwitchId = "";
@@ -3603,14 +3638,43 @@ public partial class MainWindow : Window
         catch (Exception ex) { return "探测失败: " + ex.GetType().Name; }
     }
 
+    /// <summary>在图表画布中央画一行提示（空历史时用，别让中间区域整块空白）。</summary>
+    private static void ChartPlaceholder(Canvas canvas, string text)
+    {
+        try
+        {
+            canvas.Children.Clear();
+            var tb = new TextBlock
+            {
+                Text = text, FontSize = 11,
+                Foreground = new SolidColorBrush(Color.Parse("#848D9A")),
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            };
+            Canvas.SetLeft(tb, 10);
+            Canvas.SetTop(tb, Math.Max(0, canvas.Bounds.Height / 2 - 8));
+            canvas.Children.Add(tb);
+        }
+        catch { }
+    }
+
     /// <summary>切档后立刻用"新档自己的历史"重画三张图（否则要等下一拍。历史为空时不动，等采样）。</summary>
     private void RedrawChartsNow()
     {
         try
         {
-            CpuNow.Text = "—"; MemNow.Text = "—"; NetNow.Text = "—";
-            if (timeHist.Count == 0) { return; }
             if (!ConsoleView.IsVisible) { return; }
+            if (timeHist.Count == 0)
+            {
+                // ★ 这一档还没有历史：不要画空图（整块闪空最像"卡"）。画一行"采样中…"，
+                //   最多 2 秒后第一个采样就会把它替换掉。
+                CpuNow.Text = "—"; MemNow.Text = "—"; NetNow.Text = "—";
+                ChartPlaceholder(CpuChart, "采样中…");
+                ChartPlaceholder(MemChart, "采样中…");
+                ChartPlaceholder(NetChart, "采样中…");
+                return;
+            }
+            CpuNow.Text = "—"; MemNow.Text = "—"; NetNow.Text = "—";
             DrawChart(CpuChart, CpuYLabels, CpuXLabels, [cpuHist], ["#0A84FF"], "cpu", timeHist);
             DrawChart(MemChart, MemYLabels, MemXLabels, [memHist], ["#30D158"], "mem", timeHist);
             DrawChart(NetChart, NetYLabels, NetXLabels, [upHist, downHist], ["#FF9F0A", "#BF5AF2"], "net", timeHist);

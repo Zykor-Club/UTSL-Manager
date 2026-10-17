@@ -105,7 +105,7 @@
                 <DataTemplate>
                   <Border Classes="srvcard" Margin="0,0,0,6" CornerRadius="10" Padding="10,7"
                           BorderThickness="1" Tag="{Binding Id}" Cursor="Hand"
-                          PointerPressed="OnServerCardPressed" ToolTip.Tip="{Binding Tip}"
+                          PointerPressed="OnServerCardPressed"
                           Classes.active="{Binding IsActive}">
                     <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
                       <Border Grid.RowSpan="2" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
