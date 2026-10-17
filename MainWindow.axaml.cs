@@ -5463,7 +5463,14 @@ public partial class MainWindow : Window
         t.Start();
     }
 
-    private async void OnRefreshMap(object? sender, RoutedEventArgs e) { await RefreshMapPickerAsync(); await LoadMap(); }
+    private async void OnRefreshMap(object? sender, RoutedEventArgs e)
+    {
+        forceWorldReload = true;          // 忽略远端世界缓存
+        WorldMapRenderer.DropCache();     // 解析缓存也丢掉（按 path+mtime+size，正常情况本就会失效，这里是双保险）
+        try { FsInvalidatePath(WorldsDir); } catch { }   // 目录列表缓存也失效：换了新世界名要能立刻出现在下拉里
+        try { await RefreshMapPickerAsync(); await LoadMap(); }
+        finally { forceWorldReload = false; }
+    }
 
     /// <summary>服务端世界存档目录（唯一地图来源，不读别处）。</summary>
     private static string WorldsDir => Path.Combine(Env.FileRoot, "lib", "Saves", "Worlds");
@@ -5553,18 +5560,32 @@ public partial class MainWindow : Window
         {
             Directory.CreateDirectory(Path.GetDirectoryName(cache)!);
             long remoteSize = 0;
+            DateTime remoteMtime = default;
             try
             {
                 string dir = Path.GetDirectoryName(full) ?? "";
                 string name = Path.GetFileName(full);
-                remoteSize = FsList(dir).Where(e => !e.IsDir && e.Name == name).Select(e => e.Size).FirstOrDefault();
+                var hit = FsList(dir).FirstOrDefault(e => !e.IsDir && e.Name == name);
+                if (hit is not null) { remoteSize = hit.Size; remoteMtime = hit.Mtime; }
             }
             catch { }
-            if (File.Exists(cache) && remoteSize > 0 && new FileInfo(cache).Length == remoteSize)
+            // ★ 缓存判定用"大小 + 远端修改时间 + 本地留存时间"三重比对：
+            //   原来只比大小 —— 换了一张同尺寸的世界（或同名覆盖）会一直吃旧缓存，看起来"地图没变"。
+            //   forceWorldReload（用户点"刷新"时置位）直接跳过缓存，强制重下。
+            bool cacheFresh = false;
+            if (File.Exists(cache) && remoteSize > 0 && !forceWorldReload)
+            {
+                var ci = new FileInfo(cache);
+                bool sizeOk = ci.Length == remoteSize;
+                bool timeOk = remoteMtime == default || Math.Abs((ci.LastWriteTimeUtc - remoteMtime.ToUniversalTime()).TotalSeconds) < 2;
+                cacheFresh = sizeOk && timeOk;
+            }
+            if (cacheFresh)
             {
                 status?.Invoke(Path.GetFileName(rel) + "：本地缓存已是最新，跳过下载");
                 return cache;
             }
+            if (File.Exists(cache) && forceWorldReload) { status?.Invoke(Path.GetFileName(rel) + "：强制重新下载（忽略缓存）"); }
             status?.Invoke(Path.GetFileName(rel) + "：正在从远端下载" + (remoteSize > 0 ? "（" + (remoteSize / 1048576.0).ToString("F1") + " MB）" : "") + "…");
             if (FileBackend.Download(full, cache, remoteSize, s => status?.Invoke(Path.GetFileName(rel) + "：" + s)) || File.Exists(cache)) { return cache; }
         }
@@ -6027,6 +6048,8 @@ public partial class MainWindow : Window
     private Avalonia.Point mapHoverPoint;                // 悬停位图坐标（用于状态行）
     private bool mapHoverValid;
     private bool mapGotoHooked;
+    /// <summary>"刷新"按钮置位一次：下次取世界文件时忽略远端缓存（用户换过世界要强制重读时用）。</summary>
+    private static bool forceWorldReload;
 
     private void InitMapLayerPresets()
     {
