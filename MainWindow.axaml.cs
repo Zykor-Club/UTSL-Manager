@@ -547,11 +547,14 @@ public partial class MainWindow : Window
             Dispatcher.UIThread.Post(() => Term(text, color));
             return;
         }
-        term.Add(new TermLine { Text = text, Brush = GetBrush(color) });
-        if (term.Count > MaxTermLines)
+        // ★ 写"当前激活档"的缓冲：字段 term 是"当前显示的那一份"，但它可能被切档过程短暂置换成
+        //   别的档（历史 bug：切到新档后终端出现上一台的日志）。按 ActiveSrv.Id 路由可以从根上避免。
+        var target = TermFor(ActiveSrv.Id);
+        target.Add(new TermLine { Text = text, Brush = GetBrush(color) });
+        if (target.Count > MaxTermLines)
         {
-            int drop = term.Count - MaxTermLines;
-            for (int i = 0; i < drop; i++) { term.RemoveAt(0); }
+            int drop = target.Count - MaxTermLines;
+            for (int i = 0; i < drop; i++) { target.RemoveAt(0); }
         }
         // 事件总线（P1-5）：没有插件订阅时零开销；再入保护防止插件在处理里又写日志造成递归
         if (!raisingTerminal && pluginHost is not null && pluginHost.Events.HasTerminalLineSubscribers)
@@ -1928,7 +1931,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnClearTerm(object? sender, RoutedEventArgs e) => term.Clear();
+    private void OnClearTerm(object? sender, RoutedEventArgs e) => TermFor(ActiveSrv.Id).Clear();
 
     private void RefreshLog()
     {
@@ -2499,6 +2502,10 @@ public partial class MainWindow : Window
     /// <summary>切档重载插件期间，压掉"[插件] 已加载/[API 探针]"这类每档都一样的刷屏（约 40 行/次）。</summary>
     private static volatile bool suppressPluginLog;
 
+    /// <summary>正在重载的插件属于哪一档。重载是后台任务，切档后它还在跑；</summary>
+    /// <summary>它的日志必须回"那一档"的终端缓冲，否则会串到刚切过去的档里（历史 bug）。</summary>
+    private volatile string pluginReloadProfileId = "";
+
     private void PluginLog(string m)
     {
         if (suppressPluginLog && (m.StartsWith("[插件] 已加载") || m.StartsWith("[API 探针]")
@@ -2506,7 +2513,22 @@ public partial class MainWindow : Window
         {
             return;
         }
+        string owner = pluginReloadProfileId;
+        if (owner.Length > 0 && owner != ActiveSrv.Id) { TermTo(owner, m, PickColor(m)); return; }
         Term(m, PickColor(m));
+    }
+
+    /// <summary>往"指定档"的终端缓冲写一行（用于后台重载这类异步来源）。</summary>
+    private void TermTo(string profileId, string text, string color)
+    {
+        if (!Dispatcher.UIThread.CheckAccess()) { Dispatcher.UIThread.Post(() => TermTo(profileId, text, color)); return; }
+        try
+        {
+            var c = TermFor(profileId);
+            c.Add(new TermLine { Text = text, Brush = GetBrush(color) });
+            while (c.Count > MaxTermLines) { c.RemoveAt(0); }
+        }
+        catch { }
     }
 
     private PluginHost? pluginHost;
@@ -3476,13 +3498,15 @@ public partial class MainWindow : Window
             {
                 if (pluginHost is null) { return; }
                 // 执行时再取一次：期间可能又换档了
+                string reloadId = ActiveSrv.Id;                      // ★ 这一轮重载属于哪一档
                 pluginHost.Options.DataRoot = ActiveSrv.PluginDataRoot(AppContext.BaseDirectory);
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 suppressPluginLog = true;
+                pluginReloadProfileId = reloadId;                    // ★ 它的日志只回这一档的终端
                 try { pluginHost.Reload(); }
-                finally { suppressPluginLog = false; }
+                finally { suppressPluginLog = false; pluginReloadProfileId = ""; }
                 sw.Stop();
-                pluginLoadedProfileId = ActiveSrv.Id;
+                pluginLoadedProfileId = reloadId;
                 Dispatcher.UIThread.Post(() => ERR($"插件已按「{ActiveSrv.Name}」重载：{pluginHost.Plugins.Count} 个，用时 {sw.ElapsedMilliseconds} ms（逐条加载日志已折叠）"));
                 try
                 {
@@ -3890,10 +3914,19 @@ public partial class MainWindow : Window
             rowsByServer[fromId] = rows;      // 旧档（fromId）保存引用，切回来时原样复用
             termByServer[fromId] = term;
             rows = rowsByServer.TryGetValue(target.Id, out var rowsNew) ? rowsNew : [];
-            term = termByServer.TryGetValue(target.Id, out var termNew) ? termNew : [];
+            // ★ 目标档没有终端缓冲时，必须**建一份并登记**（原来只给个临时空集合，
+            //   结果它不进入字典、且控件可能还挂着旧集合 → 出现过"切到新档却看到上一台日志"）
+            if (!termByServer.TryGetValue(target.Id, out var termNew)) { termNew = []; termByServer[target.Id] = termNew; }
+            term = termNew;
             if (rows.Count == 0) { rows.Add(new WorldRow { Name = "全部世界", Size = "", Running = true }); }
             WorldList.ItemsSource = rows;
+            // 先解绑再绑：避免 ItemsControl 复用旧集合的视觉缓存
+            TermLines.ItemsSource = null;
             TermLines.ItemsSource = term;
+            if (term.Count == 0)
+            {
+                term.Add(new TermLine { Text = "已切换到「" + target.Name + "」，正在读取该档日志…", Brush = GetBrush("#9BA3AE") });
+            }
             WorldList.SelectedIndex = 0;
             UpdateTarget();
             ConnState.Text = "切换中…";
@@ -3951,9 +3984,10 @@ public partial class MainWindow : Window
                 int mapImg = (MapImage?.Source is not null) ? 1 : 0;
                 int chainLen = (ChainText?.Text ?? "").Length;
                 int editGuard = PageStateGuard.EditorSaveAllowed(editorProfileId, ActiveSrv.Id, out _) ? 1 : 0;
+                int termLines = term?.Count ?? -1;
                 File.AppendAllText(pf, $"{DateTime.Now:HH:mm:ss.fff}	{fromName} → {target.Name}	total={sw.ElapsedMilliseconds}ms	"
                     + string.Join(" ", phases.Select(x => x.Name + "=" + x.Ms))
-                    + $"	mapImg={mapImg} chainLen={chainLen} editGuard={editGuard}" + Environment.NewLine);
+                    + $"	mapImg={mapImg} chainLen={chainLen} editGuard={editGuard} termLines={termLines}" + Environment.NewLine);
             }
             catch { }
             string slow = string.Join(" / ", phases.Where(x => x.Ms >= 25).Select(x => x.Name + " " + x.Ms));
