@@ -58,6 +58,10 @@ public sealed class ServerProfile
     public int TunnelPid;
     /// <summary>上次拉隧道的时间（Environment.TickCount64）。用于冷却，避免"进程还没绑上端口"时被重复拉起。</summary>
     public long LastSpawnMs;
+    /// <summary>建这条隧道时用的 ssh 参数指纹。参数被改过（改主机/密钥/端口）时必须重建，否则会复用一条连到旧目标的隧道。</summary>
+    public string TunnelKey = "";
+    /// <summary>最近一次被激活的时间（TickCount64）。隧道保活超出上限时按它做 LRU 淘汰。</summary>
+    public long LastUsedMs;
     /// <summary>上次刷新到的世界数（-1 = 未知）。</summary>
     public int WorldCount = -1;
     /// <summary>0=未知 1=在线 2=隧道通但 REST 不通 3=进程/接口都没有。</summary>
@@ -268,6 +272,8 @@ public sealed class ServersConfig
                     Watchdog = so["paths"]?["watchdog"]?.GetValue<bool>() ?? true,
                     ForceLocal = so["paths"]?["forceLocal"]?.GetValue<bool>() ?? false,
                     WorldConsoles = so["paths"]?["worldConsoles"]?.GetValue<bool>() ?? false,
+                    // 老文件没有这个键：把数组第一档当迁移档（现有配置就是"第一条=迁移来的"），下一次 Save 就补上
+                    LegacyDataRoot = so["legacyDataRoot"]?.GetValue<bool>() ?? (cfg.Servers.Count == 0),
                 };
                 if (int.TryParse(so["port"]?.ToString(), out int port) && port > 0) { p.Port = port; }
 
@@ -318,6 +324,9 @@ public sealed class ServersConfig
             {
                 ["id"] = p.Id,
                 ["name"] = p.Name,
+                // ★ 必须落盘：它决定插件数据用「全局 plugin-data」还是「plugin-data\<档id>」。
+                //   漏写会让迁移档在第二次启动时换目录（老插件配置静默"丢失"）。
+                ["legacyDataRoot"] = p.LegacyDataRoot,
                 ["host"] = p.Host,
                 ["port"] = p.Port,
                 ["ssh"] = new JsonObject

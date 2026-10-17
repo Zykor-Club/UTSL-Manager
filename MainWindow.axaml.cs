@@ -361,7 +361,13 @@ public partial class MainWindow : Window
         }
 
         // 关闭时通知插件（P0-4：保存状态 / 停后台任务 / 卸载可回收 ALC）
-        Closing += (_, _) => { try { pluginHost?.Shutdown(); } catch { } };
+        Closing += (_, _) =>
+        {
+            try { pluginHost?.Shutdown(); } catch { }
+            // ★ 退出时收隧道：实测强杀/正常关都【不会】带走 ssh 子进程 → 端口被占 + 任务管理器堆 ssh，
+            //   下一次 ssh -L 还会因 ExitOnForwardFailure=yes 直接起不来。
+            try { foreach (var p in ServersCfg.Servers) { KillTunnel(p); } } catch { }
+        };
     }
 
     private void UpdateTarget()
@@ -1567,6 +1573,40 @@ public partial class MainWindow : Window
             agentLogCts = null;
         }
     }
+    /// <summary>同时保留的隧道上限（保活让"来回切换"变快；超了按 LRU 淘汰最久没用的那条）。</summary>
+    private const int MaxLiveTunnels = 4;
+
+    /// <summary>该档建隧道用到的 ssh 参数指纹（变了就必须重建）。</summary>
+    private static string TunnelSig(ServerProfile p)
+        => string.Join("|", p.SshHost, p.SshPort, p.SshUser, p.SshKey, p.RemoteDir, p.RemoteRestPort, p.Port, p.AgentPort);
+
+    private static bool ProcAlive(int pid)
+    {
+        if (pid <= 0) { return false; }
+        try { using var pr = System.Diagnostics.Process.GetProcessById(pid); return !pr.HasExited; } catch { return false; }
+    }
+
+    /// <summary>隧道保活上限：按"最近使用"淘汰，正在用的那条永不淘汰。只杀本机 ssh 客户端。</summary>
+    private static void TrimTunnels(ServerProfile keep)
+    {
+        try
+        {
+            var live = ServersCfg.Servers
+                .Where(p => p.TunnelPid > 0 && ProcAlive(p.TunnelPid))
+                .OrderBy(p => p.LastUsedMs)
+                .ToList();
+            int over = live.Count - MaxLiveTunnels;
+            foreach (var p in live)
+            {
+                if (over <= 0) { break; }
+                if (ReferenceEquals(p, keep)) { continue; }
+                KillTunnel(p);
+                over--;
+            }
+        }
+        catch { }
+    }
+
     /// <summary>
     /// 确保某档的 SSH 隧道在跑（默认=当前激活档）。
     /// ★ 多档后这里必须显式带档、并且串行：切档时隧道定时器、合并快照(RefreshSnapshot) 都会调进来，
@@ -1587,8 +1627,15 @@ public partial class MainWindow : Window
                 try { alive = t.ConnectAsync("127.0.0.1", p.Port).Wait(800); } catch { alive = false; }
                 t.Close();
                 if (ReferenceEquals(p, ActiveSrv)) { TunnelAlive = alive; }
+                string sig = TunnelSig(p);
+                // ★ 参数被改过（换主机/密钥/端口）→ 旧隧道连的是老目标，必须重建，不能复用
+                if (alive && p.TunnelKey.Length > 0 && p.TunnelKey != sig)
+                {
+                    KillTunnel(p);
+                    alive = false;
+                }
                 // ★ 端口在听但不知道是谁起的（管理器重启后旧 ssh 仍在）→ 认领它，否则切档时杀不掉、会一直占着端口
-                if (alive) { if (p.TunnelPid <= 0) { p.TunnelPid = FindTunnelPidByPort(p.Port); } return; }
+                if (alive) { if (p.TunnelPid <= 0) { p.TunnelPid = FindTunnelPidByPort(p.Port); } p.TunnelKey = sig; return; }
                 if (p.TunnelPid > 0)
                 {
                     try { System.Diagnostics.Process.GetProcessById(p.TunnelPid); return; } catch { p.TunnelPid = 0; }
@@ -1606,6 +1653,7 @@ public partial class MainWindow : Window
                 };
                 var proc = System.Diagnostics.Process.Start(psi);
                 p.TunnelPid = proc?.Id ?? 0;
+                p.TunnelKey = sig;
             }
             catch { }
         }
@@ -1858,6 +1906,7 @@ public partial class MainWindow : Window
             }
             using var fs = new FileStream(f.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             if (fs.Length < logPos) { logPos = 0; }
+            bool firstFill = logPos == 0;      // ★ 首屏（刚换台/刚启动）：历史行只补最后 120 行
             // ★ 首次（logPos==0）不要从文件头整读：几十 MB 的日志会逐行读 + 每行一次 Term
             //   （集合增删 + ScrollIntoView 的 Dispatcher.Post 排队）→ 启动瞬间几万次 UI 操作 = "一打开就卡"。
             //   只取尾部 64KB 作为首屏上下文，并把 logPos 对齐到读起点。
@@ -1870,7 +1919,18 @@ public partial class MainWindow : Window
             fs.Seek(logPos, SeekOrigin.Begin);
             using var sr = new StreamReader(fs);
             string? line;
-            while ((line = sr.ReadLine()) is not null) { Term(line, PickColor(line)); }
+            List<string>? tail = firstFill ? new List<string>(256) : null;
+            while ((line = sr.ReadLine()) is not null)
+            {
+                if (tail is not null) { tail.Add(line); continue; }   // 首屏先攒着，别逐行刷 UI
+                Term(line, PickColor(line));
+            }
+            if (tail is not null && tail.Count > 0)
+            {
+                // ★ 实测：换台后第一次读日志会带来上千行历史，逐行 Term（集合改动 + 滚动 Post）最长冻 UI 363ms
+                int from = Math.Max(0, tail.Count - 60);
+                for (int i = from; i < tail.Count; i++) { Term(tail[i], PickColor(tail[i])); }
+            }
             logPos = fs.Position;
         }
         catch { }
@@ -2955,14 +3015,17 @@ public partial class MainWindow : Window
             {
                 ServerProfile p = list[i];
                 ServerCardRow r = srvRows[i];
-                bool active = p.Id == ActiveSrv.Id;
+                // ★ 乐观高亮：切档要 3~4 秒，点下去就得立刻有反馈（否则像没点上）
+                string showActiveId = pendingActiveId.Length > 0 ? pendingActiveId : ActiveSrv.Id;
+                bool active = p.Id == showActiveId;
                 r.Id = p.Id;
                 r.Name = p.Name.Length > 0 ? p.Name : p.Id;
                 r.Address = p.AddressText + (p.DirectReady ? " · 直连" : p.IsRemote ? " · SSH" : " · 本机");
-                r.Worlds = p.WorldCount >= 0 ? p.WorldCount + " 世界" : "—";
-                // 激活档：绿=在线 / 黄=REST 不通 / 灰=未运行或未知；非激活档：绿=那台机器/端口可达（没开隧道）
-                string hex = active
-                    ? p.Status switch { 1 => "#32D74B", 2 => "#FEBC2E", _ => "#6B6B70" }
+                bool isPending = p.Id == pendingActiveId;
+                r.Worlds = isPending ? "切换中…" : p.WorldCount >= 0 ? p.WorldCount + " 世界" : "—";
+                // 激活档：绿=在线 / 黄=REST 不通 / 灰=未运行/未知；非激活档：绿=那台机器/端口可达（没开隧道）
+                string hex = isPending ? "#FEBC2E"
+                    : active ? p.Status switch { 1 => "#32D74B", 2 => "#FEBC2E", _ => "#6B6B70" }
                     : p.ProbeAtMs == 0 ? "#6B6B70" : p.ProbeOk ? "#32D74B" : "#6B6B70";
                 r.StatusBrush = GetBrush(hex);
                 r.IsActive = active;
@@ -3156,7 +3219,9 @@ public partial class MainWindow : Window
     private void ResetConnScopedState()
     {
         lastLogFile = ""; lastRemoteLine = ""; logPos = 0; lastRemoteLogMs = 0;
-        fileCwd = FsRoot;                        // 文件页回到新后端的根
+        // ★ 不能写 FsRoot：它是 FileBackend.Root，会【构造文件后端】——直连/远端模式下可能发 HTTP，
+        //   而这里是 UI 线程。文件页第一次读时会自己校正回真正的根（见 ShowFiles 里的 FsExists 兜底）。
+        fileCwd = UseRemote ? RemoteDir : LocalDir;
         lastWorldRel = "";                       // 地图：下次重新解析、导出目标失效
         cfgLauncher = null; cfgEdge = null;      // 配置页：丢掉旧机器读出来的配置对象
         SnapPrevAtMs = 0; SnapshotAtMs = 0; SnapPrevCpuMs = -1; SnapshotProcs = 0;
@@ -3180,6 +3245,79 @@ public partial class MainWindow : Window
     // ===== 多服务器：切换激活档 =====
     /// <summary>切档门闩：4 个定时器 + 3 条流在切换期间一律让路（否则旧档的采样/日志会写进新档）。</summary>
     private static bool switching;
+
+    /// <summary>正在切往/已在的那一档（用于"点下去立刻高亮"的乐观反馈，切完清空）。</summary>
+    private static string pendingActiveId = "";
+
+    /// <summary>切档期间被点到的下一档（合并连点，切完立刻接着切）。</summary>
+    private static string pendingSwitchId = "";
+
+    /// <summary>插件重载去抖代号：只有最后一次请求真正执行。</summary>
+    private static int pluginReloadGen;
+
+    /// <summary>切档后"重活"去抖代号（世界/日志/agent/快照）。</summary>
+    private static int postSwitchGen;
+
+    /// <summary>
+    /// 切档后的"重活"统一去抖 250ms：世界列表 / 日志首屏 / agent 三条流 / 合并快照。
+    /// ★ 为什么必须去抖：切档本身压到 5~10ms 之后，用户连点会被**真的执行**十几次，
+    ///   每次都重拉世界 + 重灌 60~120 行日志首屏 + 重探 agent → 实测把 UI 冻到 2.9 秒。
+    ///   合并成"最后一次切完统一做一遍"就干净了。
+    /// </summary>
+    private void SchedulePostSwitchWork()
+    {
+        int my = ++postSwitchGen;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(250);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (switching && sw.ElapsedMilliseconds < 3000) { await Task.Delay(100); }
+            if (my != postSwitchGen || switching) { return; }
+            try { await RefreshWorldsAsync(); } catch { }
+            if (my != postSwitchGen) { return; }
+            // 日志要碰控件，回 UI 线程做
+            Dispatcher.UIThread.Post(() => { try { RefreshLog(); UpdateServerCards(); RedrawChartsNow(); } catch { } });
+            _ = Task.Run(() => TickAgentAsync());      // 接日志/指标流
+            _ = Task.Run(() => RefreshSnapshot());     // 合并快照（ssh，后台）
+        });
+    }
+
+    /// <summary>
+    /// 插件按新档重载（去抖 1500ms）：连续切档时只有最后一次真正执行。
+    /// 每次重载都会拆掉 5 个插件、重新扫描/加载、跑 OnLoad（ApiProbe 还会跑一整轮自检 + 一次 ssh），
+    /// 所以"来回快切"时它是最大的一笔开销 —— 合并掉就能明显不卡。
+    /// </summary>
+    private void ScheduleProfilePluginReload()
+    {
+        int my = ++pluginReloadGen;
+        _ = Task.Run(async () =>
+        {
+            // ① 去抖：连续切档只做最后一次
+            await Task.Delay(1500);
+            if (my != pluginReloadGen) { return; }
+            // ② 等"切档空档"：切档期间 UI 线程正忙（重建列表/图表/卡片），这时候重载插件会和它抢，
+            //    实测把 UI 冻住近 900ms。最多等 10 秒，等不到就跳过（下一轮切档会再排）。
+            var wait = System.Diagnostics.Stopwatch.StartNew();
+            while (switching && wait.ElapsedMilliseconds < 10000) { await Task.Delay(200); }
+            if (switching || my != pluginReloadGen) { return; }
+            try
+            {
+                if (pluginHost is null) { return; }
+                // 执行时再取一次：期间可能又换档了
+                pluginHost.Options.DataRoot = ActiveSrv.PluginDataRoot(AppContext.BaseDirectory);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                pluginHost.Reload();
+                sw.Stop();
+                try
+                {
+                    string pf = Path.Combine(AppContext.BaseDirectory, "switchperf.log");
+                    File.AppendAllText(pf, $"{DateTime.Now:HH:mm:ss.fff}	plugin-reload={sw.ElapsedMilliseconds}ms	profile={ActiveSrv.Name}	插件数={pluginHost.Plugins.Count}	失败={pluginHost.Report?.Failed.Count ?? 0}" + Environment.NewLine);
+                }
+                catch { }
+            }
+            catch (Exception ex) { Dispatcher.UIThread.Post(() => ERR("切档重载插件失败: " + ex.Message)); }
+        });
+    }
 
     private void SaveHistFor(string id)
         => histByServer[id] = new MetricHistory { Cpu = cpuHist, Mem = memHist, Up = upHist, Down = downHist, Times = timeHist };
@@ -3206,6 +3344,7 @@ public partial class MainWindow : Window
         p.TunnelPid = 0;
         if (pid <= 0) { pid = FindTunnelPidByPort(p.Port); }   // 认领不到 pid 时按端口兜底（只杀 ssh 客户端）
         p.LastSpawnMs = 0;                                      // 允许立刻重建（否则冷却期会让切回来的那台起不来）
+        p.TunnelKey = "";
         if (pid <= 0) { return; }
         try { using var pr = System.Diagnostics.Process.GetProcessById(pid); pr.Kill(); } catch { }
     }
@@ -3256,13 +3395,24 @@ public partial class MainWindow : Window
     /// </summary>
     private async Task SwitchServerAsync(string id)
     {
-        if (switching) { return; }
         var target = ServersCfg.Find(id);
         if (target is null) { ERR("切换失败：servers.json 里没有 id=" + id); return; }
-        if (ReferenceEquals(target, ActiveSrv)) { UpdateServerCards(); return; }
+        if (switching)
+        {
+            // ★ 切档进行中又点了别的卡片：不丢点击、也不叠加——记下最后点的那张，当前这次结束后接着切。
+            //   原来直接 return → 点击被吞掉，用户会连点，体感就是"很卡/没反应"。
+            if (target.Id != ActiveSrv.Id) { pendingSwitchId = target.Id; pendingActiveId = target.Id; UpdateServerCards(); }
+            return;
+        }
+        if (target.Id == ActiveSrv.Id) { pendingActiveId = ""; UpdateServerCards(); return; }
 
         switching = true;
+        pendingActiveId = target.Id;      // ★ 点下去立刻高亮（下一行刷新卡片，0 ms 反馈）
+        UpdateServerCards();
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        var phases = new List<(string Name, long Ms)>();
+        long lastMark = 0;
+        void Phase(string name) { phases.Add((name, sw.ElapsedMilliseconds - lastMark)); lastMark = sw.ElapsedMilliseconds; }
         string fromName = ActiveSrv.Name;
         try
         {
@@ -3280,13 +3430,18 @@ public partial class MainWindow : Window
             lastLogFile = ""; lastRemoteLine = ""; logPos = 0; lastRemoteLogMs = 0;
             LastSshError = ""; TunnelAlive = false;
 
-            // ③ 停旧隧道（每档一条 ssh；留下会累积进程，也会占着本地端口）
-            KillTunnel(ActiveSrv);
+            // ③ ★ 不再杀旧隧道：每档有自己的端口对（17878/17879、17880/17881…），互不冲突，
+            //   而"杀掉再重建"意味着每次切回来都要重付一次 ssh 握手（实测 ~1.5~2 秒，这条链路 RTT 1.7 秒）——
+            //   用户来回切会觉得"点了要等好几秒"。改成保活 + 上限 LRU 淘汰（MaxLiveTunnels）。
+            TrimTunnels(ActiveSrv);
+            Phase("隧道保活/淘汰");
 
             // ④ 换档并落盘（active 立刻持久化：下次启动还是这台）
             ServersCfg.ActiveId = target.Id;
             ActiveSrv = target;
+            target.LastUsedMs = Environment.TickCount64;
             SaveConn();
+            Phase("换档落盘");
 
             // ⑤ 与"哪台机器"相关的一切重置 + 指标历史换档 + 插件数据目录换档
             ResetConnScopedState();
@@ -3294,7 +3449,7 @@ public partial class MainWindow : Window
             rows.Add(new WorldRow { Name = "全部世界", Size = "", Running = true });
             WorldList.SelectedIndex = 0;
             UpdateTarget();
-            ConnState.Text = "刷新中…";
+            ConnState.Text = "切换中…";
             if (ChainText is not null) { ChainText.Text = "世界链: —"; }
             LoadHistFor(target.Id);
             // 插件数据目录先换好；真正 Reload 放到世界列表刷新之后（否则插件 OnLoad 时 Worlds 是空的）
@@ -3304,16 +3459,19 @@ public partial class MainWindow : Window
             }
             catch (Exception ex) { ERR("切档换插件数据目录失败: " + ex.Message); }
             ApplyConsoleMode();
+            Phase("重置状态");
 
             // ⑥ 起新档的隧道与流（★ 显式传目标档：切档期间别的线程不允许建隧道）
             if (target.IsRemote)
             {
-                EnsureTunnel(target);
+                // ★ 建隧道是【阻塞】的（TCP 探活 800ms + 起进程）——放后台，UI 线程只等端口，否则每次切档白冻 0.8 秒
+                await Task.Run(() => EnsureTunnel(target));
                 bool restOk = await WaitPortAsync(target.Port, 5000);
                 if (target.HasSsh) { await WaitPortAsync(target.AgentPort, 3000); }
                 if (!restOk) { ERR($"警告：隧道 REST 端口 {target.Port} 5 秒内没就绪（世界列表可能暂时为空，20 秒定时器会自动重试）"); }
+                TrimTunnels(target);          // 起好新的再淘汰，别把正在建的那条淘汰掉
             }
-            await TickAgentAsync();
+            Phase("隧道就绪");
             // 令牌空的新档：先尝试从服务端配置里自动读（否则世界列表一定空，用户会以为切坏了）
             if (target.Token.Length == 0)
             {
@@ -3321,19 +3479,47 @@ public partial class MainWindow : Window
                 if (got) { SaveConn(); ERR($"「{target.Name}」令牌为空 → 已从服务端配置自动读到（REST 端口 {target.Port}），已保存"); }
                 else { ERR($"「{target.Name}」令牌为空 → 世界列表可能为空，请到「连接设置 → 自动检测」填一次并保存"); }
             }
-            await RefreshWorldsAsync();
-            // ⑦ 世界列表到位后再重载插件（DataRoot 已换成新档的；旧插件 ALC 会被回收）
-            _ = Task.Run(() => { try { pluginHost?.Reload(); } catch (Exception ex) { Dispatcher.UIThread.Post(() => ERR("切档重载插件失败: " + ex.Message)); } });
-            RefreshLog();
-            _ = Task.Run(() => RefreshSnapshot());
-            RefreshActiveViews();
+            Phase("换档收尾");
+
+            // ⑦ 世界列表到位后再重载插件（DataRoot 已换成新档的）。
+            //   ★ 去抖：来回快切时只重载最后一次（每次重载都会重建 5 个插件并跑 OnLoad，很贵）
+            ScheduleProfilePluginReload();
+            SchedulePostSwitchWork();                        // 世界/日志/agent/快照：去抖 250ms 后统一做
+            Phase("派发重活");
+
             UpdateServerCards();
             RedrawChartsNow();
+            // 文件/配置页的重刷可能读 ssh：延后 400ms 再由 UI 线程做，别压在切档关键路径上
+            if (PluginsView.IsVisible || ConfigView.IsVisible)
+            {
+                _ = Task.Run(async () => { await Task.Delay(400); Dispatcher.UIThread.Post(RefreshActiveViews); });
+            }
+            Phase("收尾");
             sw.Stop();
-            ERR($"已切换服务器：{fromName} → 「{target.Name}」（{target.AddressText}）· {(UseRemote ? "远端" : "本机")} · 用时 {sw.ElapsedMilliseconds} ms");
+            // 诊断：每次切档追加一行（脚本/探针可量化"来回切换"，写满 256KB 自动清空）
+            try
+            {
+                string pf = Path.Combine(AppContext.BaseDirectory, "switchperf.log");
+                var fi = new FileInfo(pf);
+                if (fi.Exists && fi.Length > 256 * 1024) { File.WriteAllText(pf, ""); }
+                File.AppendAllText(pf, $"{DateTime.Now:HH:mm:ss.fff}	{fromName} → {target.Name}	total={sw.ElapsedMilliseconds}ms	"
+                    + string.Join(" ", phases.Select(x => x.Name + "=" + x.Ms)) + Environment.NewLine);
+            }
+            catch { }
+            string slow = string.Join(" / ", phases.Where(x => x.Ms >= 25).Select(x => x.Name + " " + x.Ms));
+            ERR($"已切换服务器：{fromName} → 「{target.Name}」（{target.AddressText}）· {(UseRemote ? "远端" : "本机")} · 用时 {sw.ElapsedMilliseconds} ms" + (slow.Length > 0 ? "【" + slow + "】" : ""));
         }
         catch (Exception ex) { ERR("切换服务器失败: " + ex.Message); }
-        finally { switching = false; }
+        finally
+        {
+            switching = false;
+            pendingActiveId = "";
+            string next = pendingSwitchId;
+            pendingSwitchId = "";
+            UpdateServerCards();
+            // 切档期间点过的最后一张：现在接着切（用户连点时只多一次真正的切换，中间那些被合并掉）
+            if (next.Length > 0 && next != ActiveSrv.Id) { _ = SwitchServerAsync(next); }
+        }
     }
 
 
