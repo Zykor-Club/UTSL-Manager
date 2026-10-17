@@ -500,7 +500,7 @@ public partial class MainWindow : Window
             {
                 downTicks = 0;      // 进程还在 → 只是 REST 未就绪（加载中），看门狗不介入
             }
-            else if (WatchdogEnabled && serverWasUp && downTicks >= 2)
+            else if (WatchdogEnabled && !ActiveSrv.UserStopped && serverWasUp && downTicks >= 2)
             {
                 downTicks = 0;
                 // ★ 换图保护窗口：刚启动/重启/整链重置后，世界加载需要时间（大图可达数分钟），期间不自动重启
@@ -508,6 +508,12 @@ public partial class MainWindow : Window
                 {
                     int left = (int)((watchdogProtectUntilMs - Environment.TickCount64) / 1000);
                     ERR($"看门狗：进程不在，但仍在启动/换图保护窗口内（剩余约 {left} 秒），暂不自动重启");
+                }
+                else if (!LivenessKnown())
+                {
+                    // ★ 看不到服务端状态时不能"猜"它挂了：agent 掉线/快照过期时也报"未运行"，
+                    //   原来的逻辑会因此把好好的服务端重启一遍（本地 agent 升级时真实发生过）。
+                    ERR("看门狗：暂时看不到服务端状态（agent 或快照不可用），本轮不自动重启");
                 }
                 else
                 {
@@ -6783,6 +6789,14 @@ public partial class MainWindow : Window
     private bool serverWasUp;
     private int downTicks;
     private int watchdogFailures;
+
+    /// <summary>当前能否可靠判断"服务端到底在不在"（本机看进程；远端看 agent 或新鲜快照）。</summary>
+    private static bool LivenessKnown()
+    {
+        if (!UseRemote && !DirectReady) { return true; }                   // 本机：进程表就是事实
+        if (DirectReady) { return AgentAlive; }                            // 直连：必须 agent 活着
+        return SnapshotAtMs > 0 && Environment.TickCount64 - SnapshotAtMs < 90000;   // 远端：快照要新鲜
+    }
     // ★ 换图/启动保护窗口（移植 PGame 的 watchdogWorldBuildSuppress 思路）：
     //   世界加载期间 REST 本来就不通，若用"REST 通不通"当存活判据会误判掉线 → 重启循环。
     private static long watchdogProtectUntilMs;
@@ -6832,6 +6846,7 @@ public partial class MainWindow : Window
 
     private async void OnStartServer(object? sender, RoutedEventArgs e)
     {
+        ActiveSrv.UserStopped = false;      // 用户主动启动 → 恢复看门狗
         bool remote = ProcessBackend.IsRemote;
         if (remote)
         {
@@ -6859,6 +6874,8 @@ public partial class MainWindow : Window
             ErrText.Text = "远端停止中…";
         }
         ProcessResult r = await ProcessBackend.StopAsync();
+        // ★ 用户手动停机：明确告诉看门狗"这一次不要自动拉起"（重新点启动会清掉这个标记）
+        ActiveSrv.UserStopped = true;
         if (remote)
         {
             Term(r.Message, PickColor(r.Message));

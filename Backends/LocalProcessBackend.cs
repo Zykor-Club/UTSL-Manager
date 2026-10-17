@@ -15,11 +15,38 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
     /// ★ 不能只看"名字在不在进程列表里"：这台机器上被杀掉的进程会留下工作集 0、线程 0 的
     ///   僵尸条目（实测 HasExited=True），按名字判会以为服务端还活着 —— 看门狗因此永远不触发。
     /// </summary>
-    public static bool AnyAlive()
+    /// <summary>该进程是否属于"这个部署目录"（本机可能同时跑着多份部署，绝不能按名字一刀切）。</summary>
+    private bool BelongsHere(Process p, string workDir)
+    {
+        try
+        {
+            string? fp = p.MainModule?.FileName;
+            if (fp is null) { return false; }
+            string root = Path.GetFullPath(workDir).TrimEnd('\\', '/');
+            return fp.StartsWith(root, StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
+    public static bool AnyAlive() => AnyAliveIn(null);
+
+    /// <summary>本机是否存在"属于某个部署目录"的活服务端；root 为 null 时任意一份都算。</summary>
+    public static bool AnyAliveIn(string? root)
     {
         foreach (Process p in Process.GetProcessesByName(ProcName))
         {
-            using (p) { try { if (!p.HasExited) { return true; } } catch { } }   // 取不到句柄的条目按"不活"算
+            using (p)
+            {
+                try
+                {
+                    if (p.HasExited) { continue; }
+                    if (root is null) { return true; }
+                    string? fp = p.MainModule?.FileName;
+                    if (fp is null) { continue; }
+                    if (fp.StartsWith(Path.GetFullPath(root).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)) { return true; }
+                }
+                catch { }
+            }
         }
         return false;
     }
@@ -40,7 +67,7 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
 
     public Task<ProcessResult> StartAsync()
     {
-        if (AnyAlive()) { return Task.FromResult(new ProcessResult(true, "")); }   // ★ 原来调 IProcessBackend.IsAlive()，那个成员已删（零调用）
+        if (AnyAliveIn(workDir)) { return Task.FromResult(new ProcessResult(true, "")); }   // ★ 原来调 IProcessBackend.IsAlive()，那个成员已删（零调用）
         try
         {
             var psi = new ProcessStartInfo(exePath)
@@ -67,7 +94,13 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
             {
                 try
                 {
-                    if (!p.HasExited) { p.Kill(); p.WaitForExit(3000); killed++; }
+                    // ★ 只杀"本档部署目录下"的进程：以前按名字一刀切，停本机服务端会把同机另一份部署
+                    //   （例如测试用的 deploy-b）一起杀掉，那张卡就一直"REST 不通"。
+                    if (p.HasExited) { continue; }
+                    string? fp = p.MainModule?.FileName;
+                    if (fp is null) { continue; }
+                    if (!fp.StartsWith(Path.GetFullPath(workDir).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)) { continue; }
+                    p.Kill(); p.WaitForExit(3000); killed++;
                 }
                 catch { failed++; }
             }
@@ -81,7 +114,7 @@ public sealed class LocalProcessBackend(string exePath, string workDir) : IProce
 
     public string TrimMemory()
     {
-        var list = Process.GetProcessesByName(ProcName);
+        var list = Process.GetProcessesByName(ProcName).Where(p => BelongsHere(p, workDir)).ToArray();
         if (list.Length == 0) { return "服务端没在运行"; }
         var parts = new List<string>();
         foreach (var pr in list)

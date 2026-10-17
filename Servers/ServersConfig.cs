@@ -70,6 +70,8 @@ public sealed class ServerProfile
     public long RestMs = -1;
     /// <summary>最近一次切到这一档的耗时（ms，-1=没切过）。</summary>
     public long LastSwitchMs = -1;
+    /// <summary>用户在本档上手动停了机 —— 看门狗不再自动拉起，直到用户再次点启动（或重启管理器）。</summary>
+    public bool UserStopped;
     /// <summary>该档读到过明文令牌（加载后要立刻重新加密落盘）。</summary>
     public bool PlainToken;
     /// <summary>非激活档的轻量探活结果（只探 SSH/本地端口，不开隧道）。</summary>
