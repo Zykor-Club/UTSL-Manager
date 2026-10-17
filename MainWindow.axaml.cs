@@ -314,6 +314,14 @@ public partial class MainWindow : Window
             tunnelTimer.Tick += (_, _) => { if (switching) { return; } if (HasSsh) { _ = Task.Run(() => EnsureTunnel()); } _ = Task.Run(() => TickAgentAsync()); };   // ★ agent 探活与本机/远端无关（本机 7879 / 远端走隧道 17879）   // 自检修复：隧道探测也放后台
             tunnelTimer.Start();
         _ = Task.Run(() => TickAgentAsync());     // 启动即探一次 agent（否则要等 20 秒）
+        // ★ 后台档常驻监控：每 5 秒扫一遍"没在看的"服务器（内部按档分频：世界 20s / 指标 5s）。
+        //   效果：切到任何一台都是现成的（世界列表 + 三张图曲线 + 状态），不用等 REST。
+        {
+            var bgTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            bgTimer.Tick += (_, _) => { if (switching) { return; } _ = Task.Run(PollBackgroundAsync); };
+            bgTimer.Start();
+            _ = Task.Run(async () => { await Task.Delay(4000); _ = PollBackgroundAsync(); });
+        }
         // ★ 非激活档轻量探活（60 秒一次，只探端口，不开隧道）→ 卡片状态点不再是"上次已知"
         {
             var probeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
@@ -3459,6 +3467,156 @@ public partial class MainWindow : Window
             return true;
         }
         catch { return false; }
+    }
+
+
+    // ===== 后台档常驻监控（"没在看的那些服务器"也保持新鲜：切过去立刻有世界列表/曲线） =====
+    //   参考 PGame-TSManager：每台服务器各有一个常驻对象在跑自己的状态，切换只是换视图。
+    //   这里不搞"每档一个进程对象"的大改，而是给非激活档加一条独立轮询：
+    //   保活隧道 -> REST /world/list（写进该档的 rows 集合）-> agent /metrics（写进该档的指标历史）。
+    //   激活档不走这条（它有现成的 SSE + 2 秒采样管线），所以不会重复拉。
+    private sealed class BgMon
+    {
+        public long LastRestMs;
+        public long LastAgentMs;
+        public long LastSent = -1, LastRecv = -1, LastNetMs;
+    }
+    private static readonly HttpClient BgHttp = NewLocalHttp(TimeSpan.FromSeconds(8));
+    private readonly Dictionary<string, BgMon> bgMon = [];
+
+    /// <summary>后台档轮询间隔：世界列表 20 秒、指标 5 秒（对远端是每档每轮两次小请求，可忽略）。</summary>
+    private const int BgRestIntervalMs = 20000;
+    private const int BgAgentIntervalMs = 5000;
+
+    private async Task PollBackgroundAsync()
+    {
+        if (switching) { return; }
+        foreach (var p in ServersCfg.Servers.ToArray())
+        {
+            if (p.Id == ActiveSrv.Id) { continue; }     // 激活档交给现有管线
+            try { await PollOneBackgroundAsync(p); } catch { }
+        }
+    }
+
+    private async Task PollOneBackgroundAsync(ServerProfile p)
+    {
+        if (!bgMon.TryGetValue(p.Id, out var st)) { st = new BgMon(); bgMon[p.Id] = st; }
+        long now = Environment.TickCount64;
+
+        // ① 隧道：保活（不在听就拉一条；TrimTunnels 保证总数不超上限）
+        if (p.IsRemote)
+        {
+            EnsureTunnel(p);
+            TrimTunnels(ActiveSrv);
+        }
+
+        string restBase = p.DirectReady ? "http://" + p.DirectHost + ":" + p.DirectPort
+                                        : "http://127.0.0.1:" + p.Port;
+        string agentBase = p.DirectReady ? restBase : "http://127.0.0.1:" + p.AgentPort;
+
+        // ② 世界列表
+        if (now - st.LastRestMs >= BgRestIntervalMs)
+        {
+            st.LastRestMs = now;
+            try
+            {
+                string url = restBase + "/world/list?token=" + Uri.EscapeDataString(p.Token);
+                string txt = await BgHttp.GetStringAsync(url);
+                using var doc = JsonDocument.Parse(txt);
+                var incoming = new List<(string n, string s, bool r)>();
+                if (doc.RootElement.TryGetProperty("worlds", out var ws))
+                {
+                    foreach (var w in ws.EnumerateArray())
+                    {
+                        incoming.Add((w.GetProperty("name").GetString() ?? "?",
+                                      w.GetProperty("width").GetInt32() + "x" + w.GetProperty("height").GetInt32(),
+                                      w.GetProperty("running").GetBoolean()));
+                    }
+                }
+                p.Status = 1;
+                ApplyBackgroundWorlds(p, incoming);
+            }
+            catch { p.Status = 3; }
+        }
+
+        // ③ 指标（agent /metrics：CPU 单核% / 私有内存 / 网卡累计字节 -> 差分算速率）
+        if (now - st.LastAgentMs >= BgAgentIntervalMs)
+        {
+            st.LastAgentMs = now;
+            try
+            {
+                string txt = await BgHttp.GetStringAsync(agentBase + "/metrics");
+                using var doc = JsonDocument.Parse(txt);
+                var srv = doc.RootElement.GetProperty("server");
+                double cpu = srv.TryGetProperty("cpuSingleCorePct", out var c) ? c.GetDouble() : 0;
+                double memMb = srv.TryGetProperty("privateMB", out var m) ? m.GetDouble() : 0;
+                long sent = -1, recv = -1;
+                if (doc.RootElement.TryGetProperty("net", out var net))
+                {
+                    sent = net.TryGetProperty("sentBytes", out var sb) ? sb.GetInt64() : -1;
+                    recv = net.TryGetProperty("recvBytes", out var rb) ? rb.GetInt64() : -1;
+                }
+                double up = 0, down = 0, secs = st.LastNetMs > 0 ? Math.Max(0.5, (now - st.LastNetMs) / 1000.0) : 0;
+                if (secs > 0 && sent >= 0 && st.LastSent >= 0)
+                {
+                    up = Math.Max(0, (sent - st.LastSent) / 1024.0 / secs);
+                    down = Math.Max(0, (recv - st.LastRecv) / 1024.0 / secs);
+                }
+                st.LastSent = sent; st.LastRecv = recv; st.LastNetMs = now;
+                ApplyBackgroundMetrics(p, cpu, memMb / 1024.0, up, down);
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>把后台拉到的世界列表写进"该档自己的"集合（界面可见时才真正重排）。</summary>
+    private void ApplyBackgroundWorlds(ServerProfile p, List<(string n, string s, bool r)> incoming)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                if (!rowsByServer.TryGetValue(p.Id, out var list))
+                {
+                    list = [];
+                    rowsByServer[p.Id] = list;
+                }
+                bool changed = list.Count != incoming.Count + 1;
+                if (!changed)
+                {
+                    for (int i = 0; i < incoming.Count; i++)
+                    {
+                        var r = list[i + 1];
+                        if (r.Name != incoming[i].n || r.Size != incoming[i].s || r.Running != incoming[i].r) { changed = true; break; }
+                    }
+                }
+                if (changed)
+                {
+                    list.Clear();
+                    list.Add(new WorldRow { Name = "全部世界", Size = "", Running = true });
+                    foreach (var (n, s, run) in incoming) { list.Add(new WorldRow { Name = n, Size = s, Running = run }); }
+                }
+                p.WorldCount = incoming.Count(x => x.r);
+                UpdateServerCards();
+            }
+            catch { }
+        });
+    }
+
+    /// <summary>把后台拉到的指标写进"该档自己的"历史（切过去曲线就是现成的）。</summary>
+    private void ApplyBackgroundMetrics(ServerProfile p, double cpu, double memGb, double up, double down)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                if (!histByServer.TryGetValue(p.Id, out var h)) { h = new MetricHistory(); histByServer[p.Id] = h; }
+                PushCarry(h.Cpu, cpu); PushCarry(h.Mem, memGb); PushCarry(h.Up, up); PushCarry(h.Down, down);
+                h.Times.Add(DateTime.Now);
+                if (h.Times.Count > MaxSamples) { h.Times.RemoveAt(0); }
+            }
+            catch { }
+        });
     }
 
     /// <summary>
