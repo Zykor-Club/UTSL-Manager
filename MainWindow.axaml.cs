@@ -507,13 +507,13 @@ public partial class MainWindow : Window
                 if (Environment.TickCount64 < watchdogProtectUntilMs)
                 {
                     int left = (int)((watchdogProtectUntilMs - Environment.TickCount64) / 1000);
-                    ERR($"掉线自启：进程不在，但仍在启动/换图保护窗口内（剩余约 {left} 秒），暂不自动重启");
+                    Wd($"掉线自启：进程不在，但仍在启动/换图保护窗口内（剩余约 {left} 秒），暂不自动重启");
                 }
                 else if (!LivenessKnown())
                 {
                     // ★ 看不到服务端状态时不能"猜"它挂了：agent 掉线/快照过期时也报"未运行"，
                     //   原来的逻辑会因此把好好的服务端重启一遍（本地 agent 升级时真实发生过）。
-                    ERR("掉线自启：暂时看不到服务端状态（agent 或快照不可用），本轮不自动重启");
+                    Wd("掉线自启：暂时看不到服务端状态（agent 或快照不可用），本轮不自动重启");
                 }
                 else
                 {
@@ -523,18 +523,18 @@ public partial class MainWindow : Window
                     {
                         ChkWatchdog!.IsChecked = false;
                         watchdogFailures = 0;
-                        ERR("⚠ 掉线自启已熔断：连续 3 次自动重启后服务端仍未存活，已停止重试（请手动检查）");
+                        Wd("⚠ 掉线自启已熔断：连续 3 次自动重启后服务端仍未存活，已停止重试（请手动检查）");
                     }
                     else
                     {
-                        ERR(ProcessBackend.IsRemote
+                        Wd(ProcessBackend.IsRemote
                             ? $"掉线自启：远端服务端进程已不在，正在自动重启…（第 {watchdogFailures}/3 次）"
                             : $"掉线自启：服务端已退出，正在自动重启…（第 {watchdogFailures}/3 次）");
                         ProtectWatchdog(600, "watchdog");
                         _ = Task.Run(async () =>
                         {
                             ProcessResult r = await ProcessBackend.StartAsync();
-                            if (!r.Ok) { Dispatcher.UIThread.Post(() => ERR("掉线自启：" + r.Message)); }
+                            if (!r.Ok) { Dispatcher.UIThread.Post(() => Wd("掉线自启：" + r.Message)); }
                         });
                     }
                 }
@@ -6771,6 +6771,16 @@ public partial class MainWindow : Window
     }
 
     private void ERR(string msg) => ErrText.Text = msg;
+
+    /// <summary>
+    /// 掉线自启的决策写两处：状态行（ErrText，会被下一次轮询清空）+ 服务器终端（留痕、能截图）。
+    /// ★ 只写状态行的话，"第 N/3 次自动重启"这类关键信息 2 秒后就没了，事后无法复盘。
+    /// </summary>
+    private void Wd(string msg)
+    {
+        ERR(msg);
+        try { Term(msg, "#FEBC2E"); } catch { }
+    }
 
     /// <summary>读 EdgeStitch 配置里的世界链，显示在侧栏底部。</summary>
     private async void RefreshChain()
