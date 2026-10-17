@@ -12,7 +12,8 @@ namespace UTSLManager.Maps;
 /// <summary>一次渲染的统计（给界面显示用）。</summary>
 public sealed record MapRenderStats(
     int WorldWidth, int WorldHeight, int PixelWidth, int PixelHeight,
-    int Chests, int Signs, int Entities, long LoadMs, long RenderMs, long EncodeMs, int Slices = 1)
+    int Chests, int Signs, int Entities, long LoadMs, long RenderMs, long EncodeMs, int Slices = 1,
+    int SpawnX = -1, int SpawnY = -1)
 {
     /// <summary>一行简短信息。刻意只放事实，不放操作提示。</summary>
     public string Describe()
@@ -156,12 +157,13 @@ public static class WorldMapRenderer
     ///   直接写像素缓冲后是纯托管计算，快两个数量级。
     ///   PixelMap.GetTileColor 是纯函数（无静态可变状态），所以这里可以安全地按行分块。
     /// </summary>
-    public static SKBitmap Render(World world, int scale, Action<double>? progress = null)
+    public static SKBitmap Render(World world, int scale, Action<double>? progress = null,
+                                 TEdit5.Controls.WorldRenderEngine.Layers.RenderLayerVisibility? layers = null)
     {
         scale = Math.Max(1, scale);
         var bmp = new SKBitmap(Math.Max(1, world.TilesWide / scale), Math.Max(1, world.TilesHigh / scale),
                                SKImageInfo.PlatformColorType, SKAlphaType.Premul);
-        RenderInto(bmp, world, scale, 0, progress);
+        RenderInto(bmp, world, scale, 0, progress, layers);
         return bmp;
     }
 
@@ -171,7 +173,8 @@ public static class WorldMapRenderer
     /// 并行策略：PixelMap 是纯静态函数（无可变状态），行与行写入的地址区间互不重叠，
     /// 所以按行并行是安全的；唯一共享的是"已完成行数"计数器，用 Interlocked。
     /// </summary>
-    public static unsafe void RenderInto(SKBitmap canvas, World world, int scale, int offsetX, Action<double>? progress = null)
+    public static unsafe void RenderInto(SKBitmap canvas, World world, int scale, int offsetX, Action<double>? progress = null,
+                                        TEdit5.Controls.WorldRenderEngine.Layers.RenderLayerVisibility? layers = null)
     {
         scale = Math.Max(1, scale);
         int ow = Math.Max(1, world.TilesWide / scale);
@@ -186,7 +189,7 @@ public static class WorldMapRenderer
                 int ty0 = y * scale;
                 for (int x = 0; x < ow; x++)
                 {
-                    canvas.SetPixel(x + offsetX, y, PixelMap.GetTileColor(tiles[x * scale, ty0], bg0).ToSKColor().WithAlpha(255));
+                    canvas.SetPixel(x + offsetX, y, PixelMap.GetTileColor(tiles[x * scale, ty0], bg0, layers).ToSKColor().WithAlpha(255));
                 }
                 progress?.Invoke((y + 1) / (double)oh);
             }
@@ -209,7 +212,7 @@ public static class WorldMapRenderer
             int xe = Math.Min(ow, canvasW - offsetX);
             for (int x = xs; x < xe; x++)
             {
-                SKColor c = PixelMap.GetTileColor(tiles[x * scale, ty], bg).ToSKColor();
+                SKColor c = PixelMap.GetTileColor(tiles[x * scale, ty], bg, layers).ToSKColor();
                 byte* p = row + (long)(x + offsetX) * 4;
                 p[0] = c.Blue;       // Bgra8888：内存里是 B,G,R,A
                 p[1] = c.Green;
@@ -232,7 +235,8 @@ public static class WorldMapRenderer
     /// <paramref name="OffsetTiles"/> 传负数表示"紧接在上一片后面"（按实际宽度累加）。
     /// </summary>
     public static SKBitmap? RenderStitched(IReadOnlyList<StitchSlice> slices, int scale,
-                                           out MapRenderStats stats, out string error, Action<double>? progress = null)
+                                           out MapRenderStats stats, out string error, Action<double>? progress = null,
+                                           TEdit5.Controls.WorldRenderEngine.Layers.RenderLayerVisibility? layers = null)
     {
         stats = new MapRenderStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, slices.Count);
         error = "";
@@ -297,7 +301,7 @@ public static class WorldMapRenderer
 
                 int idx = si, total = slices.Count;
                 var swR = Stopwatch.StartNew();
-                RenderInto(canvas, w, scale, (int)Math.Round(off / (double)scale), p => progress?.Invoke((idx + 0.75 + 0.25 * p) / total));
+                RenderInto(canvas, w, scale, (int)Math.Round(off / (double)scale), p => progress?.Invoke((idx + 0.75 + 0.25 * p) / total), layers);
                 renderMs += swR.ElapsedMilliseconds;
 
                 DropCache();     // ★ 立刻释放这一片的世界（约 200MB）
@@ -360,7 +364,7 @@ public static class WorldMapRenderer
             for (int y = 0; y < oh; y++)
             {
                 int ty = y * scale;
-                for (int x = 0; x < ow; x++) { bmp.SetPixel(x, y, PixelMap.GetTileColor(region.Tiles[ty * region.W + x * scale], bg).ToSKColor().WithAlpha(255)); }
+                for (int x = 0; x < ow; x++) { bmp.SetPixel(x, y, PixelMap.GetTileColor(region.Tiles[ty * region.W + x * scale], bg).ToSKColor().WithAlpha(255)); }   // 区域渲染不接图层开关（导出模板用，保持全量）
                 progress?.Invoke((y + 1) / (double)oh);
             }
         }

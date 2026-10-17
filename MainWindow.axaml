@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:maps="using:UTSLManager.Maps"
         x:Class="UTSLManager.MainWindow"
         Title="UTSLManager" Width="900" Height="620" MinWidth="760" MinHeight="480" WindowStartupLocation="CenterScreen" WindowState="Maximized"
         Background="#0C0E12"
@@ -463,6 +464,15 @@
           <Button Content="−" FontSize="12" Width="32" Padding="0,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapZoomOut"/>
           <Button Content="+" FontSize="12" Width="32" Padding="0,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapZoomIn"/>
           <Button Content="刷新" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnRefreshMap"/>
+          <TextBox x:Name="MapGotoBox" Width="96" FontSize="12" Margin="0,0,4,6" Padding="6,4" CornerRadius="8"
+                   Watermark="x,y 跳转" ToolTip.Tip="输入世界坐标，如 3120,840，回车跳到该处"/>
+          <Button Content="跳转" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapGoto"/>
+          <CheckBox x:Name="ChkMapGrid" Content="网格" FontSize="12" Margin="0,0,8,6" Click="OnMapOverlayToggle"/>
+          <CheckBox x:Name="ChkMapSpawn" Content="出生点" FontSize="12" Margin="0,0,8,6" Click="OnMapOverlayToggle"/>
+          <ComboBox x:Name="MapLayers" Width="118" FontSize="12" Margin="0,0,6,6" SelectionChanged="OnMapLayersChanged"
+                    ToolTip.Tip="只影响显示与导出，不改动世界文件"/>
+          <Button Content="导出视口" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapExportView"/>
+          <Button Content="导出整图" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapExportFull"/>
         </WrapPanel>
         <Border Grid.Row="2" x:Name="MapCard" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True"
                 Cursor="Hand" PointerWheelChanged="OnMapWheel"
@@ -474,6 +484,7 @@
                Stretch=None 时就只画左上角一块（实测 Panel 下 Bounds=1440x1100，Canvas 下=12000x2400） -->
           <Canvas x:Name="MapSurface" ClipToBounds="True">
             <Image x:Name="MapImage" Stretch="None" HorizontalAlignment="Left" VerticalAlignment="Top" PointerWheelChanged="OnMapWheel"/>
+            <maps:MapOverlay x:Name="MapOverlay" IsHitTestVisible="False" IsVisible="False"/>
             <Rectangle x:Name="MapSelectRect" IsVisible="False" IsHitTestVisible="False"
                        Fill="#3366CCFF" Stroke="#66CCFF" StrokeThickness="1.5"/>
           </Canvas>

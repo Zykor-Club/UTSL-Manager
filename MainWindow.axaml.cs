@@ -5408,6 +5408,19 @@ public partial class MainWindow : Window
         // ★★ 先把页面切过去再异步填数据：远端模式下建列表要 4 次 ssh 往返（每次约 1.6 s），
         //    原来在 UI 线程上同步做，点了就像卡死（实测用户反馈"卡死半天"就是这个）。
         ShowView("map");
+        InitMapLayerPresets();
+        if (MapGotoBox is not null && !mapGotoHooked)
+        {
+            mapGotoHooked = true;
+            MapGotoBox.KeyDown += (_, ke) =>
+            {
+                if (ke.Key is Avalonia.Input.Key.Enter or Avalonia.Input.Key.Return)
+                {
+                    OnMapGoto(null, new RoutedEventArgs());
+                    ke.Handled = true;
+                }
+            };
+        }
         MapInfo.Text = "正在读取世界列表…";
         await RefreshMapPickerAsync();
         await LoadMap();
@@ -5834,7 +5847,7 @@ public partial class MainWindow : Window
                     if (missing.Count > 0) { return (Bmp: (SKBitmap?)null, Error: "缺少世界文件：" + string.Join("、", missing), Stats: (MapRenderStats?)null); }
 
                     // ★ 拼接也走全分辨率：3900×2+4200 = 12000 格宽，任何缩放都会糊掉细节
-                    SKBitmap? cv = WorldMapRenderer.RenderStitched(slices, 1, out MapRenderStats sst, out string serr, p => prog.Report(p));
+                    SKBitmap? cv = WorldMapRenderer.RenderStitched(slices, 1, out MapRenderStats sst, out string serr, p => prog.Report(p), mapLayers);
                     if (cv is null) { return (Bmp: (SKBitmap?)null, Error: serr, Stats: (MapRenderStats?)null); }
 
                     // ★ 拼接会顺序载入 3 个世界（每个约 200MB 的 Tile[,]），而 GC 默认**不把大对象堆还给系统**。
@@ -5856,11 +5869,12 @@ public partial class MainWindow : Window
                 long loadMs = sw.ElapsedMilliseconds;
                 // ★ 一律全分辨率（scale=1）：不缩放才是最清晰
                 var swr = System.Diagnostics.Stopwatch.StartNew();
-                SKBitmap bmp2 = WorldMapRenderer.Render(w, 1, p => prog.Report(0.60 + p * 0.40));
+                SKBitmap bmp2 = WorldMapRenderer.Render(w, 1, p => prog.Report(0.60 + p * 0.40), mapLayers);
                 long renderMs = swr.ElapsedMilliseconds;
                 return (Bmp: bmp2, Error: "", Stats: (MapRenderStats?)new MapRenderStats(
                     w.TilesWide, w.TilesHigh, bmp2.Width, bmp2.Height,
-                    w.Chests.Count, w.Signs.Count, w.TileEntities.Count, loadMs, renderMs, 0));
+                    w.Chests.Count, w.Signs.Count, w.TileEntities.Count, loadMs, renderMs, 0, 1,
+                    w.SpawnX, w.SpawnY));
             });
 
             SKBitmap? outBmp = result.Bmp;
@@ -5872,7 +5886,12 @@ public partial class MainWindow : Window
                 RaiseMapViewChanged();
                 return;
             }
+            mapIsStitch = stitch;
+            mapSpawnX = stitch ? -1 : (result.Stats?.SpawnX ?? -1);
+            mapSpawnY = stitch ? -1 : (result.Stats?.SpawnY ?? -1);
+            lastMapPick = pick;
             using (outBmp) { PresentBitmap(outBmp); }   // 换图统一走这里（含布局尺寸与适应窗口）
+            try { OnMapOverlayToggle(null, new RoutedEventArgs()); } catch { }
             ShowMapProgress(false, 1);
             lastWorldRel = relThisLoad;      // 只有成功渲染才更新（导出的目标世界）
            mapInfoHead = label + " · " + (result.Stats?.Describe() ?? "");
@@ -5940,11 +5959,61 @@ public partial class MainWindow : Window
         mapScaleT.ScaleX = mapScaleT.ScaleY = mapZoom;
         mapTransT.X = mapOffset.X;
         mapTransT.Y = mapOffset.Y;
+        // 叠加层用同一套缩放/位移（它是独立元素，需要自己一份 transform）
+        if (MapOverlay is not null)
+        {
+            if (MapOverlay.RenderTransform is not Avalonia.Media.TransformGroup)
+            {
+                var og = new Avalonia.Media.TransformGroup();
+                og.Children.Add(new Avalonia.Media.ScaleTransform(1, 1));
+                og.Children.Add(new Avalonia.Media.TranslateTransform());
+                MapOverlay.RenderTransformOrigin = new Avalonia.RelativePoint(0, 0, Avalonia.RelativeUnit.Absolute);
+                MapOverlay.RenderTransform = og;
+            }
+            var og2 = (Avalonia.Media.TransformGroup)MapOverlay.RenderTransform!;
+            ((Avalonia.Media.ScaleTransform)og2.Children[0]).ScaleX = ((Avalonia.Media.ScaleTransform)og2.Children[0]).ScaleY = mapZoom;
+            ((Avalonia.Media.TranslateTransform)og2.Children[1]).X = mapOffset.X;
+            ((Avalonia.Media.TranslateTransform)og2.Children[1]).Y = mapOffset.Y;
+            MapOverlay.Zoom = mapZoom;
+            MapOverlay.Offset = mapOffset;
+            MapOverlay.InvalidateVisual();
+        }
         UpdateSelectRect();     // 选区覆盖层跟着缩放/平移走
     }
 
     private string mapInfoHead = "";      // 状态行头部（文件名 + 统计），与缩放/选区分开拼
     private string lastWorldRel = "";      // 最近渲染的世界文件（相对 Worlds 目录），导出模板要用；拼接图为空
+
+    // ===== 地图查看增强（A1~A5）=====
+    private int mapSpawnX = -1, mapSpawnY = -1;         // 当前图的出生点（拼接图为 -1）
+    private bool mapIsStitch;                           // 当前显示的是拼接图（没有单世界坐标语义）
+    private TEdit5.Controls.WorldRenderEngine.Layers.RenderLayerVisibility mapLayers = new();
+    private string mapLayerPreset = "全部图层";
+    private string lastMapPick = "";                     // 上次渲染的选择（改图层后按它重渲）
+    private string mapHoverText = "";                    // 悬停坐标
+    private Avalonia.Point mapHoverPoint;                // 悬停位图坐标（用于状态行）
+    private bool mapHoverValid;
+    private bool mapGotoHooked;
+
+    private void InitMapLayerPresets()
+    {
+        if (MapLayers is null || MapLayers.ItemCount > 0) { return; }
+        MapLayers.ItemsSource = new[] { "全部图层", "无背景墙", "只看图块", "只看液体", "只看电线" };
+        MapLayers.SelectedIndex = 0;
+    }
+
+    private TEdit5.Controls.WorldRenderEngine.Layers.RenderLayerVisibility LayersFromPreset(string preset)
+    {
+        var v = new TEdit5.Controls.WorldRenderEngine.Layers.RenderLayerVisibility();
+        switch (preset)
+        {
+            case "无背景墙": v.Wall = false; break;
+            case "只看图块": v.Wall = false; v.Liquid = false; v.WireRed = v.WireBlue = v.WireGreen = v.WireYellow = false; v.Coatings = false; break;
+            case "只看液体": v.Tile = false; v.Wall = false; v.WireRed = v.WireBlue = v.WireGreen = v.WireYellow = false; v.Coatings = false; break;
+            case "只看电线": v.Tile = false; v.Wall = false; v.Liquid = false; v.Coatings = false; break;
+        }
+        return v;
+    }
 
     /// <summary>状态行 = 头部 + 缩放 + 选区。只放事实。</summary>
     private void RefreshMapInfo()
@@ -5952,6 +6021,8 @@ public partial class MainWindow : Window
         if (MapInfo is null) { return; }
         string s = mapInfoHead + $" · 缩放 {mapZoom * 100:F0}%";
         if (hasSelection) { s += $" · 选区 {selX1 - selX0 + 1}×{selY1 - selY0 + 1} @({selX0},{selY0})"; }
+        if (mapHoverValid && mapHoverText.Length > 0) { s += " · " + mapHoverText; }
+        if (mapLayerPreset != "全部图层") { s += " · 图层:" + mapLayerPreset; }
         MapInfo.Text = s;
     }
 
@@ -6086,7 +6157,30 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!mapPanning) { return; }
+        if (!mapPanning)
+        {
+            // 悬停：把屏幕点换算成"位图像素 / 世界图块"
+            try
+            {
+                Avalonia.Size im = MapSourceSize;
+                if (im.Width >= 1)
+                {
+                    var ip = ToImagePoint(e.GetPosition(MapCard));
+                    if (ip.X >= 0 && ip.Y >= 0 && ip.X < im.Width && ip.Y < im.Height)
+                    {
+                        mapHoverPoint = ip;
+                        mapHoverValid = true;
+                        mapHoverText = mapIsStitch
+                            ? $"光标 ({ip.X:F0},{ip.Y:F0}) px（拼接图无单世界坐标）"
+                            : $"光标 ({ip.X:F0},{ip.Y:F0}) · 区块 ({(int)ip.X / 200},{(int)ip.Y / 150})";
+                        RefreshMapInfo();
+                    }
+                    else if (mapHoverValid) { mapHoverValid = false; mapHoverText = ""; RefreshMapInfo(); }
+                }
+            }
+            catch { }
+            return;
+        }
         Avalonia.Point p = e.GetPosition(MapCard);
         Avalonia.Vector d = p - mapPanLast;
         mapPanLast = p;
@@ -6169,6 +6263,17 @@ public partial class MainWindow : Window
         // ★ 布局尺寸必须显式等于位图尺寸（否则会被容器夹成视口大小，只画左上角一块）。
         MapImage.Width = wb.PixelSize.Width;
         MapImage.Height = wb.PixelSize.Height;
+        // 叠加层（网格/出生点）与图像同尺寸、同变换
+        if (MapOverlay is not null)
+        {
+            MapOverlay.Width = wb.PixelSize.Width;
+            MapOverlay.Height = wb.PixelSize.Height;
+            MapOverlay.SpawnX = mapSpawnX;
+            MapOverlay.SpawnY = mapSpawnY;
+            MapOverlay.ShowGrid = ChkMapGrid?.IsChecked == true;
+            MapOverlay.ShowSpawn = ChkMapSpawn?.IsChecked == true;
+            MapOverlay.IsVisible = MapOverlay.ShowGrid || (MapOverlay.ShowSpawn && mapSpawnX >= 0);
+        }
         EnsureMapTransform();
         FitMap();
     }
@@ -6216,6 +6321,150 @@ public partial class MainWindow : Window
             res.Stats?.WorldWidth ?? 0, res.Stats?.WorldHeight ?? 0, "");
         RaiseMapViewChanged();
         return true;
+    }
+
+
+    // ===== 地图增强：跳转 / 叠加层 / 图层 / 导出 =====
+    /// <summary>A3：输入 "x,y" 跳到该世界坐标（居中显示）。</summary>
+    private void OnMapGoto(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (MapCard is null || MapImage?.Source is null) { return; }
+            string raw = (MapGotoBox?.Text ?? "").Trim();
+            if (raw.Length == 0) { return; }
+            var parts = raw.Split(new[] { ',', '，', ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2 || !double.TryParse(parts[0], out double tx) || !double.TryParse(parts[1], out double ty))
+            {
+                SetStatusLine("跳转需要两个数字，例如 3120,840");
+                return;
+            }
+            Avalonia.Size im = MapSourceSize, vp = MapViewport;
+            if (im.Width < 1 || vp.Width < 1) { return; }
+            // ★ 整张图正好装得下时（适应窗口），位移会被 ClampMapOffset 夹回居中 —— 跳转看起来"没反应"。
+            //   所以先在"适应"状态下自动放大到一个能看清的倍率，再居中。
+            double fit = FitZoom();
+            if (mapZoom <= fit * 1.2) { mapZoom = Math.Max(fit * 4.0, Math.Min(1.0, fit * 8.0)); }
+            mapOffset = new Avalonia.Vector(vp.Width / 2.0 - tx * mapZoom, vp.Height / 2.0 - ty * mapZoom);
+            ApplyMapTransform();
+            mapHoverValid = false; mapHoverText = "";
+            RefreshMapInfo();
+            SetStatusLine($"已跳到 ({tx:F0},{ty:F0})");
+        }
+        catch (Exception ex) { SetStatusLine("跳转失败: " + ex.Message); }
+    }
+
+    /// <summary>A2：网格 / 出生点开关。</summary>
+    private void OnMapOverlayToggle(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (MapOverlay is null) { return; }
+            MapOverlay.ShowGrid = ChkMapGrid?.IsChecked == true;
+            MapOverlay.ShowSpawn = ChkMapSpawn?.IsChecked == true;
+            MapOverlay.SpawnX = mapSpawnX;
+            MapOverlay.SpawnY = mapSpawnY;
+            MapOverlay.IsVisible = MapOverlay.ShowGrid || (MapOverlay.ShowSpawn && mapSpawnX >= 0);
+            MapOverlay.InvalidateVisual();
+        }
+        catch { }
+    }
+
+    /// <summary>A5：图层预设切换 —— 需要重新渲染（颜色是按层算出来的，改不了已生成的像素）。</summary>
+    private async void OnMapLayersChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        try
+        {
+            string preset = MapLayers?.SelectedItem as string ?? "全部图层";
+            if (preset == mapLayerPreset) { return; }
+            mapLayerPreset = preset;
+            mapLayers = LayersFromPreset(preset);
+            RefreshMapInfo();
+            if (lastMapPick.Length == 0) { return; }
+            SetStatusLine("图层已切到「" + preset + "」，重新渲染…");
+            await LoadMap();
+        }
+        catch (Exception ex) { SetStatusLine("切换图层失败: " + ex.Message); }
+    }
+
+    /// <summary>A4：导出当前视口为 PNG。</summary>
+    private void OnMapExportView(object? sender, RoutedEventArgs e) => ExportMap(false);
+
+    /// <summary>A4：导出整张图为 PNG。</summary>
+    private void OnMapExportFull(object? sender, RoutedEventArgs e) => ExportMap(true);
+
+    private void ExportMap(bool whole)
+    {
+        try
+        {
+            if (MapImage?.Source is not Avalonia.Media.Imaging.Bitmap bmp) { SetStatusLine("还没有渲染任何世界"); return; }
+            var (src, _, _) = ReadCurrentMapBitmap();
+            if (src is null) { SetStatusLine("导出失败：取不到位图"); return; }
+            int sw = src.Width, sh = src.Height;
+            int x0 = 0, y0 = 0, w = sw, h = sh;
+            if (!whole)
+            {
+                Avalonia.Size vp = MapViewport;
+                x0 = (int)Math.Round((-mapOffset.X) / mapZoom);
+                y0 = (int)Math.Round((-mapOffset.Y) / mapZoom);
+                w = (int)Math.Round(vp.Width / mapZoom);
+                h = (int)Math.Round(vp.Height / mapZoom);
+                x0 = Math.Clamp(x0, 0, Math.Max(0, sw - 1)); y0 = Math.Clamp(y0, 0, Math.Max(0, sh - 1));
+                w = Math.Clamp(w, 1, sw - x0); h = Math.Clamp(h, 1, sh - y0);
+            }
+            string dir = Path.Combine(AppContext.BaseDirectory, "map-export");
+            Directory.CreateDirectory(dir);
+            string name = "map_" + (lastWorldRel.Length > 0 ? Path.GetFileNameWithoutExtension(lastWorldRel) : "stitched")
+                        + (whole ? "_full" : "_view") + "_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png";
+            string outPath = Path.Combine(dir, name);
+            using (var crop = new SKBitmap(w, h, SKImageInfo.PlatformColorType, SKAlphaType.Premul))
+            {
+                using (var c = new SKCanvas(crop))
+                {
+                    c.DrawBitmap(src, new SKRect(x0, y0, x0 + w, y0 + h), new SKRect(0, 0, w, h));
+                }
+                using var img = SKImage.FromBitmap(crop);
+                using var data = img.Encode(SKEncodedImageFormat.Png, 100);
+                using var fs = File.Create(outPath);
+                data.SaveTo(fs);
+            }
+            SetStatusLine($"已导出 {w}×{h} → {outPath}");
+            ERR("地图已导出到 " + outPath);
+        }
+        catch (Exception ex) { SetStatusLine("导出失败: " + ex.Message); }
+    }
+
+    /// <summary>把当前显示位图取成 SKBitmap（缓存 ViewModel 里的 SKBitmap 比从 WriteableBitmap 反读快）。</summary>
+    private (SKBitmap? bmp, int w, int h) ReadCurrentMapBitmap()
+    {
+        try
+        {
+            if (MapImage?.Source is Avalonia.Media.Imaging.WriteableBitmap wb)
+            {
+                int pw = wb.PixelSize.Width, ph = wb.PixelSize.Height;
+                var bmp = new SKBitmap(pw, ph, SKImageInfo.PlatformColorType, SKAlphaType.Premul);
+                using (var fb = wb.Lock())
+                {
+                    // ★ 两边都是 BGRA8888（Avalonia 写回缓冲 & Skia 平台色型），按行 memcpy 即可。
+                    //   逐像素 SetPixel 在 12000×2400 上是 2880 万次调用，实测要十几秒。
+                    unsafe
+                    {
+                        byte* dst = (byte*)bmp.GetPixels().ToPointer();
+                        int dstRb = bmp.RowBytes;
+                        int rowBytes = Math.Min(fb.RowBytes, dstRb);
+                        for (int y = 0; y < ph; y++)
+                        {
+                            Buffer.MemoryCopy((byte*)fb.Address + (long)y * fb.RowBytes,
+                                              dst + (long)y * dstRb,
+                                              dstRb, rowBytes);
+                        }
+                    }
+                }
+                return (bmp, pw, ph);
+            }
+        }
+        catch { }
+        return (null, 0, 0);
     }
 
     /// <summary>双击：没放大就放大到 2×（锚在鼠标处），已放大就回到适应窗口。</summary>
