@@ -3919,8 +3919,13 @@ public partial class MainWindow : Window
                 string pf = Path.Combine(AppContext.BaseDirectory, "switchperf.log");
                 var fi = new FileInfo(pf);
                 if (fi.Exists && fi.Length > 256 * 1024) { File.WriteAllText(pf, ""); }
+                // ★ 页面级状态一并落盘，供回归套件断言"切档后页面有没有跟着走"
+                int mapImg = (MapImage?.Source is not null) ? 1 : 0;
+                int chainLen = (ChainText?.Text ?? "").Length;
+                int editGuard = PageStateGuard.EditorSaveAllowed(editorProfileId, ActiveSrv.Id, out _) ? 1 : 0;
                 File.AppendAllText(pf, $"{DateTime.Now:HH:mm:ss.fff}	{fromName} → {target.Name}	total={sw.ElapsedMilliseconds}ms	"
-                    + string.Join(" ", phases.Select(x => x.Name + "=" + x.Ms)) + Environment.NewLine);
+                    + string.Join(" ", phases.Select(x => x.Name + "=" + x.Ms))
+                    + $"	mapImg={mapImg} chainLen={chainLen} editGuard={editGuard}" + Environment.NewLine);
             }
             catch { }
             string slow = string.Join(" / ", phases.Where(x => x.Ms >= 25).Select(x => x.Name + " " + x.Ms));

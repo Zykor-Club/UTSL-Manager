@@ -12,6 +12,7 @@ using Avalonia.Threading;
 using AvaloniaEdit;
 using AvaloniaEdit.Highlighting;
 using Microsoft.CodeAnalysis;
+using UTSLManager.Servers;
 using Microsoft.CodeAnalysis.CSharp;
 
 namespace UTSLManager;
@@ -356,12 +357,10 @@ public partial class MainWindow
     private async Task SaveEditorAsync()
     {
         if (editor is null || editorPath.Length == 0 || editorSaving) { return; }
-        // ★ 切过服务器就拒绝保存：editorPath 是绝度路径，而读写走"当前激活档"的后端，
-        //   不拦的话会把 A 台的文件内容写进 B 台的同名路径（真实的数据破坏风险）。
-        if (editorProfileId.Length > 0 && editorProfileId != ActiveSrv.Id)
+        // ★ 切过服务器就拒绝保存（判定在 PageStateGuard，纯函数、可被探针直接测）
+        if (!PageStateGuard.EditorSaveAllowed(editorProfileId, ActiveSrv.Id, out string denyReason))
         {
-            ERR($"保存被拦下：这个文件是从「{ServersCfg.Find(editorProfileId)?.Name ?? editorProfileId}」打开的，当前已切到「{ActiveSrv.Name}」。"
-                + "跨服务器保存可能写错机器 —— 请重新打开该文件（或先切回原服务器）再保存。");
+            ERR($"保存被拦下：{denyReason} —— 跨服务器保存可能写错机器，请重新打开该文件（或先切回原服务器）再保存。");
             EditHint.Text = "⚠ 服务器已切换：这个编辑缓冲区属于另一台服务器，已阻止保存。请切回原服务器，或重新打开文件。";
             return;
         }
