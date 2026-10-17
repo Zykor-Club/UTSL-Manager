@@ -141,11 +141,16 @@ public static class AgentClient
     public static volatile bool HeadlessConsole = true;
 
     /// <summary>让 agent 拉起服务端（无窗口 + 重定向 stdout，输出可用 /stream/stdout 抓）。</summary>
-    public static string StartServer()
+    public static string StartServer(string args = "", string env = "")
     {
         try
         {
-            string url = Base + "/proc/start" + (HeadlessConsole ? "?console=headless" : "");
+            // ★ 启动参数按档传（空 = 不带参数）：第二份部署带 -joinserver 会打印 banner 后退出。
+            //   走 query 不走 body：agent 只解析 query，且 QueryValue 会 Uri.UnescapeDataString，
+            //   这里用 EscapeDataString 把空格编成 %20、'+' 编成 %2B，往返无损。
+            string url = Base + "/proc/start?console=" + (HeadlessConsole ? "headless" : "perworld")
+                       + "&args=" + Uri.EscapeDataString(args ?? "")
+                       + "&env=" + Uri.EscapeDataString(env ?? "");
             using var req = new HttpRequestMessage(HttpMethod.Post, url);
             if (Token.Length > 0) { req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", Token); }
             string s = LocalHttp.Send(req).Content.ReadAsStringAsync().GetAwaiter().GetResult();

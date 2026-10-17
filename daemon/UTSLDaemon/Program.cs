@@ -87,7 +87,7 @@ async Task ServeAsync(int listenPort = -1)
         return;
     }
     BoundPort = ((IPEndPoint)listener.LocalEndpoint).Port;
-    Console.WriteLine($"[UTSLDaemon] v0.1.0 监听 {bindAddr}:{BoundPort}  root={root}  logs={logsDir}（logs 存在={Directory.Exists(logsDir)}）"
+    Console.WriteLine($"[UTSLDaemon] v0.2.0 监听 {bindAddr}:{BoundPort}  root={root}  logs={logsDir}（logs 存在={Directory.Exists(logsDir)}）"
         + (token.Length > 0 ? "  [已启用令牌认证]" : "  [未启用认证：仅回环]"));
     while (true)
     {
@@ -178,15 +178,17 @@ async Task HandleAsync(TcpClient client)
                     if (Environment.TickCount64 - lastPingLog > 60000) { lastPingLog = Environment.TickCount64; Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] /ping（每分钟最多记一次）"); }
                     // 未认证时只回最小信息（不泄露本机路径）；认证后给全量
                     await WriteJsonAsync(ns, authed
-                        ? new { ok = true, name = "UTSLDaemon", version = "0.1.0", root, logs = logsDir, logsExists = Directory.Exists(logsDir), auth = token.Length > 0, at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }
-                        : new { ok = true, name = "UTSLDaemon", version = "0.1.0", auth = true });
+                        ? new { ok = true, name = "UTSLDaemon", version = "0.2.0", root, logs = logsDir, logsExists = Directory.Exists(logsDir), auth = token.Length > 0, at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }
+                        : new { ok = true, name = "UTSLDaemon", version = "0.2.0", auth = true });
                     return;
                 case "/metrics":
                     Interlocked.Increment(ref metricsCalls);
                     await WriteJsonAsync(ns, CollectMetrics());
                     return;
                 case "/proc/start":
-                    await ProcStartAsync(ns, QueryValue(pathRaw, "console"));
+                    // ★ 启动参数/环境变量按档传（面板把档上的 startArgs/startEnv 带过来）。
+                    //   空 = 不带任何参数：第二份部署带 -joinserver first -logmode txt 会打印 banner 后退出。
+                    await ProcStartAsync(ns, QueryValue(pathRaw, "console"), QueryValue(pathRaw, "args"), QueryValue(pathRaw, "env"));
                     return;
                 case "/proc/stop":
                     await ProcStopAsync(ns);
@@ -498,7 +500,7 @@ object ProcStatus()
     return new { ok = true, running, pid, privateMB = privMB, exe = ServerExePath(), ring = stdoutRing.Count };
 }
 
-async Task ProcStartAsync(NetworkStream ns, string consoleMode = "")
+async Task ProcStartAsync(NetworkStream ns, string consoleMode = "", string startArgs = "", string startEnv = "")
 {
     try
     {
@@ -525,8 +527,19 @@ async Task ProcStartAsync(NetworkStream ns, string consoleMode = "")
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("@echo off");
         if (headlessWanted) { sb.AppendLine("set UTSL_CONSOLE_MODE=headless"); }
+        // 档上配的额外环境变量（每行 KEY=VALUE）。UTSL_CONSOLE_MODE 由上面的开关决定，不允许这里覆盖。
+        foreach (string envLine in (startEnv ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            int envEq = envLine.IndexOf('=');
+            if (envEq <= 0) { continue; }
+            string envKey = envLine[..envEq].Trim();
+            if (envKey.Length == 0 || envKey.Equals("UTSL_CONSOLE_MODE", StringComparison.OrdinalIgnoreCase)) { continue; }
+            sb.AppendLine("set \"" + envKey + "=" + envLine[(envEq + 1)..].Trim().Replace("\"", "") + "\"");
+        }
         sb.AppendLine("cd /d \"" + root + "\"");
-        sb.AppendLine("\"" + ServerExePath() + "\" -joinserver first -logmode txt");
+        // ★ 原来写死 -joinserver first -logmode txt（第二份部署带它必挂）。现在按档传，空 = 不带参数。
+        string startArgsTrim = (startArgs ?? "").Trim();
+        sb.AppendLine("\"" + ServerExePath() + "\"" + (startArgsTrim.Length > 0 ? " " + startArgsTrim : ""));
         try { File.WriteAllText(wrapper, sb.ToString(), new UTF8Encoding(false)); }
         catch (Exception ex) { await WriteJsonAsync(ns, new { ok = false, error = "写启动脚本失败: " + ex.Message }); return; }
         var psi = new ProcessStartInfo("cmd.exe")
@@ -544,7 +557,8 @@ async Task ProcStartAsync(NetworkStream ns, string consoleMode = "")
         // 注意：这里拿到的是 cmd 的进程；cmd /c 会一直等子进程结束，所以它的存活就等于服务端在跑。
         // 因此 /proc/status 的 running、/proc/stop 的结束判定都仍然正确（见 ProcStopAsync 用 Kill(entireProcessTree)）。
         serverProc = p;
-        Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] agent 拉起服务端（cmd pid=" + p.Id + "，headless=" + headlessWanted + "）");
+        Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] agent 拉起服务端（cmd pid=" + p.Id + "，headless=" + headlessWanted
+            + "，args=" + (startArgsTrim.Length > 0 ? startArgsTrim : "(无)") + "）");
         await WriteJsonAsync(ns, new { ok = true, pid = p.Id });
     }
     catch (Exception ex) { await WriteJsonAsync(ns, new { ok = false, error = ex.Message }); }

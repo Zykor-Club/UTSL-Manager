@@ -125,15 +125,30 @@ public partial class MainWindow : Window
     /// 落盘 = 写 servers.json（所有档 + 当前激活档）。连接设置页/模式开关/切档都走这里。
     /// ★ 令牌一律 DPAPI 加密（同机其它用户读到也解不开）；加密不可用才退回明文并在终端提示。
     /// </summary>
+    /// <summary>最近一次 servers.json 落盘失败的原因（成功为空）。</summary>
+    public static string LastConfigSaveError = "";
+
     private static void SaveConn()
     {
         try
         {
             ServersCfg.Language = ManagerLanguage;
             ServersCfg.ActiveId = ActiveSrv.Id;
-            ServersCfg.Save(ServersFile);
+            if (!ServersCfg.Save(ServersFile))
+            {
+                // ★ 不能静默吞：这一份文件里是全部档 + DPAPI 令牌，没落盘等于这次修改白做。
+                LastConfigSaveError = "✗ 保存 servers.json 失败（配置未落盘）: " + ServersConfig.LastSaveError;
+                Progress(LastConfigSaveError);
+                // ★ 状态行会被"切档/插件重载"这类自己的文案秒盖掉（实测），所以再写两处留痕：
+                //   服务器终端（当场可见）+ switchperf.log（事后可查、可断言）。
+                try { TerminalSink?.Invoke(LastConfigSaveError, "#FF7B72"); } catch { }
+                try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "switchperf.log"),
+                        $"{DateTime.Now:HH:mm:ss.fff}	SAVE-FAIL	{LastConfigSaveError}" + Environment.NewLine); } catch { }
+                return;
+            }
+            LastConfigSaveError = "";
         }
-        catch { }
+        catch (Exception ex) { LastConfigSaveError = ex.Message; Progress("✗ 保存 servers.json 异常: " + ex.Message); }
     }
     // ===== 路径配置 =====
     // 每档自带 paths.localDir（默认「当前用户桌面\utsl-deploy」）；这里是转发到激活档的属性。
@@ -227,6 +242,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         // ★ 传输进度显示在底部状态栏（后台线程调用 → Post 回 UI）
+        TerminalSink = (text, color) => Term(text, color);
         TransferStatus = (msg) =>
         {
             try { Dispatcher.UIThread.Post(() => { if (ErrText is not null) { ErrText.Text = msg; } }); } catch { }
@@ -478,7 +494,8 @@ public partial class MainWindow : Window
             serverWasUp = true;
             downTicks = 0;
             watchdogFailures = 0;
-            ErrText.Text = "";
+            // ★ 保存失败要"顶着"显示，直到下一次保存成功 —— 否则会被插件重载/切档这些状态文案秒盖（实测）。
+            ErrText.Text = LastConfigSaveError;
             if (changed) { try { pluginHost?.RaiseWorldListRefreshed(RowsSnapshot()); } catch { } }
             NotifyServerState(true);
         }
@@ -640,21 +657,27 @@ public partial class MainWindow : Window
 
     private static IProcessBackend? _proc;
 
+    /// <summary>建 _proc 时用的指纹（本机/远端 + 部署目录 + 启动参数 + 环境变量）。任一项变了就重建。</summary>
+    private static string _procKey = "";
+
     /// <summary>服务端进程操作；本机/远端切换时自动重建。</summary>
     private static IProcessBackend ProcessBackend
     {
         get
         {
             var p = _proc;
-            // ★ 启动参数/环境变量是「档上的配置」：改了就重建后端，否则还会拿上一次的参数去起进程。
-            bool argsChanged = p is LocalProcessBackend lb
-                && (lb.StartArgs != (ActiveSrv.StartArgs ?? "").Trim() || lb.StartEnv != (ActiveSrv.StartEnv ?? "").Trim());
-            if (p is null || p.IsRemote != UseRemote || argsChanged)
+            // ★ 后端里烧进了「部署目录 + 启动参数 + 环境变量」，这三样任一变就必须重建：
+            //   原来只在 IsRemote 变化时重建 → 切到另一份本机部署后，停/启动还对着【上一个目录】下手
+            //   （上轮是"两档参数恰好不同"才碰巧触发重建，属于幸存偏差）。
+            string want = (UseRemote ? "R" : "L") + "|" + ServerDir + "|"
+                        + (ActiveSrv.StartArgs ?? "").Trim() + "|" + (ActiveSrv.StartEnv ?? "").Trim();
+            if (p is null || p.IsRemote != UseRemote || _procKey != want)
             {
                 p = UseRemote
-                    ? new RemoteProcessBackend(new UtslSshTransport(), RemoteStartScript, RemoteStopScript)
-                    : new LocalProcessBackend(ServerExe, ServerDir, ActiveSrv.StartArgs, ActiveSrv.StartEnv);
+                    ? new RemoteProcessBackend(new UtslSshTransport(), RemoteStartScript, RemoteStopScript, ActiveSrv.StartArgs ?? "", ActiveSrv.StartEnv ?? "")
+                    : new LocalProcessBackend(ServerExe, ServerDir, ActiveSrv.StartArgs ?? "", ActiveSrv.StartEnv ?? "");
                 _proc = p;
+                _procKey = want;
             }
             return p;
         }
@@ -1872,19 +1895,36 @@ public partial class MainWindow : Window
     /// <summary>远端启动脚本：先清旧进程，再用 WMI 创建「控制台启动器」（脱离 SSH 会话，断开不会被回收）。</summary>
     private static string RemoteStartScript()
     {
-        string cmd = RemoteDotnet + " " + RemoteLauncher + " " + RemoteDir + " " + RemoteDir + "\\UnifierTSL.exe -joinserver first -logmode txt";
+        // ★ 启动参数按档（空 = 不带参数）。PS 单引号里要把 ' 转义成 ''。
+        string args = (ActiveSrv.StartArgs ?? "").Trim().Replace("'", "''");
+        string cmd = RemoteDotnet + " " + RemoteLauncher + " " + RemoteDir + " " + RemoteDir + "\\UnifierTSL.exe"
+                   + (args.Length > 0 ? " " + args : "");
+        // ★ 只停【本档部署目录下】的进程：原来按进程名一刀切，远端同机两份部署会互相残杀（和本机侧同一个坑）。
+        string mine = RemoteMineProcesses();
         return "$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
-               "Get-Process UnifierTSL,UnifierTSL.ConsoleClient -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; " +
+               mine + " | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; " +
                "Start-Sleep -Seconds 2; " +
                "$c='" + cmd + "'; " +
                "$r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=$c}; " +
                "'wmi rc=' + $r.ReturnValue + ' pid=' + $r.ProcessId";
     }
 
-    private static string RemoteStopScript() =>
-        "$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
-        "Get-Process UnifierTSL,UnifierTSL.ConsoleClient -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; " +
-        "Start-Sleep -Seconds 1; 'remaining=' + ((Get-Process UnifierTSL,UnifierTSL.ConsoleClient -ErrorAction SilentlyContinue) | Measure-Object).Count";
+    /// <summary>远端「属于本档部署目录」的服务端进程（CIM 查询片段；ConsoleClient 也算）。</summary>
+    private static string RemoteMineProcesses()
+    {
+        string d = RemoteDir.Replace("'", "''");
+        return "Get-CimInstance Win32_Process -Filter \"Name='UnifierTSL.exe' OR Name='UnifierTSL.ConsoleClient.exe'\" | " +
+               "Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith('" + d + "\\', [StringComparison]::OrdinalIgnoreCase) }";
+    }
+
+    private static string RemoteStopScript()
+    {
+        string mine = RemoteMineProcesses();
+        return "$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
+               mine + " | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; " +
+               "Start-Sleep -Seconds 1; " +
+               "'remaining=' + (@(" + mine + ")).Count";
+    }
 
     private long lastRemoteLogMs;
     private long lastLogErrMs;
@@ -5113,6 +5153,9 @@ public partial class MainWindow : Window
 
     // ===== 传输进度与取消（对标面板的上传进度条；我们的链路只有 1.3~2.4 MB/s，长传输没有进度体验很差）=====
     public static Action<string>? TransferStatus;      // 由管理器接到状态栏（后台线程调用，内部会 Post 到 UI）
+
+    /// <summary>静默上下文（如 static 的 SaveConn）往当前服务器终端写一行的出口；断线时什么都不做。</summary>
+    public static Action<string, string>? TerminalSink;
     private static volatile bool transferCancel;
     public static void CancelTransfer() { transferCancel = true; }
     private static void Progress(string s) { try { TransferStatus?.Invoke(s); } catch { } }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -400,14 +401,39 @@ public sealed class ServersConfig
         };
     }
 
-    public void Save(string file)
+    /// <summary>最近一次落盘失败的原因（成功时为空串）。UI 用它提示 —— 原来 catch {} 静默吞掉，用户以为存上了。</summary>
+    public static string LastSaveError { get; private set; } = "";
+
+    /// <summary>
+    /// 原子落盘：写 .tmp → 备份上一版 → rename 覆盖。
+    /// ★ 原来直接 File.WriteAllText：写一半崩/断电就把 servers.json 写坏，
+    ///   而这份文件里是全部服务器档 + DPAPI 加密的 REST 令牌（丢了就得重配全部档）。
+    ///   同卷 rename 是原子的，读到的要么是旧版、要么是新版，不会是半截。
+    /// </summary>
+    public bool Save(string file)
     {
+        LastSaveError = "";
         try
         {
-            File.WriteAllText(file, ToJson().ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            string json = ToJson().ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            string dir = Path.GetDirectoryName(Path.GetFullPath(file)) ?? ".";
+            Directory.CreateDirectory(dir);
+            string tmp = file + ".tmp";
+            File.WriteAllText(tmp, json, new UTF8Encoding(false));      // 与原来一致：UTF-8 无 BOM
+            if (File.Exists(file))
+            {
+                try { File.Copy(file, file + ".bak", true); } catch { /* 备份失败不该挡住保存 */ }
+            }
+            File.Move(tmp, file, true);                                 // .NET Core 3.0+ 支持覆盖移动
             HadPlainToken = false;
             foreach (var p in Servers) { p.PlainToken = false; }
+            return true;
         }
-        catch { }
+        catch (Exception ex)
+        {
+            LastSaveError = ex.Message;
+            try { if (File.Exists(file + ".tmp")) { File.Delete(file + ".tmp"); } } catch { }
+            return false;
+        }
     }
 }

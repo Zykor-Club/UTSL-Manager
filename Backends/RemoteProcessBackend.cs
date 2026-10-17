@@ -1,8 +1,12 @@
 namespace UTSLManager.Backends;
 
 /// <summary>远端服务端的进程操作（全部经 SSH）。</summary>
-public sealed class RemoteProcessBackend(ISshTransport ssh, Func<string> startScript, Func<string> stopScript) : IProcessBackend
+public sealed class RemoteProcessBackend(ISshTransport ssh, Func<string> startScript, Func<string> stopScript, string startArgs = "", string startEnv = "") : IProcessBackend
 {
+    /// <summary>本档的启动参数/环境变量（原样交给 agent 或远端启动脚本；空 = 不带参数）。</summary>
+    public string StartArgs { get; } = (startArgs ?? "").Trim();
+    public string StartEnv { get; } = (startEnv ?? "").Trim();
+
     public bool IsRemote => true;
 
     public Task<ProcessResult> StartAsync() => Task.Run(() =>
@@ -10,7 +14,7 @@ public sealed class RemoteProcessBackend(ISshTransport ssh, Func<string> startSc
         // ★ agent 在线就走它：无窗口启动 + stdout 可抓（不再需要控制台启动器）
         if (AgentClient.Alive)
         {
-            string r = AgentClient.StartServer();
+            string r = AgentClient.StartServer(StartArgs, StartEnv);
             if (r.Contains("✓")) { return new ProcessResult(true, r); }
         }
         try
