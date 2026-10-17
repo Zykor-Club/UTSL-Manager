@@ -256,10 +256,26 @@ async Task HandleAsync(TcpClient client)
     long s0 = 0, r0 = 0;
     try
     {
+        // ★ 实测修复（2026-10-17）：Windows 上 .NET (Core) 会把【同一块网卡】的 NDIS 轻量筛选器
+        //   （WFP Native/802.3 MAC Layer LightWeight Filter、QoS Packet Scheduler、Native/Virtual WiFi Filter…）
+        //   也枚举成独立接口，而它们报告的是【同一份】字节计数器 —— 全加会成倍虚高：
+        //   实测本机 20 条/6 倍（33344MB vs 真值 5557MB）、远端 4 条/4 倍（333MB vs 83MB）。
+        //   ★ 按 Id 去重无效（筛选器各有不同的 Id）；按 MAC 去重有效，且结果与
+        //   Get-NetAdapterStatistics 逐字节一致（实测 5557.4MB == 5557.4MB）。
+        //   没有 MAC 的接口（WAN Miniport 等伪接口）退回用 Id 去重。
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (ni.OperationalStatus != OperationalStatus.Up) { continue; }
             if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) { continue; }
+            string key;
+            try
+            {
+                string mac = ni.GetPhysicalAddress()?.ToString() ?? "";
+                key = mac.Length > 0 ? "mac:" + mac : "id:" + ni.Id;
+            }
+            catch { key = "id:" + ni.Id; }
+            if (!seen.Add(key)) { continue; }
             IPInterfaceStatistics st = ni.GetIPStatistics();
             s0 += st.BytesSent; r0 += st.BytesReceived;
         }
