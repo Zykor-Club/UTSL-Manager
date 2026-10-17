@@ -1846,7 +1846,8 @@ public partial class MainWindow : Window
             try
             {
                 bool live = UseRemote && (AgentAlive || MetricsAtMs > 0);
-                if (CpuTitle is not null) { CpuTitle.Text = !UseRemote ? "CPU 使用量（本机 · 单核 %）" : live ? "CPU（远端 · 实时 2s）" : "CPU（远端 · 单核 %）"; }
+                // ★ 远端是 2 核机器：cpuSingleCorePct 是"单核 %"，标题必须写清楚，否则会被误读成整机占用
+                if (CpuTitle is not null) { CpuTitle.Text = !UseRemote ? "CPU 使用量（本机 · 单核 %）" : live ? "CPU（远端 · 单核 % · 实时 2s）" : "CPU（远端 · 单核 %）"; }
                 if (MemTitle is not null) { MemTitle.Text = !UseRemote ? "内存使用量（本机 · 私有）" : live ? "内存（远端 · 实时 2s）" : "内存（远端 · 私有）"; }
                 if (NetTitle is not null) { NetTitle.Text = !UseRemote ? "网络流量（本机全部网卡）" : live ? "网络（远端网卡 · 实时 2s）" : "网络（远端网卡）"; }
             }
