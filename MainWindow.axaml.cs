@@ -337,6 +337,7 @@ public partial class MainWindow : Window
 
 
         InitPluginHost();
+        pluginLoadedProfileId = ActiveSrv.Id;      // 启动时插件就是按这张档加载的
         ApplyStartupArgs();
         _ = RefreshWorldsAsync();
         RefreshLog();
@@ -3258,6 +3259,9 @@ public partial class MainWindow : Window
     /// <summary>切档后"重活"去抖代号（世界/日志/agent/快照）。</summary>
     private static int postSwitchGen;
 
+    /// <summary>插件当前是按哪一档加载的。切回同一档时跳过重载（实测单次重载 2~13 秒，多为插件自己的 OnLoad）。</summary>
+    private static string pluginLoadedProfileId = "";
+
     /// <summary>
     /// 切档后的"重活"统一去抖 250ms：世界列表 / 日志首屏 / agent 三条流 / 合并快照。
     /// ★ 为什么必须去抖：切档本身压到 5~10ms 之后，用户连点会被**真的执行**十几次，
@@ -3300,6 +3304,9 @@ public partial class MainWindow : Window
             var wait = System.Diagnostics.Stopwatch.StartNew();
             while (switching && wait.ElapsedMilliseconds < 10000) { await Task.Delay(200); }
             if (switching || my != pluginReloadGen) { return; }
+            // ★ 已经按这一档加载过插件了就不重载：来回快切（A→B→A）最后回到原档时，这一步整个省掉
+            //   （实测单次 Reload 2.3~12.8 秒，主要花在插件自己的 OnLoad：ApiProbe 一轮自检含 ssh、Lua 编译）
+            if (ActiveSrv.Id == pluginLoadedProfileId) { return; }
             try
             {
                 if (pluginHost is null) { return; }
@@ -3308,6 +3315,7 @@ public partial class MainWindow : Window
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 pluginHost.Reload();
                 sw.Stop();
+                pluginLoadedProfileId = ActiveSrv.Id;
                 try
                 {
                     string pf = Path.Combine(AppContext.BaseDirectory, "switchperf.log");
@@ -3543,10 +3551,15 @@ public partial class MainWindow : Window
         sb.AppendLine(new string('-', 72));
         sb.AppendLine($"本机/远端判定：{(UseRemote ? "远端" : "本机")} · RemoteDir={RemoteDir} · LocalDir={LocalDir}");
         sb.AppendLine($"AgentAlive={AgentAlive} · AgentBaseUsed={AgentBaseUsed} · AgentProbeErr={(AgentProbeErr.Length == 0 ? "(无)" : AgentProbeErr)}");
-        sb.AppendLine($"旧档 agent 端口 {fromAgent} 仍在监听：{PortListening(fromAgent)}（期望 false）");
-        sb.AppendLine($"新档 agent 端口 {AgentLocalPort} 在监听：{PortListening(AgentLocalPort)}（期望 true）");
-        sb.AppendLine($"旧档 REST 端口 {fromRest} 在监听：{PortListening(fromRest)}（期望 false）");
-        sb.AppendLine($"新档 REST 端口 {ConnPort} 在监听：{PortListening(ConnPort)}（期望 true）");
+        // ★ 隧道现在是【保活】设计（最多 4 条，LRU）：切完档旧档端口仍在听是【正常】的。
+        //   判"坏没坏"看的是：新档端口必须就绪、旧档端口要么仍在听（保活）要么已淘汰，
+        //   但绝不能"在听却被别的档占着"。所以这里只如实打印布尔值 + 注明保活下允许 True。
+        bool fromAgentUp = PortListening(fromAgent), toAgentUp = PortListening(AgentLocalPort);
+        bool fromRestUp = PortListening(fromRest), toRestUp = PortListening(ConnPort);
+        sb.AppendLine($"旧档 agent 端口 {fromAgent} 仍在监听：{fromAgentUp}（保活下允许 True；关键看是否归该档自己的 ssh -N）");
+        sb.AppendLine($"新档 agent 端口 {AgentLocalPort} 在监听：{toAgentUp}（期望 true）");
+        sb.AppendLine($"旧档 REST 端口 {fromRest} 在监听：{fromRestUp}（保活下允许 True）");
+        sb.AppendLine($"新档 REST 端口 {ConnPort} 在监听：{toRestUp}（期望 true）");
         sb.AppendLine($"agent 自报 root：{await PingRootAsync(AgentLocalPort)}（期望 {RemoteDir}）");
         sb.AppendLine($"世界数：{Math.Max(0, rows.Count - 1)} · 指标历史帧数 cpu={cpuHist.Count} mem={memHist.Count}");
         sb.AppendLine($"插件宿主 DataRoot：{(pluginHost is null ? "(null)" : pluginHost.Options.DataRoot)} · 插件数 {(pluginHost?.Plugins.Count ?? 0)}");
