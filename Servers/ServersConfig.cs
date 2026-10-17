@@ -66,6 +66,10 @@ public sealed class ServerProfile
     public int WorldCount = -1;
     /// <summary>0=未知 1=在线 2=隧道通但 REST 不通 3=进程/接口都没有。</summary>
     public int Status;
+    /// <summary>最近一次 REST /world/list 的往返耗时（ms，-1=没测过）；非激活档由后台轮询每 20s 更新。</summary>
+    public long RestMs = -1;
+    /// <summary>最近一次切到这一档的耗时（ms，-1=没切过）。</summary>
+    public long LastSwitchMs = -1;
     /// <summary>该档读到过明文令牌（加载后要立刻重新加密落盘）。</summary>
     public bool PlainToken;
     /// <summary>非激活档的轻量探活结果（只探 SSH/本地端口，不开隧道）。</summary>

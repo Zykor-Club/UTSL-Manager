@@ -3126,7 +3126,8 @@ public partial class MainWindow : Window
                     : p.Status == 2 ? "REST 不通"
                     : active ? "未运行 / 未知"
                     : p.ProbeAtMs == 0 ? "未探活" : p.ProbeOk ? "SSH 可达" : "不可达";
-                r.Address = p.AddressText + " · " + mode;
+                string lat = p.RestMs >= 0 ? " · REST " + p.RestMs + "ms" : (p.LastSwitchMs >= 0 ? " · 切档 " + p.LastSwitchMs + "ms" : "");
+                r.Address = p.AddressText + " · " + mode + lat;
                 r.State = st;
                 bool haveData = p.Status == 1;
                 var (mCpu, mMem, mUp, mDown) = MetricsFor(p);
@@ -3690,7 +3691,10 @@ public partial class MainWindow : Window
             try
             {
                 string url = restBase + "/world/list?token=" + Uri.EscapeDataString(p.Token);
+                var swRest = System.Diagnostics.Stopwatch.StartNew();
                 string txt = await BgHttp.GetStringAsync(url);
+                swRest.Stop();
+                p.RestMs = swRest.ElapsedMilliseconds;      // 卡片上显示"这台慢不慢"
                 using var doc = JsonDocument.Parse(txt);
                 var incoming = new List<(string n, string s, bool r)>();
                 if (doc.RootElement.TryGetProperty("worlds", out var ws))
@@ -4057,6 +4061,7 @@ public partial class MainWindow : Window
             ServersCfg.ActiveId = target.Id;
             ActiveSrv = target;
             target.LastUsedMs = Environment.TickCount64;
+            target.LastSwitchMs = sw.ElapsedMilliseconds;
             SaveConn();
             Phase("换档落盘");
 
