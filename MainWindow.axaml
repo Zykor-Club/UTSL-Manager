@@ -405,6 +405,20 @@
       </Grid>
 
       <!-- 配置编辑视图（表单由代码生成） -->
+      <!-- 服务器总览：所有档一屏（数据来自后台常驻轮询，切档零等待） -->
+      <Grid x:Name="OverviewView" IsVisible="False" RowDefinitions="Auto,*">
+        <Grid Grid.Row="0" Margin="0,4,0,12" ColumnDefinitions="*,Auto">
+          <StackPanel Grid.Column="0" VerticalAlignment="Center">
+            <TextBlock Text="服务器总览" FontSize="19" FontWeight="SemiBold" Foreground="#F2F2F5"/>
+            <TextBlock x:Name="OverviewSub" Text="后台常驻轮询：世界列表 20 秒 / 指标 5 秒；点任意一行即切换" FontSize="11" Foreground="#9BA3AE" Margin="0,3,0,0"/>
+          </StackPanel>
+          <Button Grid.Column="1" x:Name="BtnOverviewRefresh" Content="刷新" FontSize="12" Padding="12,4" CornerRadius="8" VerticalAlignment="Center"/>
+        </Grid>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+          <StackPanel x:Name="OverviewHost" Spacing="8"/>
+        </ScrollViewer>
+      </Grid>
+
       <Grid x:Name="ConfigView" IsVisible="False" RowDefinitions="Auto,*">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="0,4,0,12">
           <StackPanel Grid.Column="0" VerticalAlignment="Center">
@@ -507,6 +521,7 @@
           <TextBlock x:Name="PluginMetricsHeader" Text="插件指标" FontSize="11" FontWeight="SemiBold" Foreground="#9BA3AE" Margin="4,14,0,6" IsVisible="False"/>
           <StackPanel x:Name="PluginMetricsHost" Spacing="4"/>
           <TextBlock Text="功能" FontSize="11" FontWeight="SemiBold" Foreground="#9BA3AE" Margin="4,14,0,6"/>
+          <Button x:Name="BtnOverview" Classes="menu" Content="&#xE71D;  服务器总览" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowOverview"/>
           <Button x:Name="BtnConn" Classes="menu" Content="&#xE774;  连接设置" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowConn"/>
           <Button x:Name="BtnChain" Classes="menu" Content="&#xE71B;  世界链" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowChain"/>
           <Button x:Name="BtnConfig" Classes="menu" Content="&#xE713;  配置编辑" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowConfig"/>
