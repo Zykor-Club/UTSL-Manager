@@ -297,6 +297,11 @@ object CollectMetrics()
     double cpuSingleCore = 0;
     long privBytes = 0, workBytes = 0;
     int threads = 0, handles = 0, pid = 0, procCount = 0;
+    // ★ 修（2026-10-17）：一台机器上跑多个 UnifierTSL 实例时，原来把它们的私有内存/工作集**加总**，
+    //   于是 7879 报出 1537 MB（= 1065 + 478），管理器卡片显示成"两台一样大"。
+    //   现在只报"与本部署 exe 路径完全一致"的那个进程；没有完全匹配时取私有内存最大的那个，
+    //   并在响应里保留 processes 计数，便于识别"这台机器上还有别的实例"。
+    var seen = new List<(int Pid, string Path, long Priv, long Work, int Threads, int Handles, TimeSpan Cpu)>();
     foreach (Process p in Process.GetProcessesByName("UnifierTSL"))
     {
         using (p)
@@ -304,24 +309,28 @@ object CollectMetrics()
             try
             {
                 if (p.HasExited) { continue; }
-                procCount++;
                 p.Refresh();
-                pid = p.Id;
-                if (_prevCpu.TryGetValue(p.Id, out TimeSpan prev))
-                {
-                    cpuSingleCore += (p.TotalProcessorTime - prev).TotalMilliseconds / (secs * 1000) * 100.0;
-                }
-                _prevCpu[p.Id] = p.TotalProcessorTime;
-                privBytes += p.PrivateMemorySize64;
-                workBytes += p.WorkingSet64;
-                threads += p.Threads.Count;
-                handles += p.HandleCount;
+                string fp = "";
+                try { fp = p.MainModule?.FileName ?? ""; } catch { }
+                seen.Add((p.Id, fp, p.PrivateMemorySize64, p.WorkingSet64, p.Threads.Count, p.HandleCount, p.TotalProcessorTime));
             }
             catch { }
         }
     }
-    cpuSingleCore = Math.Max(0, cpuSingleCore);
-
+    procCount = seen.Count;
+    string wantExe = ServerExePath();
+    var pick = seen.FirstOrDefault(x => x.Path.Length > 0 && string.Equals(x.Path, wantExe, StringComparison.OrdinalIgnoreCase));
+    if (pick.Pid == 0 && seen.Count > 0) { pick = seen.OrderByDescending(x => x.Priv).First(); }
+    if (pick.Pid != 0)
+    {
+        pid = pick.Pid;
+        privBytes = pick.Priv; workBytes = pick.Work; threads = pick.Threads; handles = pick.Handles;
+        if (_prevCpu.TryGetValue(pick.Pid, out TimeSpan prev))
+        {
+            cpuSingleCore += (pick.Cpu - prev).TotalMilliseconds / (secs * 1000) * 100.0;
+        }
+        _prevCpu[pick.Pid] = pick.Cpu;
+    }
     // ★ 网卡枚举实测 75~174ms/次（A 子代理数据），占 /metrics 118~186ms 的大头，而管理器每 2 秒就拉一次。
     //   累计字节本来就要靠相邻采样差分，1 秒的缓存完全够用（快照之间有差分基准）。
     long sent = 0, recv = 0;
