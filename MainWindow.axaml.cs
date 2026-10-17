@@ -184,10 +184,15 @@ public partial class MainWindow : Window
         => new(new SocketsHttpHandler { UseProxy = false, ConnectTimeout = TimeSpan.FromSeconds(5) }) { Timeout = timeout };
 
     private static readonly HttpClient Http = NewLocalHttp(TimeSpan.FromSeconds(15));
-    private readonly ObservableCollection<WorldRow> rows = [];
+    // ★ 每台服务器各自一份 UI 集合，常驻内存，切换只换引用（O(1)）—— 这是"切档不像在重建"的关键。
+    //   参考 PGame-TSManager：每个 ServerContainer 自带 FlowDocument/Paragraph 日志缓冲，
+    //   切换服务器 = ComboBox 换 SelectedItem，日志/状态全部现成，没有重建与空窗。
+    private ObservableCollection<WorldRow> rows = [];
+    private readonly Dictionary<string, ObservableCollection<WorldRow>> rowsByServer = [];
     private readonly ObservableCollection<ServerCardRow> srvCards = [];   // 左侧服务器卡片（一台一张）
     private readonly List<ServerCardRow> srvRows = [];
-    private readonly ObservableCollection<TermLine> term = [];
+    private ObservableCollection<TermLine> term = [];
+    private readonly Dictionary<string, ObservableCollection<TermLine>> termByServer = [];
     private string lastLogFile = "";
     private long logPos;
     // ★ 自检修复（卡顿大主因）：ItemsControl 不虚拟化，1500 个 TextBlock（每行还 Wrap）
@@ -2277,6 +2282,13 @@ public partial class MainWindow : Window
         double w = CanvasW(canvas), h = CanvasH(canvas);
         if (w < 12 || h < 12) { return; }
 
+        // ★ 先摘掉"采样中…"占位：gridSame 分支只按数量删尾部子元素，摘不掉夹在中间的 TextBlock，
+        //   否则真实曲线画上去后占位文字还压在上面（实测内存图出现过"有柱子 + 采样中…"并存）。
+        for (int i = canvas.Children.Count - 1; i >= 0; i--)
+        {
+            if (canvas.Children[i] is Control pc && (pc.Tag as string) == "ph") { canvas.Children.RemoveAt(i); }
+        }
+
         double max = 0.0001;
         foreach (var s in series) { foreach (var v in s) { if (v > max) { max = v; } } }
         double scale = NiceMax(max);   // 轴取"顺眼"刻度（1/2/5 × 10^n）
@@ -3312,8 +3324,17 @@ public partial class MainWindow : Window
             if (my != postSwitchGen || switching) { return; }
             try { await RefreshWorldsAsync(); } catch { }
             if (my != postSwitchGen) { return; }
-            // 日志要碰控件，回 UI 线程做
-            Dispatcher.UIThread.Post(() => { try { RefreshLog(); UpdateServerCards(); RedrawChartsNow(); } catch { } });
+            // 日志要碰控件，回 UI 线程做。★ 已有该档历史（切回来的情况）就不再重读文件/远端尾巴，直接显示现成的
+            Dispatcher.UIThread.Post(() =>
+            {
+                try
+                {
+                    if (term.Count == 0) { RefreshLog(); }
+                    UpdateServerCards();
+                    RedrawChartsNow();
+                }
+                catch { }
+            });
             _ = Task.Run(async () =>
             {
                 await TickAgentAsync();                // 接日志/指标流（探活 + 起 3 条流）
@@ -3465,6 +3486,7 @@ public partial class MainWindow : Window
         long lastMark = 0;
         void Phase(string name) { phases.Add((name, sw.ElapsedMilliseconds - lastMark)); lastMark = sw.ElapsedMilliseconds; }
         string fromName = ActiveSrv.Name;
+        string fromId = ActiveSrv.Id;
         try
         {
             // ① 记住旧档：指标历史 + 世界数
@@ -3496,13 +3518,20 @@ public partial class MainWindow : Window
 
             // ⑤ 与"哪台机器"相关的一切重置 + 指标历史换档 + 插件数据目录换档
             ResetConnScopedState();
-            rows.Clear();                                   // 立刻清掉上一台的世界，别等下一轮刷新（避免点错世界）
-            rows.Add(new WorldRow { Name = "全部世界", Size = "", Running = true });
+            // ★ 换"每档一份"的 UI 集合引用：目标档上次的世界列表/终端内容原样回来，不清空、不重读
+            rowsByServer[fromId] = rows;      // 旧档（fromId）保存引用，切回来时原样复用
+            termByServer[fromId] = term;
+            rows = rowsByServer.TryGetValue(target.Id, out var rowsNew) ? rowsNew : [];
+            term = termByServer.TryGetValue(target.Id, out var termNew) ? termNew : [];
+            if (rows.Count == 0) { rows.Add(new WorldRow { Name = "全部世界", Size = "", Running = true }); }
+            WorldList.ItemsSource = rows;
+            TermLines.ItemsSource = term;
             WorldList.SelectedIndex = 0;
             UpdateTarget();
             ConnState.Text = "切换中…";
             if (ChainText is not null) { ChainText.Text = "世界链: —"; }
             LoadHistFor(target.Id);
+            RedrawChartsNow();          // ★ 立刻用新档自己的历史重画（已在内存里，不等去抖/下一次采样）
             // 插件数据目录先换好；真正 Reload 放到世界列表刷新之后（否则插件 OnLoad 时 Worlds 是空的）
             try
             {
@@ -3646,7 +3675,7 @@ public partial class MainWindow : Window
             canvas.Children.Clear();
             var tb = new TextBlock
             {
-                Text = text, FontSize = 11,
+                Text = text, FontSize = 11, Tag = "ph",
                 Foreground = new SolidColorBrush(Color.Parse("#848D9A")),
                 HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
                 VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
