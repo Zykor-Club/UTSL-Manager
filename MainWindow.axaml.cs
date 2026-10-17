@@ -3334,8 +3334,31 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (PluginsView.IsVisible) { ShowFiles(); }                      // 文件管理页
-            if (ConfigView.IsVisible) { OnShowConfig(null, new RoutedEventArgs()); }   // 配置页
+            if (PluginsView.IsVisible) { ShowFiles(); }                                // 文件管理页
+            if (ConfigView.IsVisible) { OnShowConfig(null, new RoutedEventArgs()); }    // 配置编辑页
+            if (MapView.IsVisible) { ForgetMapView(); }                                 // 地图预览：绝不能留着上一台的地图
+            if (ChainView.IsVisible) { RefreshChain(); }                               // 世界链：重取（async void）
+            if (EditView.IsVisible)                                                     // 编辑器：标明"属于另一台"
+            {
+                EditHint.Text = "⚠ 服务器已切换：这个编辑缓冲区属于上一台服务器，保存会被拦下。请切回原服务器，或重新打开文件。";
+            }
+        }
+        catch { }
+    }
+
+    /// <summary>丢弃地图预览里上一台服务器的图（图是"世界文件渲染结果"，跨台展示就是错的）。</summary>
+    private void ForgetMapView()
+    {
+        try
+        {
+            if (MapImage?.Source is IDisposable old) { old.Dispose(); }
+            if (MapImage is not null) { MapImage.Source = null; }
+            lastWorldRel = "";
+            if (MapInfo is not null)
+            {
+                MapInfo.Text = "服务器已切换 —— 上一台的地图已释放，请重新选择世界或点「渲染」。";
+            }
+            if (MapSelectRect is not null) { MapSelectRect.IsVisible = false; }
         }
         catch { }
     }
@@ -3886,11 +3909,8 @@ public partial class MainWindow : Window
 
             UpdateServerCards();
             RedrawChartsNow();
-            // 文件/配置页的重刷可能读 ssh：延后 400ms 再由 UI 线程做，别压在切档关键路径上
-            if (PluginsView.IsVisible || ConfigView.IsVisible)
-            {
-                _ = Task.Run(async () => { await Task.Delay(400); Dispatcher.UIThread.Post(RefreshActiveViews); });
-            }
+            // 页面级刷新要读 ssh/渲染，延后 400ms 再由 UI 线程做，别压在切档关键路径上
+            _ = Task.Run(async () => { await Task.Delay(400); Dispatcher.UIThread.Post(RefreshActiveViews); });
             Phase("收尾");
             sw.Stop();
             // 诊断：每次切档追加一行（脚本/探针可量化"来回切换"，写满 256KB 自动清空）

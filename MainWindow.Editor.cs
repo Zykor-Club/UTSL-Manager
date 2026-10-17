@@ -36,6 +36,8 @@ public partial class MainWindow
 
     private TextEditor? editor;
     private string editorPath = "";
+    /// <summary>打开这个文件时激活的是哪一档。切档后保存会被拒绝（否则会把 A 台的文件写进 B 台）。</summary>
+    private string editorProfileId = "";
     private string editorName = "";
     private string editorDir = "";
     private long editorOrigSize;
@@ -240,6 +242,7 @@ public partial class MainWindow
             //   原来"读完才切页面"会让点击看起来像没反应（这是用户反馈过两次的同一类问题）。
             var ed = EnsureEditor();
             editorPath = full;
+            editorProfileId = ActiveSrv.Id;      // ★ 记住这台文件属于哪档，切档后不许跨档保存
             editorName = name;
             editorDir = System.IO.Path.GetDirectoryName(full) ?? FsRoot;
             editorForceSave = false;
@@ -353,6 +356,15 @@ public partial class MainWindow
     private async Task SaveEditorAsync()
     {
         if (editor is null || editorPath.Length == 0 || editorSaving) { return; }
+        // ★ 切过服务器就拒绝保存：editorPath 是绝度路径，而读写走"当前激活档"的后端，
+        //   不拦的话会把 A 台的文件内容写进 B 台的同名路径（真实的数据破坏风险）。
+        if (editorProfileId.Length > 0 && editorProfileId != ActiveSrv.Id)
+        {
+            ERR($"保存被拦下：这个文件是从「{ServersCfg.Find(editorProfileId)?.Name ?? editorProfileId}」打开的，当前已切到「{ActiveSrv.Name}」。"
+                + "跨服务器保存可能写错机器 —— 请重新打开该文件（或先切回原服务器）再保存。");
+            EditHint.Text = "⚠ 服务器已切换：这个编辑缓冲区属于另一台服务器，已阻止保存。请切回原服务器，或重新打开文件。";
+            return;
+        }
         string body = editor.Text ?? "";
 
         // 1) JSON 校验（.json 且非空）
