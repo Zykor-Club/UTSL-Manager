@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="UTSLManager.MainWindow"
         Title="UTSLManager" Width="900" Height="620" MinWidth="760" MinHeight="480" WindowStartupLocation="CenterScreen" WindowState="Maximized"
-        Background="#0F0F11"
+        Background="#0C0E12"
         ExtendClientAreaToDecorationsHint="True"
         ExtendClientAreaTitleBarHeightHint="40">
   <Window.Styles>
@@ -81,7 +81,7 @@
 
         <!-- 监控卡片 -->
         <Grid Grid.Row="2" ColumnDefinitions="*,*,*" Margin="0,0,0,12">
-          <Border Grid.Column="0" Background="#17171A" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" Padding="13,10" Margin="0,0,5,0">
+          <Border Grid.Column="0" Background="#17171A" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" Padding="13,10" Margin="0,0,5,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
                 <TextBlock Grid.Column="0" x:Name="CpuTitle" Text="CPU 使用量" FontSize="12" FontWeight="SemiBold" Foreground="#E8E8EC"/>
@@ -94,7 +94,7 @@
                 <Canvas x:Name="CpuXLabels" Height="14" Margin="52,4,0,0"/>
             </StackPanel>
           </Border>
-          <Border Grid.Column="1" Background="#17171A" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" Padding="13,10" Margin="5,0">
+          <Border Grid.Column="1" Background="#17171A" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" Padding="13,10" Margin="5,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
                 <TextBlock Grid.Column="0" x:Name="MemTitle" Text="内存使用量" FontSize="12" FontWeight="SemiBold" Foreground="#E8E8EC"/>
@@ -107,7 +107,7 @@
                 <Canvas x:Name="MemXLabels" Height="14" Margin="52,4,0,0"/>
             </StackPanel>
           </Border>
-          <Border Grid.Column="2" Background="#17171A" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" Padding="13,10" Margin="5,0,0,0">
+          <Border Grid.Column="2" Background="#17171A" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" Padding="13,10" Margin="5,0,0,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
                 <TextBlock Grid.Column="0" x:Name="NetTitle" Text="网络流量" FontSize="12" FontWeight="SemiBold" Foreground="#E8E8EC"/>
@@ -123,7 +123,7 @@
         </Grid>
 
         <!-- ★ 服务器终端（指令输出 + 服务器日志 合并，类 MCSManager 终端面板） -->
-        <Border Grid.Row="3" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" Margin="0,0,0,10" ClipToBounds="True">
+        <Border Grid.Row="3" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" Margin="0,0,0,10" ClipToBounds="True">
           <DockPanel>
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="14,9,14,7">
               <TextBlock Grid.Column="0" Text="服务器终端" FontSize="11" Foreground="#9BA3AE"/>
@@ -132,7 +132,7 @@
                 <Button x:Name="BtnClearTerm" Content="清屏" FontSize="11" Padding="8,1" CornerRadius="6" Click="OnClearTerm"/>
               </StackPanel>
             </Grid>
-            <Border DockPanel.Dock="Bottom" BorderBrush="#2A2A30" BorderThickness="0,1,0,0" Padding="12,9,12,11" Background="#101013">
+            <Border DockPanel.Dock="Bottom" BorderBrush="#242A33" BorderThickness="0,1,0,0" Padding="12,9,12,11" Background="#101013">
               <Grid ColumnDefinitions="Auto,*,Auto">
                 <TextBlock Grid.Column="0" x:Name="PromptText" Text="@ 全部世界" FontSize="12" FontWeight="SemiBold" Foreground="#0A84FF" VerticalAlignment="Center" Margin="0,0,9,0" FontFamily="Cascadia Mono,Consolas,monospace"/>
                 <TextBox Grid.Column="1" x:Name="CmdBox" Watermark="输入指令回车执行：@Dev /save · @2 /save · 不写前缀 = 全部世界 · 以 &gt; 开头 = 服务端控制台口径（输出显示在上方日志流）" FontSize="12" CornerRadius="8" FontFamily="Cascadia Mono,Consolas,monospace"/>
@@ -176,18 +176,18 @@
             <TextBlock Text="文件管理" FontSize="19" FontWeight="SemiBold" Foreground="#F2F2F5"/>
             <TextBlock x:Name="FileInfo" Text="—" FontSize="11" Foreground="#9BA3AE" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="9" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
         </Grid>
         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="6" Margin="0,0,0,10">
-          <Button Content="⬆ 上级" FontSize="12" Padding="10,5" CornerRadius="9" Click="OnFileUp"/>
-          <Button Content="&#xE80F;  根目录" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="12" Padding="10,5" CornerRadius="9" Click="OnFileRoot"/>
-          <Button Content="＋ 新建文件夹" FontSize="12" Padding="10,5" CornerRadius="9" Click="OnFileMkdir"/>
-          <Button Content="刷新" FontSize="12" Padding="10,5" CornerRadius="9" Click="OnFileRefresh"/>
-          <Button Content="⬇ 上传文件" FontSize="12" Padding="10,5" CornerRadius="9" Click="OnFileUpload"/>
-          <Button Content="✕ 取消传输" FontSize="12" Padding="10,5" CornerRadius="9" Click="OnFileCancelTransfer"/>
+          <Button Content="⬆ 上级" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnFileUp"/>
+          <Button Content="&#xE80F;  根目录" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnFileRoot"/>
+          <Button Content="＋ 新建文件夹" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnFileMkdir"/>
+          <Button Content="刷新" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnFileRefresh"/>
+          <Button Content="⬇ 上传文件" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnFileUpload"/>
+          <Button Content="✕ 取消传输" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnFileCancelTransfer"/>
           <TextBlock x:Name="FilePathText" Text="—" FontSize="11" Foreground="#9BA3AE" VerticalAlignment="Center" Margin="10,0,0,0"/>
         </StackPanel>
-        <Border Grid.Row="2" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" ClipToBounds="True">
+        <Border Grid.Row="2" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
           <DockPanel>
             <StackPanel DockPanel.Dock="Top">
               <TextBlock Text="点文件名可编辑；点文件夹进入；.dll 行可勾选启用/停用" FontSize="11" Foreground="#9BA3AE" Margin="36,10,36,8" TextWrapping="Wrap"/>
@@ -216,9 +216,9 @@
             <TextBlock x:Name="ExtTitle" Text="扩展" FontSize="19" FontWeight="SemiBold" Foreground="#F2F2F5"/>
             <TextBlock x:Name="ExtDesc" Text="—" FontSize="11" Foreground="#9BA3AE" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="9" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" ClipToBounds="True" Padding="16,14">
+        <Border Grid.Row="1" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True" Padding="16,14">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,13,0">
             <ContentControl x:Name="ExtContent"/>
           </ScrollViewer>
@@ -232,11 +232,11 @@
             <TextBlock Text="插件管理" FontSize="19" FontWeight="SemiBold" Foreground="#F2F2F5"/>
             <TextBlock x:Name="MgrPluginInfo" Text="—" FontSize="11" Foreground="#9BA3AE" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="9" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
         </Grid>
         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="6" Margin="0,0,0,10">
-          <Button Content="&#xE72C;  重新加载" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="12" Padding="10,5" CornerRadius="9" Click="OnMgrPluginsReload"/>
-          <Button Content="&#xE8B7;  打开插件目录" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="12" Padding="10,5" CornerRadius="9" Click="OnMgrPluginsOpenDir"/>
+          <Button Content="&#xE72C;  重新加载" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnMgrPluginsReload"/>
+          <Button Content="&#xE8B7;  打开插件目录" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnMgrPluginsOpenDir"/>
           <CheckBox x:Name="ChkPluginWatch" Content="监视目录自动重载" FontSize="12" VerticalAlignment="Center" Margin="6,0,0,0" ToolTip.Tip="plugins 目录里 dll/manifest 变化后自动卸载并重新加载（默认关闭）"/>
           <TextBlock Text="插件语言" FontSize="12" Foreground="#9BA3AE" VerticalAlignment="Center" Margin="12,0,0,0"/>
           <ComboBox x:Name="CmbLang" Width="104" FontSize="12" VerticalAlignment="Center" SelectionChanged="OnLangChanged" ToolTip.Tip="插件用 ctx.L(...) 取字符串时使用">
@@ -245,7 +245,7 @@
           </ComboBox>
           <TextBlock x:Name="MgrPluginPath" Text="—" FontSize="11" Foreground="#9BA3AE" VerticalAlignment="Center" Margin="10,0,0,0"/>
         </StackPanel>
-        <Border Grid.Row="2" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" ClipToBounds="True">
+        <Border Grid.Row="2" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
             <StackPanel x:Name="MgrPluginList" Margin="12,10,12,12" Spacing="2"/>
           </ScrollViewer>
@@ -259,22 +259,22 @@
             <TextBlock Text="维护" FontSize="19" FontWeight="SemiBold" Foreground="#F2F2F5"/>
             <TextBlock x:Name="MaintInfo" Text="整链重置 / 备份存档 / 恢复存档" FontSize="11" Foreground="#9BA3AE" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="9" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" ClipToBounds="True">
+        <Border Grid.Row="1" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
             <StackPanel Margin="18,16,18,18" Spacing="10">
               <TextBlock Text="&#xE72C;  整链重置" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="13.5" FontWeight="SemiBold" Foreground="#E8E8EC"/>
               <TextBlock Text="按启动器世界列表重新生成源地图，再切成 N 份替换所有世界。会覆盖现有世界文件 ✗ 过程中服务端会自动重启。" FontSize="11" Foreground="#9A9AA0" TextWrapping="Wrap"/>
-              <Button Content="开始整链重置（需点两次确认）" FontSize="12" Padding="14,7" CornerRadius="9" HorizontalAlignment="Left" Click="OnResetClicked"/>
+              <Button Content="开始整链重置（需点两次确认）" FontSize="12" Padding="14,7" CornerRadius="8" HorizontalAlignment="Left" Click="OnResetClicked"/>
               <Border Height="1" Background="#26262B" Margin="0,10"/>
               <TextBlock Text="&#xE74E;  备份存档" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="13.5" FontWeight="SemiBold" Foreground="#E8E8EC"/>
               <TextBlock Text="把 Worlds 与 config 打包成 zip 存到 utsl-deploy\backup。建议在重置/改配置前先备份。" FontSize="11" Foreground="#9A9AA0" TextWrapping="Wrap"/>
-              <Button Content="立即备份" FontSize="12" Padding="14,7" CornerRadius="9" HorizontalAlignment="Left" Click="OnBackup"/>
+              <Button Content="立即备份" FontSize="12" Padding="14,7" CornerRadius="8" HorizontalAlignment="Left" Click="OnBackup"/>
               <Border Height="1" Background="#26262B" Margin="0,10"/>
               <TextBlock Text="♻  恢复存档" FontSize="13.5" FontWeight="SemiBold" Foreground="#E8E8EC"/>
               <TextBlock Text="从 backup 目录里最新的 zip 恢复 Worlds 与 config。会覆盖当前文件 ✗ 建议先停服 ✗ 需点两次确认。" FontSize="11" Foreground="#E3B341" TextWrapping="Wrap"/>
-              <Button Content="从最近备份恢复（需点两次确认）" FontSize="12" Padding="14,7" CornerRadius="9" HorizontalAlignment="Left" Click="OnRestoreClicked"/>
+              <Button Content="从最近备份恢复（需点两次确认）" FontSize="12" Padding="14,7" CornerRadius="8" HorizontalAlignment="Left" Click="OnRestoreClicked"/>
             </StackPanel>
           </ScrollViewer>
         </Border>
@@ -290,15 +290,15 @@
             <TextBlock x:Name="EditPathText" Text="—" FontSize="11" Foreground="#9BA3AE" Margin="0,3,0,0"/>
           </StackPanel>
           <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
-            <Button x:Name="BtnEditSave" Content="保存 (Ctrl+S)" FontSize="12" Padding="12,5" CornerRadius="9" Click="OnEditSave"/>
-            <Button Content="↻ 重新加载" FontSize="12" Padding="12,5" CornerRadius="9" Click="OnEditReload"/>
-            <Button Content="← 返回文件列表" FontSize="12" Padding="12,5" CornerRadius="9" Click="OnEditBack"/>
+            <Button x:Name="BtnEditSave" Content="保存 (Ctrl+S)" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnEditSave"/>
+            <Button Content="↻ 重新加载" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnEditReload"/>
+            <Button Content="← 返回文件列表" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnEditBack"/>
             <CheckBox x:Name="ChkEditorWrap" Content="自动换行" FontSize="12" VerticalAlignment="Center" Margin="6,0,0,0" Click="OnEditorWrapChanged"/>
           </StackPanel>
         </Grid>
         <TextBlock x:Name="EditHint" Grid.Row="1" Text="" FontSize="11" Foreground="#FEBC2E" Margin="0,0,0,6" TextWrapping="Wrap"/>
         <!-- 编辑区背景：深藏青（与编辑器控件内背景一致，避免边缘露出灰色底） -->
-        <Border Grid.Row="2" Background="#101B2E" BorderBrush="#22314D" BorderThickness="1" CornerRadius="14" ClipToBounds="True">
+        <Border Grid.Row="2" Background="#101B2E" BorderBrush="#22314D" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
           <Panel x:Name="EditHost"/>
         </Border>
         <TextBlock x:Name="EditStatus" Grid.Row="3" Text="—" FontSize="11" Foreground="#9BA3AE" Margin="0,6,0,0" TextWrapping="NoWrap"/>
@@ -309,9 +309,9 @@
             <TextBlock Text="连接设置" FontSize="19" FontWeight="SemiBold" Foreground="#F2F2F5"/>
             <TextBlock x:Name="ConnInfo" Text="—" FontSize="11" Foreground="#9BA3AE" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="9" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" ClipToBounds="True">
+        <Border Grid.Row="1" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
             <StackPanel x:Name="ConnHostPanel" Margin="18,16,18,18" Spacing="8"/>
           </ScrollViewer>
@@ -325,10 +325,10 @@
             <TextBlock Text="世界链" FontSize="19" FontWeight="SemiBold" Foreground="#F2F2F5"/>
             <TextBlock x:Name="ChainInfo" Text="—" FontSize="11" Foreground="#9BA3AE" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="刷新" FontSize="12" Padding="12,5" CornerRadius="9" Margin="0,0,8,0" Click="OnShowChain"/>
-          <Button Grid.Column="2" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="9" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="刷新" FontSize="12" Padding="12,5" CornerRadius="8" Margin="0,0,8,0" Click="OnShowChain"/>
+          <Button Grid.Column="2" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" ClipToBounds="True">
+        <Border Grid.Row="1" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0" HorizontalScrollBarVisibility="Auto">
             <StackPanel x:Name="ChainHost" Margin="18,16,18,18" Spacing="16"/>
           </ScrollViewer>
@@ -342,10 +342,10 @@
             <TextBlock Text="配置编辑" FontSize="19" FontWeight="SemiBold" Foreground="#F2F2F5"/>
             <TextBlock x:Name="ConfigInfo" Text="—" FontSize="11" Foreground="#9BA3AE" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="保存并备份旧配置" FontSize="12" Padding="12,5" CornerRadius="9" Margin="0,0,8,0" Click="OnSaveConfig"/>
-          <Button Grid.Column="2" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="9" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="保存并备份旧配置" FontSize="12" Padding="12,5" CornerRadius="8" Margin="0,0,8,0" Click="OnSaveConfig"/>
+          <Button Grid.Column="2" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" ClipToBounds="True">
+        <Border Grid.Row="1" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
             <StackPanel x:Name="ConfigHost" Margin="16,14,16,18" Spacing="8"/>
           </ScrollViewer>
@@ -360,20 +360,20 @@
             <TextBlock Text="地图预览" FontSize="19" FontWeight="SemiBold" Foreground="#F2F2F5"/>
             <TextBlock x:Name="MapInfo" Text="—" FontSize="11" Foreground="#9BA3AE" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="9"
+          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8"
                   VerticalAlignment="Center" Click="OnBackToConsole"/>
         </Grid>
         <!-- 行 1：工具栏。★ 用 WrapPanel 而非 StackPanel：控件多（宿主 6 个 + 插件若干）时窄窗口能自动换行，
              否则会被挤出可视区。v4 的插件贡献点也把控件追加到这个面板里（MapPluginBar 就是它本身）。 -->
         <WrapPanel Grid.Row="1" x:Name="MapPluginBar" Orientation="Horizontal" Margin="0,0,0,10">
           <ComboBox x:Name="MapPicker" FontSize="12" Width="170" Margin="0,0,6,6" SelectionChanged="OnMapPickChanged"/>
-          <Button Content="适应" FontSize="12" Padding="10,5" CornerRadius="9" Margin="0,0,6,6" Click="OnMapFit"/>
-          <Button Content="1:1" FontSize="12" Padding="10,5" CornerRadius="9" Margin="0,0,6,6" Click="OnMapActual"/>
-          <Button Content="−" FontSize="12" Width="32" Padding="0,5" CornerRadius="9" Margin="0,0,6,6" Click="OnMapZoomOut"/>
-          <Button Content="+" FontSize="12" Width="32" Padding="0,5" CornerRadius="9" Margin="0,0,6,6" Click="OnMapZoomIn"/>
-          <Button Content="刷新" FontSize="12" Padding="10,5" CornerRadius="9" Margin="0,0,6,6" Click="OnRefreshMap"/>
+          <Button Content="适应" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapFit"/>
+          <Button Content="1:1" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapActual"/>
+          <Button Content="−" FontSize="12" Width="32" Padding="0,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapZoomOut"/>
+          <Button Content="+" FontSize="12" Width="32" Padding="0,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapZoomIn"/>
+          <Button Content="刷新" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnRefreshMap"/>
         </WrapPanel>
-        <Border Grid.Row="2" x:Name="MapCard" Background="#141417" BorderBrush="#2A2A30" BorderThickness="1" CornerRadius="14" ClipToBounds="True"
+        <Border Grid.Row="2" x:Name="MapCard" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True"
                 Cursor="Hand" PointerWheelChanged="OnMapWheel"
                 PointerPressed="OnMapPointerPressed" PointerMoved="OnMapPointerMoved"
                 PointerReleased="OnMapPointerReleased" DoubleTapped="OnMapDoubleTapped">
@@ -406,14 +406,14 @@
         <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0" VerticalScrollBarVisibility="Auto">
         <StackPanel x:Name="MenuPanel" Spacing="6">
           <TextBlock Text="服务端" FontSize="11" FontWeight="SemiBold" Foreground="#9BA3AE" Margin="4,0,0,6"/>
-          <Border Background="#1C1C1F" BorderBrush="#2E2E33" BorderThickness="1" CornerRadius="10" Padding="10,7">
+          <Border Background="#1C1C1F" BorderBrush="#2E2E33" BorderThickness="1" CornerRadius="8" Padding="10,7">
             <StackPanel Orientation="Horizontal" Spacing="7">
               <Border x:Name="SrvDot" Width="7" Height="7" CornerRadius="3.5" Background="#6B6B70" VerticalAlignment="Center"/>
               <TextBlock x:Name="ConnState" Text="未运行" FontSize="11" Foreground="#9A9AA0" VerticalAlignment="Center"/>
             </StackPanel>
           </Border>
           <!-- ★ 连接健康三灯（移植 MCSManager 的显式连接状态思路）：隧道 / 命令通道 / REST 接口 -->
-          <Border Background="#1C1C1F" BorderBrush="#2E2E33" BorderThickness="1" CornerRadius="10" Padding="10,7" Margin="0,4,0,0" ToolTip.Tip="绿灯=正常；橙灯=降级/回退；灰灯=未启用">
+          <Border Background="#1C1C1F" BorderBrush="#2E2E33" BorderThickness="1" CornerRadius="8" Padding="10,7" Margin="0,4,0,0" ToolTip.Tip="绿灯=正常；橙灯=降级/回退；灰灯=未启用">
             <StackPanel Orientation="Horizontal" Spacing="12">
               <StackPanel Orientation="Horizontal" Spacing="5">
                 <Border x:Name="DotTunnel" Width="7" Height="7" CornerRadius="3.5" Background="#6B6B70" VerticalAlignment="Center"/>
@@ -438,13 +438,13 @@
           <TextBlock x:Name="PluginMetricsHeader" Text="插件指标" FontSize="11" FontWeight="SemiBold" Foreground="#9BA3AE" Margin="4,14,0,6" IsVisible="False"/>
           <StackPanel x:Name="PluginMetricsHost" Spacing="4"/>
           <TextBlock Text="功能" FontSize="11" FontWeight="SemiBold" Foreground="#9BA3AE" Margin="4,14,0,6"/>
-          <Button x:Name="BtnConn" Classes="menu" Content="&#xE774;  连接设置" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="9" Click="OnShowConn"/>
-          <Button x:Name="BtnChain" Classes="menu" Content="&#xE71B;  世界链" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="9" Click="OnShowChain"/>
-          <Button x:Name="BtnConfig" Classes="menu" Content="&#xE713;  配置编辑" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="9" Click="OnShowConfig"/>
-          <Button x:Name="BtnPlugins" Classes="menu" Content="&#xE8B7;  文件管理" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="9" Click="OnShowPlugins"/>
-          <Button x:Name="BtnMap" Classes="menu" Content="&#xE707;  地图预览" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="9" Click="OnShowMap"/>
-          <Button x:Name="BtnMaint" Classes="menu" Content="&#xE90F;  维护" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="9" Click="OnShowMaint"/>
-          <Button x:Name="BtnMgrPlugins" Classes="menu" Content="&#xEA86;  插件管理" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="9" Click="OnShowMgrPlugins"/>
+          <Button x:Name="BtnConn" Classes="menu" Content="&#xE774;  连接设置" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowConn"/>
+          <Button x:Name="BtnChain" Classes="menu" Content="&#xE71B;  世界链" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowChain"/>
+          <Button x:Name="BtnConfig" Classes="menu" Content="&#xE713;  配置编辑" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowConfig"/>
+          <Button x:Name="BtnPlugins" Classes="menu" Content="&#xE8B7;  文件管理" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowPlugins"/>
+          <Button x:Name="BtnMap" Classes="menu" Content="&#xE707;  地图预览" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowMap"/>
+          <Button x:Name="BtnMaint" Classes="menu" Content="&#xE90F;  维护" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowMaint"/>
+          <Button x:Name="BtnMgrPlugins" Classes="menu" Content="&#xEA86;  插件管理" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowMgrPlugins"/>
           <!-- 下面的按钮已合并进「维护」视图，保留元素是为了不破坏代码里对 BtnReset/BtnBackup/BtnRestore 的引用 -->
           <StackPanel IsVisible="False">
             <Button x:Name="BtnReset" Click="OnResetClicked"/>
