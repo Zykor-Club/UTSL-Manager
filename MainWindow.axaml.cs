@@ -5909,14 +5909,26 @@ public partial class MainWindow : Window
                     int spacing = plan?.SpacingTiles ?? -1;
                     var slices = new List<StitchSlice>();
                     var missing = new List<string>();
+
+                    // ★ 并行预取：实测 3 个世界串行 15.3s / 并行 8.3s（1.18 → 2.17 MB/s）。
+                    //   单条 SSH 流的窗口把吞吐绑死了，多条并发才能把链路吃满。
+                    //   远端档才有下载；本机档 ResolveWorldFile 只做存在性判断，并行也是无害的。
+                    var resolvedPaths = new string?[chain.Length];
+                    int finishedDl = 0;
+                    Parallel.For(0, chain.Length, new ParallelOptions { MaxDegreeOfParallelism = 4 }, i =>
+                    {
+                        string? p = ResolveWorldFile(chain[i] + ".wld", s => MapStatus("并行下载（" + (Volatile.Read(ref finishedDl)) + "/" + chain.Length + " 完成）：" + s));
+                        Interlocked.Increment(ref finishedDl);
+                        resolvedPaths[i] = p;
+                    });
+
                     for (int i = 0; i < chain.Length; i++)
                     {
-                        // 下载阶段也让进度条动起来（渲染进度是 0..1 单调钳制，这里最多报到 0.4 让位给渲染）
-                        ShowMapProgress(true, 0.05 + 0.35 * i / Math.Max(1, chain.Length));
-                        string? p = ResolveWorldFile(chain[i] + ".wld", MapStatus);
+                        string? p = resolvedPaths[i];
                         if (p is null) { missing.Add(chain[i]); continue; }
                         slices.Add(new StitchSlice(chain[i], p, spacing > 0 ? i * spacing : -1));
                     }
+                    ShowMapProgress(true, 0.35);
                     if (missing.Count > 0) { return (Bmp: (SKBitmap?)null, Error: "缺少世界文件：" + string.Join("、", missing), Stats: (MapRenderStats?)null); }
 
                     // ★ 拼接也走全分辨率：3900×2+4200 = 12000 格宽，任何缩放都会糊掉细节
