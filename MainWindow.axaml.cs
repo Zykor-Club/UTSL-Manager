@@ -5477,6 +5477,7 @@ public partial class MainWindow : Window
     private async void OnRefreshMap(object? sender, RoutedEventArgs e)
     {
         forceWorldReload = true;          // 忽略远端世界缓存
+        worldInfoAtMs = 0;                // 目录快照也失效（换过世界要重新列）
         WorldMapRenderer.DropCache();     // 解析缓存也丢掉（按 path+mtime+size，正常情况本就会失效，这里是双保险）
         try { FsInvalidatePath(WorldsDir); } catch { }   // 目录列表缓存也失效：换了新世界名要能立刻出现在下拉里
         try { await RefreshMapPickerAsync(); await LoadMap(); }
@@ -5533,6 +5534,40 @@ public partial class MainWindow : Window
     /// ★ 条目 = 自动启动的世界 ∪ **磁盘上所有 .wld**：只按 config.json 的 autoStartServers 列，
     ///   会把"存在但没自动启动"的世界整个藏掉（用户反馈的"地图列表其他地图呢"）。
     /// </summary>
+    /// <summary>世界目录条目缓存（远端每趟往返约 200ms；下拉与"取大小/mtime"共用一次列表）。</summary>
+    private static readonly Dictionary<string, (long Size, DateTime Mtime)> worldInfoCache = new(StringComparer.OrdinalIgnoreCase);
+    private static long worldInfoAtMs;
+    private static string worldInfoKey = "";
+
+    // 世界基线模板列表（5 分钟缓存）
+    private static readonly List<string> tplCache = [];
+    private static long tplCacheAtMs;
+    private static string tplCacheKey = "";
+
+    /// <summary>拉一次世界目录（带 60 秒缓存），返回 文件名→(大小, mtime)。</summary>
+    private static Dictionary<string, (long Size, DateTime Mtime)> WorldInfoSnapshot(bool force = false)
+    {
+        string key = WorldsDir;
+        if (!force && worldInfoKey == key && Environment.TickCount64 - worldInfoAtMs < 60000 && worldInfoCache.Count > 0)
+        {
+            return worldInfoCache;
+        }
+        try
+        {
+            worldInfoCache.Clear();
+            foreach (var e in FsList(key))
+            {
+                if (e.IsDir) { continue; }
+                if (!e.Name.EndsWith(".wld", StringComparison.OrdinalIgnoreCase)) { continue; }
+                worldInfoCache[e.Name] = (e.Size, e.Mtime);
+            }
+            worldInfoKey = key;
+            worldInfoAtMs = Environment.TickCount64;
+        }
+        catch { }
+        return worldInfoCache;
+    }
+
     private async Task RefreshMapPickerAsync()
     {
         if (MapPicker is null) { return; }
@@ -5549,7 +5584,20 @@ public partial class MainWindow : Window
                 // 尘歌壶等虚拟世界单独标注，其余按普通世界列（磁盘上有就列出来）
                 Add(n.StartsWith("尘歌壶_", StringComparison.Ordinal) ? VirtualMarker + n : n);
             }
-            foreach (var n in WorldFilesIn("_vwc_templates")) { Add(BaselineMarker + n); }
+            // ★ 世界基线模板目录很少变动：缓存 5 分钟，省掉每次重建下拉的一趟往返（远端 ~200ms）
+            AddTemplates();
+            void AddTemplates()
+            {
+                if (tplCacheKey == WorldsDir && Environment.TickCount64 - tplCacheAtMs < 300000 && tplCache.Count > 0)
+                {
+                    foreach (var n in tplCache) { Add(BaselineMarker + n); }
+                    return;
+                }
+                var names = WorldFilesIn("_vwc_templates");
+                tplCache.Clear(); tplCache.AddRange(names);
+                tplCacheKey = WorldsDir; tplCacheAtMs = Environment.TickCount64;
+                foreach (var n in tplCache) { Add(BaselineMarker + n); }
+            }
             return list;
         });
         MapPicker.ItemsSource = items;
@@ -5574,10 +5622,17 @@ public partial class MainWindow : Window
             DateTime remoteMtime = default;
             try
             {
-                string dir = Path.GetDirectoryName(full) ?? "";
+                // ★ 从"世界目录快照"里取：原来每个世界都单发一次列目录请求（远端每趟 ~200ms），
+                //   拼接 3 个世界就是 3 趟 = 600ms 白等。
                 string name = Path.GetFileName(full);
-                var hit = FsList(dir).FirstOrDefault(e => !e.IsDir && e.Name == name);
-                if (hit is not null) { remoteSize = hit.Size; remoteMtime = hit.Mtime; }
+                var snap = WorldInfoSnapshot(forceWorldReload);
+                if (snap.TryGetValue(name, out var hit)) { remoteSize = hit.Size; remoteMtime = hit.Mtime; }
+                else
+                {
+                    string dir = Path.GetDirectoryName(full) ?? "";
+                    var one = FsList(dir).FirstOrDefault(e => !e.IsDir && e.Name == name);
+                    if (one is not null) { remoteSize = one.Size; remoteMtime = one.Mtime; }
+                }
             }
             catch { }
             // ★ 缓存判定用"大小 + 远端修改时间 + 本地留存时间"三重比对：
