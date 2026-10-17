@@ -474,7 +474,8 @@
           <Button Content="导出视口" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapExportView"/>
           <Button Content="导出整图" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapExportFull"/>
         </WrapPanel>
-        <Border Grid.Row="2" x:Name="MapCard" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True"
+        <Grid Grid.Row="2">
+        <Border x:Name="MapCard" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True"
                 Cursor="Hand" PointerWheelChanged="OnMapWheel"
                 PointerPressed="OnMapPointerPressed" PointerMoved="OnMapPointerMoved"
                 PointerReleased="OnMapPointerReleased" DoubleTapped="OnMapDoubleTapped">
@@ -489,6 +490,17 @@
                        Fill="#3366CCFF" Stroke="#66CCFF" StrokeThickness="1.5"/>
           </Canvas>
         </Border>
+        <!-- 小地图导航：放在卡片外层（卡片的 Canvas 坐标系是"整张图"，Right/Bottom 会被算到图外去） -->
+        <Border x:Name="MapMiniBox" Width="220" IsVisible="False"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,18,18"
+                Background="#CC12151A" BorderBrush="#33FFFFFF" BorderThickness="1" CornerRadius="8"
+                Padding="6" Cursor="Hand" PointerPressed="OnMiniTapPressed">
+          <StackPanel Spacing="4">
+            <maps:MapMiniMap x:Name="MapMini" Height="44" IsHitTestVisible="False"/>
+            <TextBlock x:Name="MapMiniHint" Text="点击小地图跳转" FontSize="10" Foreground="#8A93A0" HorizontalAlignment="Center"/>
+          </StackPanel>
+        </Border>
+        </Grid>
         <!-- 卡片下方的加载进度条（渲染/解码时显示；浅蓝取管理器强调色 #66CCFF） -->
         <ProgressBar Grid.Row="3" x:Name="MapProgress" Minimum="0" Maximum="1" Height="4" Margin="2,10,2,0"
                      Foreground="#66CCFF" Background="#1E1E24" IsVisible="False">

@@ -5855,6 +5855,7 @@ public partial class MainWindow : Window
                 : pick.StartsWith(BaselineMarker, StringComparison.Ordinal) ? Path.Combine("_vwc_templates", pick[BaselineMarker.Length..] + ".wld")
                 : pick + ".wld";
 
+            mapLoadSeq++;                       // 新一轮加载：上一轮遗留的预览全部作废
             MapInfo.Text = label + " · 渲染中…";
             ShowMapProgress(true, 0);
             // ★ TEdit 的载入进度不是单调的（换阶段会从 0 重新报，实测拼接会出现 7 次回退），
@@ -5901,7 +5902,28 @@ public partial class MainWindow : Window
                     if (missing.Count > 0) { return (Bmp: (SKBitmap?)null, Error: "缺少世界文件：" + string.Join("、", missing), Stats: (MapRenderStats?)null); }
 
                     // ★ 拼接也走全分辨率：3900×2+4200 = 12000 格宽，任何缩放都会糊掉细节
-                    SKBitmap? cv = WorldMapRenderer.RenderStitched(slices, 1, out MapRenderStats sst, out string serr, p => prog.Report(p), mapLayers);
+                    int totalSlices = Math.Max(1, slices.Count);
+                    int mySeq = mapLoadSeq;
+                    void OnSlice(SKBitmap canvas, int done, int total)
+                    {
+                        SKBitmap? prev = WorldMapRenderer.MakePreview(canvas, 2000);
+                        if (prev is null) { return; }
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            // ★ 这次加载已经出成品（或被新的加载取代）→ 丢掉这张迟到的预览，
+                            //   否则预览会把成品覆盖回去（实测：成品 12000×2400 被 2000 宽的预览盖掉，缩放还停在预览的 57%）
+                            if (mySeq != mapLoadSeq) { prev.Dispose(); return; }
+                            try
+                            {
+                                mapPreviewShown = true;
+                                using (prev) { PresentBitmap(prev, keepView: true); }
+                                ShowMapProgress(true, 0.45 + 0.5 * done / (double)total);
+                                SetStatusLine(label + " · 正在拼接（" + done + "/" + total + " 片已就绪，先看预览）…");
+                            }
+                            catch { }
+                        });
+                    }
+                    SKBitmap? cv = WorldMapRenderer.RenderStitched(slices, 1, out MapRenderStats sst, out string serr, p => prog.Report(p), mapLayers, OnSlice);
                     if (cv is null) { return (Bmp: (SKBitmap?)null, Error: serr, Stats: (MapRenderStats?)null); }
 
                     // ★ 拼接会顺序载入 3 个世界（每个约 200MB 的 Tile[,]），而 GC 默认**不把大对象堆还给系统**。
@@ -5944,7 +5966,10 @@ public partial class MainWindow : Window
             mapSpawnX = stitch ? -1 : (result.Stats?.SpawnX ?? -1);
             mapSpawnY = stitch ? -1 : (result.Stats?.SpawnY ?? -1);
             lastMapPick = pick;
-            using (outBmp) { PresentBitmap(outBmp); }   // 换图统一走这里（含布局尺寸与适应窗口）
+            mapLoadSeq++;                       // 作废所有还在队列里的预览
+            bool keepView = mapPreviewShown && mapZoom > 0;
+            mapPreviewShown = false;
+            using (outBmp) { PresentBitmap(outBmp, keepView); }   // 换图统一走这里（含布局尺寸与适应窗口）
             try { OnMapOverlayToggle(null, new RoutedEventArgs()); } catch { }
             ShowMapProgress(false, 1);
             lastWorldRel = relThisLoad;      // 只有成功渲染才更新（导出的目标世界）
@@ -6014,6 +6039,7 @@ public partial class MainWindow : Window
         mapTransT.X = mapOffset.X;
         mapTransT.Y = mapOffset.Y;
         // 叠加层用同一套缩放/位移（它是独立元素，需要自己一份 transform）
+        RefreshMinimap();          // 小地图视口框跟着平移/缩放走
         if (MapOverlay is not null)
         {
             if (MapOverlay.RenderTransform is not Avalonia.Media.TransformGroup)
@@ -6048,6 +6074,42 @@ public partial class MainWindow : Window
     private Avalonia.Point mapHoverPoint;                // 悬停位图坐标（用于状态行）
     private bool mapHoverValid;
     private bool mapGotoHooked;
+    private bool mapPreviewShown;      // 这次加载是否给过"拼接预览"（决定最终换图时是否保持视图）
+    private int mapLoadSeq;            // 加载序号：作废"迟到的预览"（预览是 Post 到 UI 线程的，可能晚于成品）
+    private Avalonia.Media.Imaging.WriteableBitmap? mapMiniThumb;   // 小地图缩略图（208 宽，换图时重建）
+    private string mapMiniKey2 = "";
+
+    /// <summary>从当前位图按整数步长抽样生成缩略图（纯内存拷贝，不走 Skia 缩放）。</summary>
+    private static unsafe Avalonia.Media.Imaging.WriteableBitmap? MakeThumbFromBitmap(Avalonia.Media.Imaging.WriteableBitmap src, int w, int h)
+    {
+        try
+        {
+            if (w < 2 || h < 2) { return null; }
+            var dst = new Avalonia.Media.Imaging.WriteableBitmap(new Avalonia.PixelSize(w, h), src.Dpi,
+                Avalonia.Platform.PixelFormat.Bgra8888, Avalonia.Platform.AlphaFormat.Premul);
+            using (var sf = src.Lock())
+            using (var df = dst.Lock())
+            {
+                int sw = sf.Size.Width, sh = sf.Size.Height;
+                int sx = Math.Max(1, sw / w), sy = Math.Max(1, sh / h);
+                byte* sp = (byte*)sf.Address;
+                byte* dp = (byte*)df.Address;
+                for (int y = 0; y < h; y++)
+                {
+                    byte* srow = sp + (long)(y * sy) * sf.RowBytes;
+                    byte* drow = dp + (long)y * df.RowBytes;
+                    for (int x = 0; x < w; x++)
+                    {
+                        byte* s = srow + (long)(x * sx) * 4;
+                        byte* d = drow + (long)x * 4;
+                        d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = 255;
+                    }
+                }
+            }
+            return dst;
+        }
+        catch { return null; }
+    }
     /// <summary>"刷新"按钮置位一次：下次取世界文件时忽略远端缓存（用户换过世界要强制重读时用）。</summary>
     private static bool forceWorldReload;
 
@@ -6171,6 +6233,20 @@ public partial class MainWindow : Window
     {
         if (MapImage?.Source is null || MapCard is null) { return; }
         Avalonia.Input.PointerPoint pt = e.GetCurrentPoint(MapCard);
+        if (pt.Properties.IsRightButtonPressed)
+        {
+            // 右键 = 以该点为中心（不用打字也能定位）；处于"适应窗口"时顺带放大，否则看起来没反应
+            Avalonia.Size vp0 = MapViewport;
+            var ip = ToImagePoint(pt.Position);
+            double fit = FitZoom();
+            if (mapZoom <= fit * 1.2) { mapZoom = Math.Max(fit * 4.0, Math.Min(1.0, fit * 8.0)); }
+            mapOffset = new Avalonia.Vector(vp0.Width / 2.0 - ip.X * mapZoom, vp0.Height / 2.0 - ip.Y * mapZoom);
+            ApplyMapTransform();
+            RefreshMapInfo();
+            SetStatusLine($"已居中到 ({ip.X:F0},{ip.Y:F0})");
+            e.Handled = true;
+            return;
+        }
         if (!pt.Properties.IsLeftButtonPressed) { return; }
 
         if (mapSelectMode)
@@ -6310,15 +6386,31 @@ public partial class MainWindow : Window
     }
 
     /// <summary>把一张位图显示到地图页（换图时统一走这里）。</summary>
-    private void PresentBitmap(SKBitmap bmp)
+    private void PresentBitmap(SKBitmap bmp, bool keepView = false)
     {
         if (MapImage is null) { return; }
+        double keepZoom = mapZoom;
+        Avalonia.Vector keepOffset = mapOffset;
         var wb = ToWriteableBitmap(bmp);
         if (MapImage.Source is IDisposable old) { old.Dispose(); }
         MapImage.Source = wb;
         // ★ 布局尺寸必须显式等于位图尺寸（否则会被容器夹成视口大小，只画左上角一块）。
         MapImage.Width = wb.PixelSize.Width;
         MapImage.Height = wb.PixelSize.Height;
+        // 小地图缩略图：在这里（bmp 还活着）缩好存起来，控件只负责 1:1 画它 + 叠视口框。
+        // 直接在控件里对 12000×2400 的位图做源矩形缩放在实测里出现过"右边一片黑"，这里绕开它。
+        try
+        {
+            var thumb = WorldMapRenderer.MakePreview(bmp, 208);
+            if (thumb is not null)
+            {
+                var twb = ToWriteableBitmap(thumb);
+                thumb.Dispose();
+                if (mapMiniThumb is IDisposable oldThumb) { oldThumb.Dispose(); }
+                mapMiniThumb = twb;
+            }
+        }
+        catch { }
         // 叠加层（网格/出生点）与图像同尺寸、同变换
         if (MapOverlay is not null)
         {
@@ -6331,7 +6423,8 @@ public partial class MainWindow : Window
             MapOverlay.IsVisible = MapOverlay.ShowGrid || (MapOverlay.ShowSpawn && mapSpawnX >= 0);
         }
         EnsureMapTransform();
-        FitMap();
+        if (keepView) { mapZoom = keepZoom; mapOffset = keepOffset; ApplyMapTransform(); RefreshMapInfo(); }
+        else { FitMap(); }
     }
 
     /// <summary>显示一个区块模板（宿主负责解析+渲染+显示；插件只提供名字）。</summary>
@@ -6379,6 +6472,76 @@ public partial class MainWindow : Window
         return true;
     }
 
+
+
+    // ===== 小地图导航（A3）：右下角缩略图 + 视口框，点击跳转 =====
+    //   缩略图不另存副本：直接把当前位图交给 MapMiniMap 控件，由它在 Render 里按源矩形缩放画一次
+    //   （208px 宽，几毫秒；比每次生成一张缩略位图省得多）。
+    private void RefreshMinimap()
+    {
+        try
+        {
+            if (MapMiniBox is null || MapMini is null) { return; }
+            Avalonia.Size im = MapSourceSize, vp = MapViewport;
+            if (im.Width < 1 || vp.Width < 1 || MapImage?.Source is not Avalonia.Media.Imaging.WriteableBitmap bmp)
+            {
+                MapMiniBox.IsVisible = false;
+                return;
+            }
+            const double miniW = 208;
+            double miniH = Math.Max(24, Math.Round(miniW * im.Height / im.Width));
+            MapMini.Width = miniW;
+            MapMini.Height = miniH;
+            // 缩略图按"位图身份"重建：直接从当前 WriteableBitmap 抽样，不依赖任何中间 SKBitmap
+            string mind = $"{bmp.PixelSize.Width}x{bmp.PixelSize.Height}";
+            if (mapMiniKey2 != mind || mapMiniThumb is null)
+            {
+                var t = MakeThumbFromBitmap(bmp, (int)miniW, (int)miniH);
+                if (t is not null)
+                {
+                    if (mapMiniThumb is IDisposable oldT) { oldT.Dispose(); }
+                    mapMiniThumb = t;
+                    mapMiniKey2 = mind;
+                }
+            }
+            MapMini.Source = mapMiniThumb ?? bmp;
+            MapMini.ImageSize = im;
+            MapMini.ViewportInImage = new Avalonia.Rect(
+                Math.Max(0, (-mapOffset.X) / mapZoom),
+                Math.Max(0, (-mapOffset.Y) / mapZoom),
+                Math.Min(im.Width, vp.Width / mapZoom),
+                Math.Min(im.Height, vp.Height / mapZoom));
+            MapMiniBox.IsVisible = true;
+            if (MapMiniHint is not null)
+            {
+                MapMiniHint.Text = $"视野 {MapMini.ViewportInImage.Width:F0}×{MapMini.ViewportInImage.Height:F0} · 右键地图可跳转";
+            }
+        }
+        catch { }
+    }
+
+    /// <summary>点小地图 → 把该点移到视口中心。
+    /// 用 PointerPressed 而不是 Tapped：MapCard 上的 PointerPressed 会把事件标记 Handled，
+    /// Tapped 手势就不会再冒出来（实测"点小地图没反应"就是这个原因）。</summary>
+    private void OnMiniTapPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e)
+    {
+        try
+        {
+            if (MapMini is null || MapImage?.Source is null) { return; }
+            var ptp = e.GetCurrentPoint(MapMini);
+            if (!ptp.Properties.IsLeftButtonPressed) { return; }
+            Avalonia.Size im = MapSourceSize, vp = MapViewport;
+            double miniW = MapMini.Bounds.Width, miniH = MapMini.Bounds.Height;
+            if (miniW < 1 || miniH < 1) { return; }
+            var p = ptp.Position;
+            double ix = p.X * (im.Width / miniW), iy = p.Y * (im.Height / miniH);
+            mapOffset = new Avalonia.Vector(vp.Width / 2.0 - ix * mapZoom, vp.Height / 2.0 - iy * mapZoom);
+            ApplyMapTransform();
+            RefreshMapInfo();
+            e.Handled = true;
+        }
+        catch { }
+    }
 
     // ===== 地图增强：跳转 / 叠加层 / 图层 / 导出 =====
     /// <summary>A3：输入 "x,y" 跳到该世界坐标（居中显示）。</summary>

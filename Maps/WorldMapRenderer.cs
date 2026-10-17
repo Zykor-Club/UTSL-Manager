@@ -146,6 +146,39 @@ public static class WorldMapRenderer
         lock (Gate) { _cacheKey = ""; _cacheWorld = null; }
     }
 
+    /// <summary>
+    /// 把一张大图按"整数倍抽样"缩小到 maxW 宽（用于拼接过程中的预览）。
+    /// 不用 SKImage.Resize：那会先建 SKImage 再重采样整个源，拼接中途调用太贵；
+    /// 这里只读 1/stride 的像素并按行 memcpy 写入目标缓冲，12000×2400 → 1600×320 约 10~20ms。
+    /// </summary>
+    public static unsafe SKBitmap? MakePreview(SKBitmap src, int maxW)
+    {
+        try
+        {
+            if (src.Width <= maxW) { return src.Copy(); }
+            int w = Math.Max(1, maxW);
+            int h = Math.Max(1, (int)Math.Round(src.Height * (w / (double)src.Width)));
+            var dst = new SKBitmap(new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Premul));
+            byte* sp = (byte*)src.GetPixels();
+            byte* dp = (byte*)dst.GetPixels();
+            int srb = src.RowBytes, drb = dst.RowBytes;
+            int sx = Math.Max(1, src.Width / w), sy = Math.Max(1, src.Height / h);
+            for (int y = 0; y < h; y++)
+            {
+                byte* sprow = sp + (long)(y * sy) * srb;
+                byte* dprow = dp + (long)y * drb;
+                for (int x = 0; x < w; x++)
+                {
+                    byte* s = sprow + (long)(x * sx) * 4;
+                    byte* d = dprow + (long)x * 4;
+                    d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = 255;
+                }
+            }
+            return dst;
+        }
+        catch { return null; }
+    }
+
     // ===== 渲染 =====
 
     /// <summary>
@@ -236,7 +269,8 @@ public static class WorldMapRenderer
     /// </summary>
     public static SKBitmap? RenderStitched(IReadOnlyList<StitchSlice> slices, int scale,
                                            out MapRenderStats stats, out string error, Action<double>? progress = null,
-                                           TEdit5.Controls.WorldRenderEngine.Layers.RenderLayerVisibility? layers = null)
+                                           TEdit5.Controls.WorldRenderEngine.Layers.RenderLayerVisibility? layers = null,
+                                           Action<SKBitmap, int, int>? slicePreview = null)
     {
         stats = new MapRenderStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, slices.Count);
         error = "";
@@ -303,6 +337,12 @@ public static class WorldMapRenderer
                 var swR = Stopwatch.StartNew();
                 RenderInto(canvas, w, scale, (int)Math.Round(off / (double)scale), p => progress?.Invoke((idx + 0.75 + 0.25 * p) / total), layers);
                 renderMs += swR.ElapsedMilliseconds;
+
+                // 逐片回调：让界面先把"已经拼好的部分"显示出来（拼接总共要 3~7 秒，用户不必对着白屏等）
+                if (slicePreview is not null)
+                {
+                    try { slicePreview(canvas, si + 1, slices.Count); } catch { }
+                }
 
                 DropCache();     // ★ 立刻释放这一片的世界（约 200MB）
             }
