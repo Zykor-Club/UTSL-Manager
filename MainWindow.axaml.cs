@@ -48,6 +48,19 @@ public sealed class ServerCardRow : System.ComponentModel.INotifyPropertyChanged
 
     private string tip = "";
     public string Tip { get => tip; set { if (tip == value) { return; } tip = value; Raise(nameof(Tip)); } }
+
+    // ===== 卡片上的实时数据（后台常驻轮询提供，非激活档也有） =====
+    private string state = "";
+    public string State { get => state; set { if (state == value) { return; } state = value; Raise(nameof(State)); } }
+
+    private string cpuText = "CPU —";
+    public string CpuText { get => cpuText; set { if (cpuText == value) { return; } cpuText = value; Raise(nameof(CpuText)); } }
+
+    private string memText = "内存 —";
+    public string MemText { get => memText; set { if (memText == value) { return; } memText = value; Raise(nameof(MemText)); } }
+
+    private string netText = "↑— ↓—";
+    public string NetText { get => netText; set { if (netText == value) { return; } netText = value; Raise(nameof(NetText)); } }
 }
 
 /// <summary>终端里的一行（文字 + 颜色）。</summary>
@@ -3066,7 +3079,7 @@ public partial class MainWindow : Window
                 bool active = p.Id == showActiveId;
                 r.Id = p.Id;
                 r.Name = p.Name.Length > 0 ? p.Name : p.Id;
-                // 状态直接写进第二行（原来靠 tooltip，而 tooltip 会盖住卡片并吃掉点击）
+                // 卡片：第 1 行 名称+状态+世界数 / 第 2 行 IP:端口+方式 / 第 3 行 CPU·内存 / 第 4 行 上下行
                 string mode = p.DirectReady ? "直连" : p.IsRemote ? "SSH" : "本机";
                 bool isPending = p.Id == pendingActiveId;
                 string st = isPending ? "切换中"
@@ -3074,7 +3087,13 @@ public partial class MainWindow : Window
                     : p.Status == 2 ? "REST 不通"
                     : active ? "未运行 / 未知"
                     : p.ProbeAtMs == 0 ? "未探活" : p.ProbeOk ? "SSH 可达" : "不可达";
-                r.Address = p.AddressText + " · " + mode + " · " + st;
+                r.Address = p.AddressText + " · " + mode;
+                r.State = st;
+                bool haveData = p.Status == 1;
+                var (mCpu, mMem, mUp, mDown) = MetricsFor(p);
+                r.CpuText = haveData ? "CPU " + mCpu.ToString("F1") + "%" : "CPU —";
+                r.MemText = haveData ? "内存 " + mMem.ToString("F2") + "G" : "内存 —";
+                r.NetText = haveData ? "↑ " + SpeedText(mUp) + "   ↓ " + SpeedText(mDown) : "↑ —   ↓ —";
                 r.Worlds = isPending ? "切换中…" : p.WorldCount >= 0 ? p.WorldCount + " 世界" : "—";
                 // 激活档：绿=在线 / 黄=REST 不通 / 灰=未运行/未知；非激活档：绿=那台机器/端口可达（没开隧道）
                 string hex = isPending ? "#FEBC2E"
@@ -3248,9 +3267,7 @@ public partial class MainWindow : Window
     }
 
 
-    // ===== 服务器总览（所有档一屏；数据来自后台常驻轮询，切档零等待） =====
-    private void OnShowOverview(object? sender, RoutedEventArgs e) => ShowView("overview");
-
+    // ===== 每档的实时数值（后台常驻轮询写入；卡片直接显示） =====
     /// <summary>最近一次采样值（后台轮询写进 histByServer，这里只读最后一个点）。</summary>
     private (double cpu, double mem, double up, double down) LastMetricsOf(string id)
     {
@@ -3259,82 +3276,16 @@ public partial class MainWindow : Window
         return (Last(h.Cpu), Last(h.Mem), Last(h.Up), Last(h.Down));
     }
 
-    private void RenderOverview()
-    {
-        try
-        {
-            OverviewHost.Children.Clear();
-            var list = ServersCfg.Servers;
-            int online = list.Count(p => p.Status == 1);
-            OverviewSub.Text = $"{list.Count} 台 · 在线 {online} 台 · 后台常驻轮询（世界列表 20 秒 / 指标 5 秒）· 点任意一行切换（当前：{ActiveSrv.Name}）";
+    /// <summary>该档当前的 CPU/内存/上下行（激活档读活列表，非激活档读后台快照）。</summary>
+    private (double cpu, double mem, double up, double down) MetricsFor(ServerProfile p)
+        => p.Id == ActiveSrv.Id
+            ? (cpuHist.Count > 0 ? cpuHist[^1] : 0, memHist.Count > 0 ? memHist[^1] : 0,
+               upHist.Count > 0 ? upHist[^1] : 0, downHist.Count > 0 ? downHist[^1] : 0)
+            : LastMetricsOf(p.Id);
 
-            foreach (var p in list)
-            {
-                bool active = p.Id == ActiveSrv.Id;
-                // ★ 激活档的历史在"活的"那三个列表里（还没存回 histByServer），总览要读活的，否则显示的是旧值
-                var (cpu, mem, up, down) = active
-                    ? (cpuHist.Count > 0 ? cpuHist[^1] : 0, memHist.Count > 0 ? memHist[^1] : 0,
-                       upHist.Count > 0 ? upHist[^1] : 0, downHist.Count > 0 ? downHist[^1] : 0)
-                    : LastMetricsOf(p.Id);
-                int worlds = p.WorldCount >= 0 ? p.WorldCount : (rowsByServer.TryGetValue(p.Id, out var r) ? r.Count - 1 : -1);
-                string stateText = p.Status == 1 ? "在线" + (active ? "（当前）" : "")
-                    : p.Status == 2 ? "REST 不通" + (active ? "（当前）" : "")
-                    : active ? "未运行 / 未知（当前）"
-                    : p.ProbeAtMs == 0 ? "未探活" : p.ProbeOk ? "SSH 可达" : "不可达";
-                string hex = p.Status == 1 ? "#32D74B" : p.Status == 2 ? "#FEBC2E" : (!active && p.ProbeOk) ? "#32D74B" : "#6B6B70";
+    private static string SpeedText(double kb)
+        => kb >= 1024 ? (kb / 1024.0).ToString("F2") + " MB/s" : kb.ToString("F1") + " KB/s";
 
-                var row = new Border
-                {
-                    Background = new SolidColorBrush(Color.Parse(active ? "#1B2430" : "#171A20")),
-                    BorderBrush = new SolidColorBrush(Color.Parse(active ? "#66CCFF" : "#242A33")),
-                    BorderThickness = new Avalonia.Thickness(1),
-                    CornerRadius = new Avalonia.CornerRadius(10),
-                    Padding = new Avalonia.Thickness(12, 9),
-                    Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand),
-                    Tag = p.Id,
-                };
-                var g = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
-                // 状态点
-                var dot = new Border { Width = 9, Height = 9, CornerRadius = new Avalonia.CornerRadius(4.5), Background = new SolidColorBrush(Color.Parse(hex)), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center, Margin = new Avalonia.Thickness(0, 0, 10, 0) };
-                Grid.SetColumn(dot, 0); g.Children.Add(dot);
-                // 名称 + 地址 + 状态
-                var left = new StackPanel { Spacing = 3, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
-                var nameRow = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8 };
-                nameRow.Children.Add(new TextBlock { Text = p.Name, FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = new SolidColorBrush(Color.Parse("#F2F2F5")) });
-                nameRow.Children.Add(new TextBlock { Text = stateText, FontSize = 11, Foreground = new SolidColorBrush(Color.Parse(hex)), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center });
-                left.Children.Add(nameRow);
-                left.Children.Add(new TextBlock
-                {
-                    Text = p.AddressText + " · " + (p.DirectReady ? "直连" : p.IsRemote ? "SSH " + p.SshUser + "@" + p.SshHost + ":" + p.SshPort : "本机") + " · " + p.LocalDir,
-                    FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#848D9A")), TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
-                });
-                Grid.SetColumn(left, 1); g.Children.Add(left);
-                // 右侧指标
-                var right = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 16, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
-                TextBlock Metric(string label, string value, string color)
-                    => new() { Text = label + " " + value, FontSize = 11.5, Foreground = new SolidColorBrush(Color.Parse(color)), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
-                right.Children.Add(Metric("世界", worlds >= 0 ? worlds.ToString() : "—", "#B9B9C0"));
-                right.Children.Add(Metric("CPU", p.Status == 1 ? cpu.ToString("F1") + "%" : "—", "#66CCFF"));
-                right.Children.Add(Metric("内存", p.Status == 1 ? mem.ToString("F2") + " GB" : "—", "#30D158"));
-                right.Children.Add(Metric("网络", p.Status == 1 ? (up >= 1024 ? (up / 1024).ToString("F2") + "/" + (down / 1024).ToString("F2") + " MB/s" : up.ToString("F1") + "/" + down.ToString("F1") + " KB/s") : "—", "#FF9F0A"));
-                Grid.SetColumn(right, 2); g.Children.Add(right);
-
-                row.Child = g;
-                row.PointerPressed += (_, _) => { if (!active) { _ = SwitchServerAsync(p.Id); } };
-                OverviewHost.Children.Add(row);
-            }
-
-            var hint = new TextBlock
-            {
-                Text = "说明：这些数字来自后台常驻轮询（非激活档每 5 秒读一次 agent 指标、每 20 秒读一次世界列表），"
-                     + "所以切过去不需要再等一次请求。日志流只跟当前激活档，切到没访问过的档时终端会空约 1 秒。",
-                FontSize = 10.5, Foreground = new SolidColorBrush(Color.Parse("#6E6E76")),
-                TextWrapping = Avalonia.Media.TextWrapping.Wrap, Margin = new Avalonia.Thickness(2, 6, 2, 0),
-            };
-            OverviewHost.Children.Add(hint);
-        }
-        catch (Exception ex) { ERR("总览页渲染失败: " + ex.Message); }
-    }
 
     // ===== 维护（整链重置/备份/恢复 三合一）=====
     private void OnShowMaint(object? sender, RoutedEventArgs e) => ShowView("maint");
@@ -3431,7 +3382,6 @@ public partial class MainWindow : Window
                     if (term.Count == 0) { RefreshLog(); }
                     UpdateServerCards();
                     RedrawChartsNow();
-                    if (OverviewView.IsVisible) { RenderOverview(); }
                 }
                 catch { }
             });
@@ -3715,6 +3665,7 @@ public partial class MainWindow : Window
                 PushCarry(h.Cpu, cpu); PushCarry(h.Mem, memGb); PushCarry(h.Up, up); PushCarry(h.Down, down);
                 h.Times.Add(DateTime.Now);
                 if (h.Times.Count > MaxSamples) { h.Times.RemoveAt(0); }
+                UpdateServerCards();      // 卡片上的 CPU/内存/上下行跟着变
             }
             catch { }
         });
@@ -4258,8 +4209,7 @@ public partial class MainWindow : Window
             // ---- 行为：安装/更新 agent ----
             btnAgent.Click += async (_, _) => await InstallAgentAsync(agentStatus);
 
-            if (BtnOverviewRefresh is not null) { BtnOverviewRefresh.Click += (_, _) => RenderOverview(); }
-        RefreshAgentStatus();
+            RefreshAgentStatus();
             ConnInfo.Text = UseRemote
                 ? $"当前：「{ActiveSrv.Name}」远端管理（SSH {SshUser}@{SshHost}）· 配置存于 {ServersFile}"
                 : $"当前：「{ActiveSrv.Name}」本机管理（{LocalDir}）· 配置存于 {ServersFile}";
@@ -4737,9 +4687,6 @@ public partial class MainWindow : Window
         BtnPlugins?.Classes.Set("active", which == "plugins");
         BtnMap?.Classes.Set("active", which == "map");
         BtnMgrPlugins?.Classes.Set("active", which == "mgrplugins");
-        OverviewView.IsVisible = which == "overview";
-        BtnOverview?.Classes.Set("active", which == "overview");
-        if (which == "overview") { RenderOverview(); }
     }
 
     private void OnBackToConsole(object? sender, RoutedEventArgs e) => ShowView("console");

@@ -52,7 +52,14 @@
       <Setter Property="Foreground" Value="#9BA3AE"/>
     </Style>
     <Style Selector="Border.srvcard TextBlock.srvaddr">
-      <Setter Property="Foreground" Value="#848D9A"/>
+      <Setter Property="Foreground" Value="#9BA3AE"/>
+    </Style>
+    <Style Selector="Border.srvcard TextBlock.srvstate">
+      <Setter Property="Foreground" Value="#32D74B"/>
+    </Style>
+    <Style Selector="Border.srvcard TextBlock.srvmetric">
+      <Setter Property="Foreground" Value="#B9B9C0"/>
+      <Setter Property="FontFamily" Value="Cascadia Mono,Consolas,monospace"/>
     </Style>
     <!-- 激活档：琥珀色描边 + 更亮的名字（与右侧导航的蓝色高亮区分开，避免两个"当前"打架） -->
     <Style Selector="Border.srvcard.active">
@@ -70,7 +77,7 @@
     </Style>
   </Window.Styles>
   <Panel>
-    <Grid ColumnDefinitions="244,*,208" RowDefinitions="40,*">
+    <Grid ColumnDefinitions="300,*,216" RowDefinitions="40,*">
       <!-- ★ 标题栏：只留交通灯 + 标题（功能按钮已移到右侧菜单） -->
       <Border Grid.Row="0" Grid.ColumnSpan="3" Background="Transparent" x:Name="TitleBar" PointerPressed="OnTitleBarPressed">
         <Grid ColumnDefinitions="Auto,*,Auto">
@@ -103,19 +110,32 @@
             <ItemsControl x:Name="ServerCards">
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                  <Border Classes="srvcard" Margin="0,0,0,6" CornerRadius="10" Padding="10,7"
+                  <Border Classes="srvcard" Margin="0,0,0,6" CornerRadius="10" Padding="10,8"
                           BorderThickness="1" Tag="{Binding Id}" Cursor="Hand"
                           PointerPressed="OnServerCardPressed"
                           Classes.active="{Binding IsActive}">
-                    <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
-                      <Border Grid.RowSpan="2" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
-                              Background="{Binding StatusBrush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                      <TextBlock Grid.Row="0" Grid.Column="1" Classes="srvname" Text="{Binding Name}"
-                                 FontSize="12.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                      <TextBlock Grid.Row="0" Grid.Column="2" Classes="srvworlds" Text="{Binding Worlds}"
-                                 FontSize="11" VerticalAlignment="Center" Margin="6,0,0,0"/>
-                      <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Classes="srvaddr" Text="{Binding Address}"
+                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto">
+                      <Border Grid.RowSpan="4" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
+                              Background="{Binding StatusBrush}" VerticalAlignment="Top" Margin="0,5,8,0"/>
+                      <!-- 第 1 行：名称 + 状态 + 世界数 -->
+                      <Grid Grid.Row="0" Grid.Column="1" ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6">
+                          <TextBlock Classes="srvname" Text="{Binding Name}" FontSize="12.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                          <TextBlock Classes="srvstate" Text="{Binding State}" FontSize="10.5" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Grid.Column="1" Classes="srvworlds" Text="{Binding Worlds}" FontSize="10.5" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                      </Grid>
+                      <!-- 第 2 行：IP:端口 + 方式 -->
+                      <TextBlock Grid.Row="1" Grid.Column="1" Classes="srvaddr" Text="{Binding Address}"
                                  FontSize="10.5" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                      <!-- 第 3 行：CPU / 内存 -->
+                      <Grid Grid.Row="2" Grid.Column="1" ColumnDefinitions="*,*" Margin="0,3,0,0">
+                        <TextBlock Grid.Column="0" Classes="srvmetric" Text="{Binding CpuText}" FontSize="10.5"/>
+                        <TextBlock Grid.Column="1" Classes="srvmetric" Text="{Binding MemText}" FontSize="10.5"/>
+                      </Grid>
+                      <!-- 第 4 行：上下行流量 -->
+                      <TextBlock Grid.Row="3" Grid.Column="1" Classes="srvmetric" Text="{Binding NetText}"
+                                 FontSize="10.5" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
                     </Grid>
                   </Border>
                 </DataTemplate>
@@ -405,20 +425,6 @@
       </Grid>
 
       <!-- 配置编辑视图（表单由代码生成） -->
-      <!-- 服务器总览：所有档一屏（数据来自后台常驻轮询，切档零等待） -->
-      <Grid x:Name="OverviewView" IsVisible="False" RowDefinitions="Auto,*">
-        <Grid Grid.Row="0" Margin="0,4,0,12" ColumnDefinitions="*,Auto">
-          <StackPanel Grid.Column="0" VerticalAlignment="Center">
-            <TextBlock Text="服务器总览" FontSize="19" FontWeight="SemiBold" Foreground="#F2F2F5"/>
-            <TextBlock x:Name="OverviewSub" Text="后台常驻轮询：世界列表 20 秒 / 指标 5 秒；点任意一行即切换" FontSize="11" Foreground="#9BA3AE" Margin="0,3,0,0"/>
-          </StackPanel>
-          <Button Grid.Column="1" x:Name="BtnOverviewRefresh" Content="刷新" FontSize="12" Padding="12,4" CornerRadius="8" VerticalAlignment="Center"/>
-        </Grid>
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-          <StackPanel x:Name="OverviewHost" Spacing="8"/>
-        </ScrollViewer>
-      </Grid>
-
       <Grid x:Name="ConfigView" IsVisible="False" RowDefinitions="Auto,*">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="0,4,0,12">
           <StackPanel Grid.Column="0" VerticalAlignment="Center">
@@ -521,7 +527,6 @@
           <TextBlock x:Name="PluginMetricsHeader" Text="插件指标" FontSize="11" FontWeight="SemiBold" Foreground="#9BA3AE" Margin="4,14,0,6" IsVisible="False"/>
           <StackPanel x:Name="PluginMetricsHost" Spacing="4"/>
           <TextBlock Text="功能" FontSize="11" FontWeight="SemiBold" Foreground="#9BA3AE" Margin="4,14,0,6"/>
-          <Button x:Name="BtnOverview" Classes="menu" Content="&#xE71D;  服务器总览" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowOverview"/>
           <Button x:Name="BtnConn" Classes="menu" Content="&#xE774;  连接设置" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowConn"/>
           <Button x:Name="BtnChain" Classes="menu" Content="&#xE71B;  世界链" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowChain"/>
           <Button x:Name="BtnConfig" Classes="menu" Content="&#xE713;  配置编辑" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowConfig"/>
