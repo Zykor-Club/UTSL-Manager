@@ -3359,7 +3359,11 @@ public partial class MainWindow : Window
         {
             if (PluginsView.IsVisible) { ShowFiles(); }                                // 文件管理页
             if (ConfigView.IsVisible) { OnShowConfig(null, new RoutedEventArgs()); }    // 配置编辑页
-            if (MapView.IsVisible) { ForgetMapView(); }                                 // 地图预览：绝不能留着上一台的地图
+            if (MapView.IsVisible)                                                      // 地图预览：清掉上一台、并按新档重新载入
+            {
+                ForgetMapView();
+                _ = ReloadMapForActiveServerAsync();
+            }
             if (ChainView.IsVisible) { RefreshChain(); }                               // 世界链：重取（async void）
             if (EditView.IsVisible)                                                     // 编辑器：标明"属于另一台"
             {
@@ -3367,6 +3371,35 @@ public partial class MainWindow : Window
             }
         }
         catch { }
+    }
+
+    /// <summary>
+    /// 切档后在地图页时自动重载：重取世界下拉 → 尽量保留同名选择（没有就挑拼接图/第一个）→ 渲染 → 适应窗口。
+    /// 用户报"停在地图页时切服务器不会自动加载"就是这条路原来缺了。
+    /// </summary>
+    private async Task ReloadMapForActiveServerAsync()
+    {
+        try
+        {
+            if (MapPicker is null) { return; }
+            string keep = lastMapPick.Length > 0 ? lastMapPick : (MapPicker.SelectedItem as string ?? "");
+            SetStatusLine("已切换服务器，正在重新读取世界列表…");
+            await RefreshMapPickerAsync();                       // 内部会重读该档的世界名与磁盘文件
+            var items = MapPicker.ItemsSource as IEnumerable<string>;
+            if (items is null || !items.Any())
+            {
+                SetStatusLine("该服务器没有可显示的世界文件");
+                return;
+            }
+            var list = items.ToList();
+            int idx = list.IndexOf(keep);
+            if (idx < 0) { idx = list.FindIndex(x => x.StartsWith("全部", StringComparison.Ordinal)); }
+            if (idx < 0) { idx = 0; }
+            MapPicker.SelectedIndex = idx;
+            await LoadMap();                                     // 渲染（LoadMap 自己会更新 lastMapPick）
+            FitMap();
+        }
+        catch (Exception ex) { SetStatusLine("切档后重载地图失败: " + ex.Message); }
     }
 
     /// <summary>丢弃地图预览里上一台服务器的图（图是"世界文件渲染结果"，跨台展示就是错的）。</summary>
