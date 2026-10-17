@@ -37,6 +37,37 @@
     <Style Selector="Button.menu.active:pointerover /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="#7AD4FF"/>
     </Style>
+    <!-- ★ 多服务器：卡片样式（用 Classes 而不是直接绑 Background，:pointerover 才覆盖得动） -->
+    <Style Selector="Border.srvcard">
+      <Setter Property="Background" Value="#171A20"/>
+      <Setter Property="BorderBrush" Value="#242A33"/>
+    </Style>
+    <Style Selector="Border.srvcard:pointerover">
+      <Setter Property="Background" Value="#1E232B"/>
+    </Style>
+    <Style Selector="Border.srvcard TextBlock.srvname">
+      <Setter Property="Foreground" Value="#D9D9DE"/>
+    </Style>
+    <Style Selector="Border.srvcard TextBlock.srvworlds">
+      <Setter Property="Foreground" Value="#9BA3AE"/>
+    </Style>
+    <Style Selector="Border.srvcard TextBlock.srvaddr">
+      <Setter Property="Foreground" Value="#848D9A"/>
+    </Style>
+    <!-- 激活档：琥珀色描边 + 更亮的名字（与右侧导航的蓝色高亮区分开，避免两个"当前"打架） -->
+    <Style Selector="Border.srvcard.active">
+      <Setter Property="Background" Value="#1B2430"/>
+      <Setter Property="BorderBrush" Value="#66CCFF"/>
+    </Style>
+    <Style Selector="Border.srvcard.active:pointerover">
+      <Setter Property="Background" Value="#213041"/>
+    </Style>
+    <Style Selector="Border.srvcard.active TextBlock.srvname">
+      <Setter Property="Foreground" Value="#F2F2F5"/>
+    </Style>
+    <Style Selector="Border.srvcard.active TextBlock.srvworlds">
+      <Setter Property="Foreground" Value="#66CCFF"/>
+    </Style>
   </Window.Styles>
   <Panel>
     <Grid ColumnDefinitions="244,*,208" RowDefinitions="40,*">
@@ -53,14 +84,45 @@
         </Grid>
       </Border>
 
-      <!-- 左侧栏：世界列表 -->
+      <!-- 左侧栏：服务器卡片（一台一张）+ 当前服务器的世界列表 -->
       <Border Grid.Row="1" Grid.Column="0" Background="#16161A" Padding="10,8,10,10">
         <DockPanel>
-          <StackPanel DockPanel.Dock="Top" Margin="8,0,8,12">
+          <StackPanel DockPanel.Dock="Top" Margin="8,0,8,10">
             <TextBlock Text="UTSLManager" FontSize="14" FontWeight="SemiBold" Foreground="#F2F2F5"/>
             <TextBlock Text="UnifierTSL 多世界管理器" FontSize="11" Foreground="#9BA3AE" Margin="0,3,0,0"/>
           </StackPanel>
           <TextBlock DockPanel.Dock="Bottom" x:Name="ChainText" Text="世界链: —" FontSize="11" Foreground="#6E6E76" Margin="8,8,8,2" TextWrapping="Wrap"/>
+          <!-- 服务器区：标题 + 新增 -->
+          <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="8,0,2,4">
+            <TextBlock Grid.Column="0" Text="服务器" FontSize="11" Foreground="#848D9A" VerticalAlignment="Center"/>
+            <Button Grid.Column="1" x:Name="BtnAddServer" Content="＋" FontSize="13" Padding="7,0" CornerRadius="6"
+                    Background="Transparent" Foreground="#66CCFF" VerticalAlignment="Center"
+                    ToolTip.Tip="新增一台服务器（复制当前档的连接设置）" Click="OnAddServer"/>
+          </Grid>
+          <ScrollViewer DockPanel.Dock="Top" MaxHeight="232" Margin="0,0,0,10" VerticalScrollBarVisibility="Auto">
+            <ItemsControl x:Name="ServerCards">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border Classes="srvcard" Margin="0,0,0,6" CornerRadius="10" Padding="10,7"
+                          BorderThickness="1" Tag="{Binding Id}" Cursor="Hand"
+                          PointerPressed="OnServerCardPressed" ToolTip.Tip="{Binding Tip}"
+                          Classes.active="{Binding IsActive}">
+                    <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
+                      <Border Grid.RowSpan="2" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
+                              Background="{Binding StatusBrush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                      <TextBlock Grid.Row="0" Grid.Column="1" Classes="srvname" Text="{Binding Name}"
+                                 FontSize="12.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Grid.Row="0" Grid.Column="2" Classes="srvworlds" Text="{Binding Worlds}"
+                                 FontSize="11" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                      <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Classes="srvaddr" Text="{Binding Address}"
+                                 FontSize="10.5" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+          <TextBlock DockPanel.Dock="Top" Text="世界" FontSize="11" Foreground="#848D9A" Margin="8,0,0,6"/>
           <ListBox x:Name="WorldList" Background="Transparent" BorderThickness="0" Padding="0">
             <ListBox.ItemTemplate>
               <DataTemplate>

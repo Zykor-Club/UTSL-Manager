@@ -8,6 +8,7 @@ using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
 using UTSLManager.Backends;
+using UTSLManager.Servers;
 using SkiaSharp;
 using UTSLManager.Maps;
 using UTSLManager.Plugins;
@@ -22,6 +23,33 @@ public sealed class WorldRow
     public IBrush DotBrush => Running ? new SolidColorBrush(Color.Parse("#32D74B")) : new SolidColorBrush(Color.Parse("#6B6B70"));
 }
 
+/// <summary>左侧「服务器」卡片的一行（一台服务器一张卡）。属性变更会通知界面就地更新，不重建集合。</summary>
+public sealed class ServerCardRow : System.ComponentModel.INotifyPropertyChanged
+{
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    private void Raise(string n) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(n));
+
+    public string Id { get; set; } = "";
+
+    private string name = "";
+    public string Name { get => name; set { if (name == value) { return; } name = value; Raise(nameof(Name)); } }
+
+    private string address = "";
+    public string Address { get => address; set { if (address == value) { return; } address = value; Raise(nameof(Address)); } }
+
+    private string worlds = "—";
+    public string Worlds { get => worlds; set { if (worlds == value) { return; } worlds = value; Raise(nameof(Worlds)); } }
+
+    private bool isActive;
+    public bool IsActive { get => isActive; set { if (isActive == value) { return; } isActive = value; Raise(nameof(IsActive)); } }
+
+    private IBrush statusBrush = new SolidColorBrush(Color.Parse("#6B6B70"));
+    public IBrush StatusBrush { get => statusBrush; set { if (ReferenceEquals(statusBrush, value)) { return; } statusBrush = value; Raise(nameof(StatusBrush)); } }
+
+    private string tip = "";
+    public string Tip { get => tip; set { if (tip == value) { return; } tip = value; Raise(nameof(Tip)); } }
+}
+
 /// <summary>终端里的一行（文字 + 颜色）。</summary>
 public sealed class TermLine
 {
@@ -31,102 +59,72 @@ public sealed class TermLine
 
 public partial class MainWindow : Window
 {
-    // ===== 连接配置（本地 connection.json，支持远端 UTSL）=====
-    private static string ConnHost = "127.0.0.1";
-    private static int ConnPort = 7878;
-    private static string Token = "";   // ★ 公开仓库不内置任何令牌：请在「连接设置」里填自己的 REST 令牌（会 DPAPI 加密后写入 connection.json）
-    private static string ManagerLanguage = "zh-CN";
-    private static string Rest => "http://" + ConnHost + ":" + ConnPort;
-    private static string ConnFile => Path.Combine(AppContext.BaseDirectory, "connection.json");
+    // ===== 连接配置：多服务器（servers.json；一档 = 一台服务器）=====
+    //   ★ 关键设计：下面这一整组"这台服务器"的字段全部是【转发到当前激活档】的属性。
+    //     全仓约 212 处引用这些名字（Token/UseRemote/LocalDir/FsRoot/SshHost…），改成属性后
+    //     读点一行都不用动，写点只剩 LoadConn / SaveConn / 连接设置页三处。
+    private static ServersConfig ServersCfg = new();
+    private static ServerProfile ActiveSrv = ServersConfig.NewLocal();
 
-    private static bool migratePlainToken;   // 需要在 LoadConn 末尾把明文 token 迁移成 DPAPI 加密
+    private static string ConnHost { get => ActiveSrv.Host; set => ActiveSrv.Host = value; }
+    private static int ConnPort { get => ActiveSrv.Port; set => ActiveSrv.Port = value; }
+    private static string Token { get => ActiveSrv.Token; set => ActiveSrv.Token = value; }   // ★ 明文只在内存，落盘一律 DPAPI 加密
+    private static string ManagerLanguage = "zh-CN";     // 界面语言是全局偏好，不属于任何一台服务器
+    private static string Rest => "http://" + ConnHost + ":" + ConnPort;
+    private static string ConnFile => Path.Combine(AppContext.BaseDirectory, "connection.json");   // 旧单档配置：迁移来源，原样保留（回滚用）
+    private static string ServersFile => Path.Combine(AppContext.BaseDirectory, "servers.json");
 
     private static void LoadConn()
     {
         try
         {
-            if (!File.Exists(ConnFile)) { return; }
-            if (JsonNode.Parse(File.ReadAllText(ConnFile)) is not JsonObject o) { return; }
-            ConnHost = o["host"]?.ToString() ?? ConnHost;
-            if (int.TryParse(o["port"]?.ToString(), out int p) && p > 0) { ConnPort = p; }
-            // ★ 优先读加密字段（DPAPI）；兼容旧的明文 token 字段
-            string encTok = o["tokenEnc"]?.ToString() ?? "";
-            if (encTok.Length > 0)
+            // servers.json 不存在 → 把旧 connection.json 迁移成第一条档并立刻落盘（迁移只发生一次；旧文件原样保留）
+            ServersCfg = ServersConfig.LoadOrMigrate(ServersFile, ConnFile);
+            // ★ 联调/验证用：--server <档id 或档名> 启动即激活那一台（与 --open-plugin 同一套 StartupArgs）
+            string want = StartupArg("--server");
+            if (want.Length > 0)
             {
-                string dec = DpapiUnprotect(encTok);
-                if (dec.Length > 0) { Token = dec; }
-                else if (o["token"] is not null) { Token = o["token"]?.ToString() ?? Token; }
+                var hit = ServersCfg.Find(want)
+                          ?? ServersCfg.Servers.FirstOrDefault(s => string.Equals(s.Name, want, StringComparison.OrdinalIgnoreCase));
+                if (hit is not null) { ServersCfg.ActiveId = hit.Id; }
             }
-            else
-            {
-                Token = o["token"]?.ToString() ?? Token;
-                migratePlainToken = true;   // ★ 明文 token：等所有字段都读完再迁移（早期版本在这里直接 SaveConn 会把还没读到的 ssh 段写成空 → 配置被清空）
-            }
-            ManagerLanguage = o["language"]?.ToString() ?? ManagerLanguage;
-            if (o["ssh"] is JsonObject s)
-            {
-                SshHost = s["host"]?.ToString() ?? SshHost;
-                if (int.TryParse(s["port"]?.ToString(), out int sp) && sp > 0) { SshPort = sp; }
-                SshUser = s["user"]?.ToString() ?? SshUser;
-                SshKey = s["key"]?.ToString() ?? SshKey;
-                RemoteDir = s["dir"]?.ToString() ?? RemoteDir;
-                RemoteDotnet = s["dotnet"]?.ToString() ?? RemoteDotnet;
-                RemoteLauncher = s["launcher"]?.ToString() ?? RemoteLauncher;
-                if (int.TryParse(s["restPort"]?.ToString(), out int rp) && rp > 0) { RemoteRestPort = rp; }
-                // 直连（面板）模式
-                DirectMode = s["direct"]?.GetValue<bool>() ?? false;
-                DirectHost = s["directHost"]?.ToString() ?? DirectHost;
-                if (int.TryParse(s["directPort"]?.ToString(), out int dp) && dp > 0) { DirectPort = dp; }
-                string encDT = s["directTokenEnc"]?.ToString() ?? "";
-                if (encDT.Length > 0) { string d = DpapiUnprotect(encDT); if (d.Length > 0) { DirectToken = d; } }
-                else { DirectToken = s["directToken"]?.ToString() ?? DirectToken; }
-            }
-            if (o["paths"] is JsonObject pj)
-            {
-                LocalDir = pj["localDir"]?.ToString() ?? LocalDir;
-                WatchdogEnabled = pj["watchdog"] is not { } wv || wv.GetValue<bool>();
-                ForceLocal = pj["forceLocal"]?.GetValue<bool>() ?? false;      // 「本机管理」开关（默认：填了 SSH 就走远端）
-                ShowWorldConsoles = pj["worldConsoles"]?.GetValue<bool>() ?? false;   // 世界控制台窗口：默认不显示（headless）
-                // （模板功能开关已移到扩展插件自己的配置里，宿主不再关心）
-            }
-            // ★ 全部字段读完后再迁移明文 token（避免把未加载的字段写成空）
-            if (migratePlainToken) { migratePlainToken = false; SaveConn(); }
+            ActiveSrv = ServersCfg.ActiveOrFirst();
+            ManagerLanguage = ServersCfg.Language.Length > 0 ? ServersCfg.Language : ManagerLanguage;
+            // ★ 明文令牌（旧 connection.json 或手改过的 servers.json）→ 立刻换成 DPAPI 密文落盘
+            if (ServersCfg.HadPlainToken) { SaveConn(); }
             ApplyConsoleMode();
         }
         catch { }
     }
 
+    /// <summary>取启动参数 <paramref name="name"/> 后面那个值（没有则空串）。</summary>
+    private static string StartupArg(string name)
+    {
+        string[] a = Program.StartupArgs;
+        for (int i = 0; i < a.Length - 1; i++)
+        {
+            if (string.Equals(a[i], name, StringComparison.OrdinalIgnoreCase)) { return a[i + 1]; }
+        }
+        return "";
+    }
 
+    /// <summary>
+    /// 落盘 = 写 servers.json（所有档 + 当前激活档）。连接设置页/模式开关/切档都走这里。
+    /// ★ 令牌一律 DPAPI 加密（同机其它用户读到也解不开）；加密不可用才退回明文并在终端提示。
+    /// </summary>
     private static void SaveConn()
     {
         try
         {
-            var o = new JsonObject
-            {
-                ["host"] = ConnHost, ["port"] = ConnPort, ["language"] = ManagerLanguage,
-                ["ssh"] = new JsonObject
-                {
-                    ["host"] = SshHost, ["port"] = SshPort, ["user"] = SshUser, ["key"] = SshKey,
-                    ["dir"] = RemoteDir, ["dotnet"] = RemoteDotnet, ["launcher"] = RemoteLauncher, ["restPort"] = RemoteRestPort,
-                    // 直连（面板）模式：令牌同样 DPAPI 加密后再落盘
-                    ["direct"] = DirectMode, ["directHost"] = DirectHost, ["directPort"] = DirectPort,
-                    ["directTokenEnc"] = DpapiProtect(DirectToken)
-                },
-                ["paths"] = new JsonObject { ["localDir"] = LocalDir, ["watchdog"] = WatchdogEnabled, ["forceLocal"] = ForceLocal, ["worldConsoles"] = ShowWorldConsoles }
-            };
-            // ★ 安全（对标 MCSManager CVE-2025-50691 的教训）：token 用 DPAPI 加密后再落盘，
-            //   同机其它用户即使读到 connection.json 也解不开；只有加密不可用时才退回明文。
-            string encTok = DpapiProtect(Token);
-            if (encTok.Length > 0) { o["tokenEnc"] = encTok; }
-            else { o["token"] = Token; }
-            File.WriteAllText(ConnFile, o.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            ServersCfg.Language = ManagerLanguage;
+            ServersCfg.ActiveId = ActiveSrv.Id;
+            ServersCfg.Save(ServersFile);
         }
         catch { }
     }
     // ===== 路径配置 =====
-    // 原来全是硬编码的 C:\Users\星梦\... ✗ —— 别人装了用不了。改为可在 connection.json 的 paths.localDir 里改，
-    // 默认取「当前用户桌面\utsl-deploy」。
-    private static string LocalDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "utsl-deploy");
+    // 每档自带 paths.localDir（默认「当前用户桌面\utsl-deploy」）；这里是转发到激活档的属性。
+    private static string LocalDir { get => ActiveSrv.LocalDir; set => ActiveSrv.LocalDir = value; }
     /// <summary>把"是否显示世界控制台窗口"同步给两条启动路径（本机直启 / agent 拉起）。</summary>
     private static void ApplyConsoleMode()
     {
@@ -140,41 +138,41 @@ public partial class MainWindow : Window
     /// 那个窗口每个世界一个、且关掉会被会话驱动重新拉起，而管理器本身已能看日志与发指令。
     /// 注意：模式在服务端【进程启动时】决定，改这个开关要重启服务端才生效。
     /// </summary>
-    private static bool ShowWorldConsoles;
+    private static bool ShowWorldConsoles { get => ActiveSrv.WorldConsoles; set => ActiveSrv.WorldConsoles = value; }
 
     /// <summary>掉线自启（看门狗）：服务端进程消失时自动拉起。默认开，可关并记住。</summary>
-    private static bool WatchdogEnabled = true;
+    private static bool WatchdogEnabled { get => ActiveSrv.Watchdog; set => ActiveSrv.Watchdog = value; }
     private static string Logs => Path.Combine(LocalDir, "logs");
-    private static int RemoteRestPort = 7878;    // 远端 TShock REST 端口（隧道另一端）
-    private static int TunnelPid;                 // 隧道 ssh 进程（避免重复启动）
+    private static int RemoteRestPort { get => ActiveSrv.RemoteRestPort; set => ActiveSrv.RemoteRestPort = value; }   // 远端 TShock REST 端口（隧道另一端）
+    private static int TunnelPid { get => ActiveSrv.TunnelPid; set => ActiveSrv.TunnelPid = value; }                  // 该档的隧道 ssh 进程（多档各一条，互不复用）
     private static bool TunnelAlive;              // ★ 状态灯：隧道可用
     private static bool RestAlive;                // ★ 状态灯：REST 接口可用
     private static bool lastDotTunnel, lastDotShell, lastDotRest, dotsInit;
 
     // ===== 远端（SSH）配置：connection.json 里的 "ssh" 段；填了就走远端启停/读日志 =====
-    private static string SshHost = "";
-    private static int SshPort = 22;
-    private static string SshUser = "Administrator";
-    private static string SshKey = "";
-    private static string RemoteDir = @"C:\utsl-deploy";
-    private static string RemoteDotnet = @"C:\dotnet\dotnet.exe";
-    private static string RemoteLauncher = @"C:\utsl-launch\utsl-launch.dll";
+    private static string SshHost { get => ActiveSrv.SshHost; set => ActiveSrv.SshHost = value; }
+    private static int SshPort { get => ActiveSrv.SshPort; set => ActiveSrv.SshPort = value; }
+    private static string SshUser { get => ActiveSrv.SshUser; set => ActiveSrv.SshUser = value; }
+    private static string SshKey { get => ActiveSrv.SshKey; set => ActiveSrv.SshKey = value; }
+    private static string RemoteDir { get => ActiveSrv.RemoteDir; set => ActiveSrv.RemoteDir = value; }
+    private static string RemoteDotnet { get => ActiveSrv.RemoteDotnet; set => ActiveSrv.RemoteDotnet = value; }
+    private static string RemoteLauncher { get => ActiveSrv.RemoteLauncher; set => ActiveSrv.RemoteLauncher = value; }
     // ===== 直连（面板）模式：agent 直接暴露在网络上、用令牌认证，不经 SSH 隧道 =====
     //   适合"我就想 MCSM 面板那样直连"的用户；安全由 agent 侧的令牌 + 绑定红线保证。
-    private static bool DirectMode;                 // 用户勾选
-    private static string DirectHost = "";          // 例：1.2.3.4 或域名
-    private static int DirectPort = 7879;
-    private static string DirectToken = "";
+    private static bool DirectMode { get => ActiveSrv.Direct; set => ActiveSrv.Direct = value; }             // 用户勾选
+    private static string DirectHost { get => ActiveSrv.DirectHost; set => ActiveSrv.DirectHost = value; }   // 例：1.2.3.4 或域名
+    private static int DirectPort { get => ActiveSrv.DirectPort; set => ActiveSrv.DirectPort = value; }
+    private static string DirectToken { get => ActiveSrv.DirectToken; set => ActiveSrv.DirectToken = value; }
     /// <summary>直连是否真的可用（勾了 + 地址与令牌都齐）。</summary>
-    private static bool DirectReady => DirectMode && DirectHost.Length > 0 && DirectToken.Length > 0;
+    private static bool DirectReady => ActiveSrv.DirectReady;
 
-    private static bool HasSsh => SshHost.Length > 0 && SshKey.Length > 0;
+    private static bool HasSsh => ActiveSrv.HasSsh;
     /// <summary>连接设置页的「本机管理 / 远端管理」开关：勾到本机时即便填了 SSH 也按本机跑（不丢配置）。</summary>
-    private static bool ForceLocal;
+    private static bool ForceLocal { get => ActiveSrv.ForceLocal; set => ActiveSrv.ForceLocal = value; }
     // ★ 注意：管理器是经 SSH 隧道连远端的，ConnHost 就是 127.0.0.1 —— 所以不能用 TargetIsLocal 判定，
     //   只认「connection.json 里配了 ssh 段 + 没被开关强制成本机」。
     //   直连模式同样算"远端"（进程/文件都走 agent，而不是本机）
-    private static bool UseRemote => (HasSsh || DirectReady) && !ForceLocal;
+    private static bool UseRemote => ActiveSrv.IsRemote;
 
     /// <summary>
     /// 管理器自己的 HTTP 客户端：对 127.0.0.1（本机 REST / SSH 隧道 / agent）【必须禁用代理】。
@@ -187,6 +185,8 @@ public partial class MainWindow : Window
 
     private static readonly HttpClient Http = NewLocalHttp(TimeSpan.FromSeconds(15));
     private readonly ObservableCollection<WorldRow> rows = [];
+    private readonly ObservableCollection<ServerCardRow> srvCards = [];   // 左侧服务器卡片（一台一张）
+    private readonly List<ServerCardRow> srvRows = [];
     private readonly ObservableCollection<TermLine> term = [];
     private string lastLogFile = "";
     private long logPos;
@@ -216,8 +216,15 @@ public partial class MainWindow : Window
         LoadConn();
         WarmupRemote();   // ★ 启动即后台预热常驻通道与常用配置，第一次点击就秒开   // ★ 必须在任何 REST 调用之前（TSManager 也是先读配置再启动 ✓）
         WorldList.ItemsSource = rows;
+        ServerCards.ItemsSource = srvCards;
         TermLines.ItemsSource = term;
         Term("UTSLManager 终端已就绪 —— 上方是服务端日志流，下方可直接输入指令", "#8E8E93");
+        if (ServersCfg.Migrated)
+        {
+            Term($"已把旧的 connection.json 迁移成 servers.json（{ServersCfg.Servers.Count} 台服务器；旧文件原样保留，回滚时拷回即可）", "#30D158");
+        }
+        UpdateServerCards();
+        Term($"当前服务器：{ActiveSrv.Name}（{ActiveSrv.AddressText}）· {(UseRemote ? "远端" : "本机")} · 左侧卡片可切换", "#8E8E93");
         rows.Add(new WorldRow { Name = "全部世界", Size = "", Running = true });
         WorldList.SelectedIndex = 0;
         WorldList.SelectionChanged += (_, _) =>
@@ -267,6 +274,7 @@ public partial class MainWindow : Window
         //   改成失败退避（失败后 10 秒再试），这样服务端恢复后自动回到实时指标。
         metricsTimer.Tick += (_, _) =>
         {
+            if (switching) { return; }                // ★ 切档期间一律不采样（否则旧档的数值会写进新档的图）
             if (!UseRemote) { return; }
             if (Environment.TickCount64 < MetricsNextTryMs) { return; }
             RefreshMetricsAsync();
@@ -276,6 +284,7 @@ public partial class MainWindow : Window
         var listTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         listTimer.Tick += async (_, _) =>
         {
+            if (switching) { return; }
             UpdateHealthDots();                       // 状态灯永远刷新（本地判断，零成本）
             if (!IsActive) { return; }                // ★ 自适应节流：窗口不在前台就跳过轮询与采样
             await RefreshWorldsAsync();
@@ -284,13 +293,25 @@ public partial class MainWindow : Window
         listTimer.Start();
 
         var logTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
-        logTimer.Tick += (_, _) => { if (!IsActive) { return; } RefreshLog(); };   // ★ 失焦不刷日志
+        logTimer.Tick += (_, _) => { if (switching || !IsActive) { return; } RefreshLog(); };   // ★ 失焦不刷日志；切档期间不碰日志游标
         logTimer.Start();
             // 远端模式：每 20 秒确保 SSH 隧道还活着（断了自动重建）
             var tunnelTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
-            tunnelTimer.Tick += (_, _) => { if (HasSsh) { _ = Task.Run(() => EnsureTunnel()); } _ = Task.Run(() => TickAgentAsync()); };   // ★ agent 探活与本机/远端无关（本机 7879 / 远端走隧道 17879）   // 自检修复：隧道探测也放后台
+            tunnelTimer.Tick += (_, _) => { if (switching) { return; } if (HasSsh) { _ = Task.Run(() => EnsureTunnel()); } _ = Task.Run(() => TickAgentAsync()); };   // ★ agent 探活与本机/远端无关（本机 7879 / 远端走隧道 17879）   // 自检修复：隧道探测也放后台
             tunnelTimer.Start();
         _ = Task.Run(() => TickAgentAsync());     // 启动即探一次 agent（否则要等 20 秒）
+        // ★ 联调钩子：--switch-test <档id|档名> → 启动 6 秒后自动切过去并写 switchcheck.txt（真机验证用）
+        {
+            string st = StartupArg("--switch-test");
+            if (st.Length > 0)
+            {
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(6000);
+                    Dispatcher.UIThread.Post(() => _ = RunSwitchTestAsync(st));
+                });
+            }
+        }
 
         // ★ 150% DPI 下窗口初始位置/尺寸会算错，导致右侧跑到屏幕外（控制区看不见）
         //   这里按屏幕工作区强制钳制并居中。
@@ -377,6 +398,8 @@ public partial class MainWindow : Window
             }
             int on = rows.Count(r => r.Running) - 1;
             ConnState.Text = $"{on} 世界";
+            ActiveSrv.Status = 1; ActiveSrv.WorldCount = on;      // ★ 卡片上的状态点/世界数就来自这里
+            UpdateServerCards();
             if (SrvDot is not null) { SrvDot.Background = GetBrush("#32D74B"); }   // ★ 用画刷缓存：这条每 2 秒跑一次，原来每轮 new 一个
             serverWasUp = true;
             downTicks = 0;
@@ -391,6 +414,8 @@ public partial class MainWindow : Window
             // 直连模式没有 ssh 快照，存活判据用 agent 的 /metrics；否则远端看快照、本机看进程
             bool aliveNow = DirectReady ? AgentServerRunning : UseRemote ? SnapshotProcs > 0 : ServerRunning;
             ConnState.Text = aliveNow ? "REST 无响应" : "未运行";
+            ActiveSrv.Status = aliveNow ? 2 : 3;
+            UpdateServerCards();
             if (SrvDot is not null) { SrvDot.Background = new SolidColorBrush(Color.Parse(aliveNow ? "#FEBC2E" : "#6B6B70")); }
             // 看门狗：本来在跑 → 现在没了 → 自动拉起
             downTicks++;
@@ -1036,6 +1061,21 @@ public partial class MainWindow : Window
                 : (true, $"本机模式 {ConnHost}:{ConnPort} 目录 {LocalDir}");
         });
 
+        // 1.5) 多服务器配置（servers.json）：档数 / 激活档 / 每档端口 / 令牌是不是密文
+        Run("多服务器配置", () =>
+        {
+            LoadConn();
+            int n = ServersCfg.Servers.Count;
+            bool activeOk = ServersCfg.Find(ActiveSrv.Id) is not null;
+            string txt = File.Exists(ServersFile) ? File.ReadAllText(ServersFile) : "";
+            bool noPlain = txt.Length > 0 && !txt.Contains("\"token\"");
+            bool encOk = txt.Contains("tokenEnc");
+            bool portsOk = ServersCfg.Servers.Select(s => s.Port).Distinct().Count() == n
+                        && ServersCfg.Servers.Select(s => s.AgentPort).Distinct().Count() == n;
+            return (activeOk && portsOk && noPlain,
+                $"{n} 档 激活「{ActiveSrv.Name}」({ActiveSrv.AddressText}) 端口 REST {ActiveSrv.Port}/agent {ActiveSrv.AgentPort} · 档间端口唯一={portsOk} · 无明文令牌={noPlain} · 有 tokenEnc={encOk}");
+        });
+
         // 2) 隧道端口
         Run("隧道端口", () =>
         {
@@ -1255,7 +1295,7 @@ public partial class MainWindow : Window
     //   由计划任务 UTSLAgent 常驻，只监听 127.0.0.1:7879。传输走【已有的那条常驻 ssh 隧道】
     //   多转发一个端口 —— 能力像 MCSManager 的 daemon，但公网暴露面仍然是零。
     //   有 agent：日志改推送（实测 154 ms）、指标可 2 秒级；没有：自动回落到原有 ssh 路径。
-    private const int AgentLocalPort = 17879;    // 本机隧道入口
+    private static int AgentLocalPort => ActiveSrv.AgentPort;    // 该档的 agent 隧道本地入口（原来硬编码 17879；多档不分开就会连到同一台 agent → 串台）
     private const int AgentRemotePort = 7879;    // 远端 agent 端口（只绑回环）
     private static bool AgentAlive;
     // agent 指标（远端没装 MetricsChannel 插件时的 2 秒级来源；网络是累计字节，速率由管理器差分）
@@ -1501,32 +1541,100 @@ public partial class MainWindow : Window
             agentLogCts = null;
         }
     }
-    private static void EnsureTunnel()
+    /// <summary>
+    /// 确保某档的 SSH 隧道在跑（默认=当前激活档）。
+    /// ★ 多档后这里必须显式带档、并且串行：切档时隧道定时器、合并快照(RefreshSnapshot) 都会调进来，
+    ///   而原来只有一个静态 TunnelPid + 隐式读 ConnPort —— 实测出现"切换中有人按旧档端口起了另一条隧道"，
+    ///   结果新档 REST 端口没人监听、世界列表空。现在：锁 + 冷却 + 切档期间不插队 + 端口取自传入的那档。
+    /// </summary>
+    private static void EnsureTunnel(ServerProfile? only = null)
     {
-        if (!HasSsh) { return; }
+        ServerProfile p = only ?? ActiveSrv;
+        if (only is null && switching) { return; }      // 切档进行中：只允许切档自己（显式传档）来建隧道
+        if (!p.HasSsh) { return; }
+        lock (TunnelGate)
+        {
+            try
+            {
+                var t = new System.Net.Sockets.TcpClient();
+                bool alive = false;
+                try { alive = t.ConnectAsync("127.0.0.1", p.Port).Wait(800); } catch { alive = false; }
+                t.Close();
+                if (ReferenceEquals(p, ActiveSrv)) { TunnelAlive = alive; }
+                // ★ 端口在听但不知道是谁起的（管理器重启后旧 ssh 仍在）→ 认领它，否则切档时杀不掉、会一直占着端口
+                if (alive) { if (p.TunnelPid <= 0) { p.TunnelPid = FindTunnelPidByPort(p.Port); } return; }
+                if (p.TunnelPid > 0)
+                {
+                    try { System.Diagnostics.Process.GetProcessById(p.TunnelPid); return; } catch { p.TunnelPid = 0; }
+                }
+                // 冷却：ssh 从"进程起来"到"端口在听"有几百毫秒，这期间每 20 秒的定时器 + 快照刷新会各起一条 → 堆积
+                long now = Environment.TickCount64;
+                if (p.LastSpawnMs > 0 && now - p.LastSpawnMs < 10000) { return; }
+                p.LastSpawnMs = now;
+                var psi = new System.Diagnostics.ProcessStartInfo("ssh")
+                {
+                    UseShellExecute = false, CreateNoWindow = true,
+                    Arguments = "-i \"" + p.SshKey + "\" -p " + p.SshPort + " -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -N " +
+                                // ★ 一个 ssh 承载两条转发：REST + agent
+                                "-L " + p.Port + ":127.0.0.1:" + p.RemoteRestPort + " -L " + p.AgentPort + ":127.0.0.1:" + AgentRemotePort + " " + p.SshUser + "@" + p.SshHost
+                };
+                var proc = System.Diagnostics.Process.Start(psi);
+                p.TunnelPid = proc?.Id ?? 0;
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>等本地端口进入 listening（切档后建隧道用）。超时返回 false。</summary>
+    private static async Task<bool> WaitPortAsync(int port, int timeoutMs)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            try
+            {
+                using var c = new System.Net.Sockets.TcpClient();
+                using var cts = new CancellationTokenSource(400);
+                await c.ConnectAsync("127.0.0.1", port, cts.Token);
+                return true;
+            }
+            catch { }
+            await Task.Delay(120);
+        }
+        return false;
+    }
+
+    private static readonly object TunnelGate = new();   // 隧道建/杀串行化（多线程都会调进来）
+
+    /// <summary>找出"正在监听某个本地端口"的 ssh 进程（隧道认领 / 切档清理用）。找不到返回 0。</summary>
+    private static int FindTunnelPidByPort(int port)
+    {
         try
         {
-            var t = new System.Net.Sockets.TcpClient();
-            bool alive = false;
-            try { alive = t.ConnectAsync("127.0.0.1", ConnPort).Wait(800); } catch { alive = false; }
-            t.Close();
-            TunnelAlive = alive;
-            if (alive) { return; }
-            if (TunnelPid > 0)
+            var psi = new System.Diagnostics.ProcessStartInfo("netstat", "-ano -p tcp")
             {
-                try { System.Diagnostics.Process.GetProcessById(TunnelPid); return; } catch { TunnelPid = 0; }
-            }
-            var psi = new System.Diagnostics.ProcessStartInfo("ssh")
-            {
-                UseShellExecute = false, CreateNoWindow = true,
-                Arguments = "-i \"" + SshKey + "\" -p " + SshPort + " -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -N " +
-                            // ★ 一个 ssh 承载两条转发：REST（原有）+ agent（云管 P0）
-                            "-L " + ConnPort + ":127.0.0.1:" + RemoteRestPort + " -L " + AgentLocalPort + ":127.0.0.1:" + AgentRemotePort + " " + SshUser + "@" + SshHost
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true,
             };
-            var proc = System.Diagnostics.Process.Start(psi);
-            TunnelPid = proc?.Id ?? 0;
+            using var p = System.Diagnostics.Process.Start(psi);
+            if (p is null) { return 0; }
+            string outp = p.StandardOutput.ReadToEnd();
+            p.WaitForExit(3000);
+            foreach (string line in outp.Split('\n'))
+            {
+                string[] t = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (t.Length < 5 || t[3] != "LISTENING") { continue; }
+                if (!t[1].EndsWith(":" + port, StringComparison.Ordinal)) { continue; }
+                if (!int.TryParse(t[4], out int pid)) { continue; }
+                try
+                {
+                    using var pr = System.Diagnostics.Process.GetProcessById(pid);
+                    if (pr.ProcessName.StartsWith("ssh", StringComparison.OrdinalIgnoreCase)) { return pid; }
+                }
+                catch { }
+            }
         }
         catch { }
+        return 0;
     }
 
     /// <summary>把 PowerShell 脚本编码后经 ssh 执行（远端命令一律走 EncodedCommand，避免引号/转义问题）。</summary>
@@ -1816,8 +1924,15 @@ public partial class MainWindow : Window
     /// <summary>地图预览：显示 GenerateMap 出的最新一张图片。</summary>
     // ===== 实时监控（CPU / 内存 / 网络，自绘折线）=====
     private const int MaxSamples = 60;
-    private readonly List<double> cpuHist = [], memHist = [], upHist = [], downHist = [];
-    private readonly List<DateTime> timeHist = [];
+    // ★ 指标历史按服务器分开存：切档时把当前这组存回字典、把目标档那组换上来（图表会立刻显示那台自己的历史）
+    private sealed class MetricHistory
+    {
+        public List<double> Cpu = [], Mem = [], Up = [], Down = [];
+        public List<DateTime> Times = [];
+    }
+    private readonly Dictionary<string, MetricHistory> histByServer = [];
+    private List<double> cpuHist = [], memHist = [], upHist = [], downHist = [];
+    private List<DateTime> timeHist = [];
     private DateTime lastSample = DateTime.Now;
     private TimeSpan lastCpuTime = TimeSpan.Zero;
     private long lastBytesSent, lastBytesRecv;
@@ -2259,7 +2374,9 @@ public partial class MainWindow : Window
             var opts = new PluginHostOptions
             {
                 PluginDir = pluginDir,
-                DataRoot = Path.Combine(AppContext.BaseDirectory, "plugin-data"),
+                // ★ 插件数据按档隔离：新档用 plugin-data\<档id>\，迁移来的第一档继续用旧的全局 plugin-data
+                //   （否则 LuaTaskScheduler 的"上次执行时间"会跨服务器混；迁移档搬目录又会让老配置丢失）
+                DataRoot = ActiveSrv.PluginDataRoot(AppContext.BaseDirectory),
                 DeployRoot = () => DeployRoot,
                 RestBase = () => Rest,
                 Token = () => Token,
@@ -2793,6 +2910,128 @@ public partial class MainWindow : Window
         try { pluginHost?.RaiseServerStateChanged(up); } catch { }
     }
 
+
+    // ===== 多服务器：左侧卡片 =====
+    /// <summary>把服务器卡片刷新成当前真实状态（档数变了才重建，其余就地改属性）。</summary>
+    private void UpdateServerCards()
+    {
+        try
+        {
+            if (ServerCards is null) { return; }
+            var list = ServersCfg.Servers;
+            if (srvRows.Count != list.Count)
+            {
+                srvRows.Clear();
+                srvCards.Clear();
+                foreach (var p in list) { var r = new ServerCardRow { Id = p.Id }; srvRows.Add(r); srvCards.Add(r); }
+            }
+            for (int i = 0; i < list.Count && i < srvRows.Count; i++)
+            {
+                ServerProfile p = list[i];
+                ServerCardRow r = srvRows[i];
+                bool active = p.Id == ActiveSrv.Id;
+                r.Id = p.Id;
+                r.Name = p.Name.Length > 0 ? p.Name : p.Id;
+                r.Address = p.AddressText + (p.DirectReady ? " · 直连" : p.IsRemote ? " · SSH" : " · 本机");
+                r.Worlds = p.WorldCount >= 0 ? p.WorldCount + " 世界" : "—";
+                r.StatusBrush = GetBrush(p.Status switch { 1 => "#32D74B", 2 => "#FEBC2E", _ => "#6B6B70" });
+                r.IsActive = active;
+                r.Tip = (active ? "当前激活 · " : "点击切换 · ") + (p.DirectReady ? "直连 agent" : p.IsRemote ? "SSH " + p.SshUser + "@" + p.SshHost + ":" + p.SshPort : "本机目录 " + p.LocalDir);
+            }
+        }
+        catch { }
+    }
+
+    /// <summary>点卡片 = 切到那台服务器；右键 = 重命名/复制/删除。</summary>
+    private void OnServerCardPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e)
+    {
+        if (sender is not Border card || card.Tag is not string id) { return; }
+        var pt = e.GetCurrentPoint(card);
+        if (pt.Properties.IsRightButtonPressed)
+        {
+            var cm = new ContextMenu();
+            var miRename = new MenuItem { Header = "重命名 / 改连接…" };
+            miRename.Click += (_, _) => { ShowView("conn"); };
+            var miCopy = new MenuItem { Header = "复制为新服务器" };
+            miCopy.Click += (_, _) => AddServerCopy(id);
+            var miDel = new MenuItem { Header = "删除此服务器" };
+            miDel.Click += (_, _) => DeleteServer(id);
+            cm.Items.Add(miRename);
+            cm.Items.Add(miCopy);
+            cm.Items.Add(new Separator());
+            cm.Items.Add(miDel);
+            cm.Open(card);
+            e.Handled = true;
+            return;
+        }
+        e.Handled = true;
+        _ = SwitchServerAsync(id);
+    }
+
+    private void OnAddServer(object? sender, RoutedEventArgs e) => AddServerCopy(ActiveSrv.Id);
+
+    /// <summary>新增一台：复制当前档的连接设置（ssh/路径/令牌全带走），端口自动分一对空闲的。</summary>
+    private void AddServerCopy(string fromId)
+    {
+        try
+        {
+            var src = ServersCfg.Find(fromId) ?? ActiveSrv;
+            var (rest, agent) = AllocTunnelPorts();
+            var p = ServersConfig.Clone(src, "服务器 " + (ServersCfg.Servers.Count + 1), rest, agent);
+            ServersCfg.Servers.Add(p);
+            SaveConn();
+            UpdateServerCards();
+            ERR($"已新增服务器「{p.Name}」· 隧道端口 REST {rest} / agent {agent} —— 正在切换过去（改地址请到「连接设置」）");
+            _ = SwitchServerAsync(p.Id);
+        }
+        catch (Exception ex) { ERR("新增服务器失败: " + ex.Message); }
+    }
+
+    /// <summary>删除一台（不能删激活档、不能删最后一台 —— 避免"手里一台都不剩"）。</summary>
+    private void DeleteServer(string id)
+    {
+        try
+        {
+            if (ServersCfg.Servers.Count <= 1) { ERR("只剩一台服务器，不能删除"); return; }
+            if (id == ActiveSrv.Id) { ERR("不能删除当前激活的服务器 —— 先切到别的服务器再删"); return; }
+            var p = ServersCfg.Find(id);
+            if (p is null) { return; }
+            KillTunnel(p);
+            histByServer.Remove(p.Id);
+            ServersCfg.Servers.Remove(p);
+            SaveConn();
+            UpdateServerCards();
+            ERR($"已删除服务器「{p.Name}」（它的 plugin-data\\{p.SafeId} 目录保留，需要的话手动删）");
+        }
+        catch (Exception ex) { ERR("删除服务器失败: " + ex.Message); }
+    }
+
+    /// <summary>给新档分一对没被占用、也没被别的档用的本地隧道端口（REST/agent 相差 1）。</summary>
+    private static (int rest, int agent) AllocTunnelPorts()
+    {
+        var used = new HashSet<int>();
+        foreach (var s in ServersCfg.Servers) { used.Add(s.Port); used.Add(s.AgentPort); }
+        for (int rest = 17880; rest <= 17976; rest += 2)
+        {
+            int agent = rest + 1;
+            if (used.Contains(rest) || used.Contains(agent)) { continue; }
+            if (PortFree(rest) && PortFree(agent)) { return (rest, agent); }
+        }
+        return (17880, 17881);
+    }
+
+    private static bool PortFree(int port)
+    {
+        try
+        {
+            var l = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, port);
+            l.Start();
+            l.Stop();
+            return true;
+        }
+        catch { return false; }
+    }
+
     // ===== 维护（整链重置/备份/恢复 三合一）=====
     private void OnShowMaint(object? sender, RoutedEventArgs e) => ShowView("maint");
 
@@ -2805,7 +3044,18 @@ public partial class MainWindow : Window
     /// </summary>
     private void AfterModeSwitch()
     {
-        // 1) 与"哪台机器"相关的游标 / 缓存对象
+        ResetConnScopedState();
+        // agent 立刻重探：它会按新的 base 重启 日志/stdout/指标 三条流（原来是等最多 20 秒的定时器）
+        _ = Task.Run(() => TickAgentAsync());
+        _ = RefreshWorldsAsync();
+        RefreshLog();
+        _ = Task.Run(() => RefreshSnapshot());
+        RefreshActiveViews();
+    }
+
+    /// <summary>只重置"与哪台机器相关"的游标/缓存/基线，不触发重取。模式切换与服务器切换共用。</summary>
+    private void ResetConnScopedState()
+    {
         lastLogFile = ""; lastRemoteLine = ""; logPos = 0; lastRemoteLogMs = 0;
         fileCwd = FsRoot;                        // 文件页回到新后端的根
         lastWorldRel = "";                       // 地图：下次重新解析、导出目标失效
@@ -2813,14 +3063,13 @@ public partial class MainWindow : Window
         SnapPrevAtMs = 0; SnapshotAtMs = 0; SnapPrevCpuMs = -1; SnapshotProcs = 0;
         MetricsAtMs = 0; AgentMetricsAtMs = 0; AgentSentBytes = -1; AgentRecvBytes = -1;
         RestAlive = false; dotsInit = false;     // 状态灯重判
+        lastServerUp = null;                     // 让插件重新收到一次"上线"事件（新档是另一台服务端）
         if (_fileBackend is CachedFileBackend c) { c.InvalidateCache(); }
-        // 2) agent 立刻重探：它会按新的 base 重启 日志/stdout/指标 三条流（原来是等最多 20 秒的定时器）
-        _ = Task.Run(() => TickAgentAsync());
-        // 3) 重取共享数据
-        _ = RefreshWorldsAsync();
-        RefreshLog();
-        _ = Task.Run(() => RefreshSnapshot());
-        // 4) 当前正在看的页面就地重刷（否则得手动切走再切回来）
+    }
+
+    /// <summary>当前正在看的页面就地重刷（否则得手动切走再切回来）。</summary>
+    private void RefreshActiveViews()
+    {
         try
         {
             if (PluginsView.IsVisible) { ShowFiles(); }                      // 文件管理页
@@ -2828,6 +3077,193 @@ public partial class MainWindow : Window
         }
         catch { }
     }
+
+    // ===== 多服务器：切换激活档 =====
+    /// <summary>切档门闩：4 个定时器 + 3 条流在切换期间一律让路（否则旧档的采样/日志会写进新档）。</summary>
+    private static bool switching;
+
+    private void SaveHistFor(string id)
+        => histByServer[id] = new MetricHistory { Cpu = cpuHist, Mem = memHist, Up = upHist, Down = downHist, Times = timeHist };
+
+    private void LoadHistFor(string id)
+    {
+        if (histByServer.TryGetValue(id, out var h))
+        {
+            cpuHist = h.Cpu; memHist = h.Mem; upHist = h.Up; downHist = h.Down; timeHist = h.Times;
+        }
+        else
+        {
+            cpuHist = []; memHist = []; upHist = []; downHist = []; timeHist = [];
+        }
+        // 采样基线也要重置：否则第一拍会把"上一台的累计值"当成本台的差分起点（CPU/网络会出假尖峰）
+        samplesSeen = 0; lastSample = DateTime.Now; lastCpuTime = TimeSpan.Zero;
+        lastBytesSeen = false; lastBytesSent = 0; lastBytesRecv = 0; snapPushedAt = 0;
+    }
+
+    /// <summary>停掉某档的 ssh 隧道进程（本机 ssh 客户端，不是远端服务端；远端服务端一律不动）。</summary>
+    private static void KillTunnel(ServerProfile p)
+    {
+        int pid = p.TunnelPid;
+        p.TunnelPid = 0;
+        if (pid <= 0) { pid = FindTunnelPidByPort(p.Port); }   // 认领不到 pid 时按端口兜底（只杀 ssh 客户端）
+        p.LastSpawnMs = 0;                                      // 允许立刻重建（否则冷却期会让切回来的那台起不来）
+        if (pid <= 0) { return; }
+        try { using var pr = System.Diagnostics.Process.GetProcessById(pid); pr.Kill(); } catch { }
+    }
+
+    /// <summary>
+    /// 切到另一台服务器。顺序是硬要求：先停旧流（agent 三条 + 日志游标）→ 停旧隧道 → 换档 →
+    /// 重置缓存与指标历史 → 插件按新档重建（DataRoot 跟着档走）→ 起新隧道 → 重取世界/日志。
+    /// </summary>
+    private async Task SwitchServerAsync(string id)
+    {
+        if (switching) { return; }
+        var target = ServersCfg.Find(id);
+        if (target is null) { ERR("切换失败：servers.json 里没有 id=" + id); return; }
+        if (ReferenceEquals(target, ActiveSrv)) { UpdateServerCards(); return; }
+
+        switching = true;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        string fromName = ActiveSrv.Name;
+        try
+        {
+            // ① 记住旧档：指标历史 + 世界数
+            SaveHistFor(ActiveSrv.Id);
+            if (rows.Count > 1) { ActiveSrv.WorldCount = rows.Count - 1; }
+
+            // ② 先停旧流（顺序不能反：旧档的 SSE 一旦先连上新 base，日志就串台了）
+            try { agentLogCts?.Cancel(); } catch { }
+            agentLogCts = null;
+            AgentAlive = false; AgentBaseUsed = ""; AgentProbeErr = "";
+            AgentMetricsAtMs = 0; AgentSentBytes = -1; AgentRecvBytes = -1;
+            lastAgentSent = -1; lastAgentRecv = -1;
+            AgentClient.Alive = false; AgentClient.Base = ""; AgentClient.ResetRoot();
+            lastLogFile = ""; lastRemoteLine = ""; logPos = 0; lastRemoteLogMs = 0;
+            LastSshError = ""; TunnelAlive = false;
+
+            // ③ 停旧隧道（每档一条 ssh；留下会累积进程，也会占着本地端口）
+            KillTunnel(ActiveSrv);
+
+            // ④ 换档并落盘（active 立刻持久化：下次启动还是这台）
+            ServersCfg.ActiveId = target.Id;
+            ActiveSrv = target;
+            SaveConn();
+
+            // ⑤ 与"哪台机器"相关的一切重置 + 指标历史换档 + 插件数据目录换档
+            ResetConnScopedState();
+            rows.Clear();                                   // 立刻清掉上一台的世界，别等下一轮刷新（避免点错世界）
+            rows.Add(new WorldRow { Name = "全部世界", Size = "", Running = true });
+            WorldList.SelectedIndex = 0;
+            UpdateTarget();
+            ConnState.Text = "刷新中…";
+            if (ChainText is not null) { ChainText.Text = "世界链: —"; }
+            LoadHistFor(target.Id);
+            // 插件数据目录先换好；真正 Reload 放到世界列表刷新之后（否则插件 OnLoad 时 Worlds 是空的）
+            try
+            {
+                if (pluginHost is not null) { pluginHost.Options.DataRoot = ActiveSrv.PluginDataRoot(AppContext.BaseDirectory); }
+            }
+            catch (Exception ex) { ERR("切档换插件数据目录失败: " + ex.Message); }
+            ApplyConsoleMode();
+
+            // ⑥ 起新档的隧道与流（★ 显式传目标档：切档期间别的线程不允许建隧道）
+            if (target.IsRemote)
+            {
+                EnsureTunnel(target);
+                bool restOk = await WaitPortAsync(target.Port, 5000);
+                if (target.HasSsh) { await WaitPortAsync(target.AgentPort, 3000); }
+                if (!restOk) { ERR($"警告：隧道 REST 端口 {target.Port} 5 秒内没就绪（世界列表可能暂时为空，20 秒定时器会自动重试）"); }
+            }
+            await TickAgentAsync();
+            await RefreshWorldsAsync();
+            // ⑦ 世界列表到位后再重载插件（DataRoot 已换成新档的；旧插件 ALC 会被回收）
+            _ = Task.Run(() => { try { pluginHost?.Reload(); } catch (Exception ex) { Dispatcher.UIThread.Post(() => ERR("切档重载插件失败: " + ex.Message)); } });
+            RefreshLog();
+            _ = Task.Run(() => RefreshSnapshot());
+            RefreshActiveViews();
+            UpdateServerCards();
+            RedrawChartsNow();
+            sw.Stop();
+            ERR($"已切换服务器：{fromName} → 「{target.Name}」（{target.AddressText}）· {(UseRemote ? "远端" : "本机")} · 用时 {sw.ElapsedMilliseconds} ms");
+        }
+        catch (Exception ex) { ERR("切换服务器失败: " + ex.Message); }
+        finally { switching = false; }
+    }
+
+
+    // ===== 联调钩子：--switch-test <档id|档名> =====
+    //   真机验证"切档"这条路径用的（与 --selfcheck / --open-plugin 同一类钩子，不是产品功能）：
+    //   启动 6 秒后自动切到目标档，再把"端口/agent 归属/世界数/流状态"写成 switchcheck.txt。
+    private async Task RunSwitchTestAsync(string target)
+    {
+        var sb = new System.Text.StringBuilder();
+        string fromId = ActiveSrv.Id, fromName = ActiveSrv.Name;
+        int fromRest = ConnPort, fromAgent = AgentLocalPort;
+        sb.AppendLine("UTSLManager 切档自检（--switch-test）  " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        sb.AppendLine(new string('-', 72));
+        sb.AppendLine($"切换前：{fromName}（{fromId}）· 隧道 REST {fromRest} / agent {fromAgent} · 世界 {Math.Max(0, rows.Count - 1)} · base {AgentBaseUsed}");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await SwitchServerAsync(target);
+        sw.Stop();
+        await Task.Delay(2500);
+        sb.AppendLine($"切换后：{ActiveSrv.Name}（{ActiveSrv.Id}）· 隧道 REST {ConnPort} / agent {AgentLocalPort} · 世界 {Math.Max(0, rows.Count - 1)} · base {AgentBaseUsed}");
+        sb.AppendLine($"切档耗时：{sw.ElapsedMilliseconds} ms");
+        sb.AppendLine(new string('-', 72));
+        sb.AppendLine($"本机/远端判定：{(UseRemote ? "远端" : "本机")} · RemoteDir={RemoteDir} · LocalDir={LocalDir}");
+        sb.AppendLine($"AgentAlive={AgentAlive} · AgentBaseUsed={AgentBaseUsed} · AgentProbeErr={(AgentProbeErr.Length == 0 ? "(无)" : AgentProbeErr)}");
+        sb.AppendLine($"旧档 agent 端口 {fromAgent} 仍在监听：{PortListening(fromAgent)}（期望 false）");
+        sb.AppendLine($"新档 agent 端口 {AgentLocalPort} 在监听：{PortListening(AgentLocalPort)}（期望 true）");
+        sb.AppendLine($"旧档 REST 端口 {fromRest} 在监听：{PortListening(fromRest)}（期望 false）");
+        sb.AppendLine($"新档 REST 端口 {ConnPort} 在监听：{PortListening(ConnPort)}（期望 true）");
+        sb.AppendLine($"agent 自报 root：{await PingRootAsync(AgentLocalPort)}（期望 {RemoteDir}）");
+        sb.AppendLine($"世界数：{Math.Max(0, rows.Count - 1)} · 指标历史帧数 cpu={cpuHist.Count} mem={memHist.Count}");
+        sb.AppendLine($"插件宿主 DataRoot：{(pluginHost is null ? "(null)" : pluginHost.Options.DataRoot)} · 插件数 {(pluginHost?.Plugins.Count ?? 0)}");
+        sb.AppendLine($"隧道进程 pid：{TunnelPid}");
+        sb.AppendLine(new string('-', 72));
+        sb.AppendLine("终端最后 8 行：");
+        foreach (var t in term.Skip(Math.Max(0, term.Count - 8))) { sb.AppendLine("  | " + t.Text); }
+        try { File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "switchcheck.txt"), sb.ToString()); } catch { }
+        ERR("切档自检完成 → switchcheck.txt");
+    }
+
+    private static bool PortListening(int port)
+    {
+        try
+        {
+            using var c = new System.Net.Sockets.TcpClient();
+            bool ok = c.ConnectAsync("127.0.0.1", port).Wait(700);
+            return ok;
+        }
+        catch { return false; }
+    }
+
+    private static async Task<string> PingRootAsync(int agentPort)
+    {
+        try
+        {
+            using var http = NewLocalHttp(TimeSpan.FromSeconds(3));
+            string s = await http.GetStringAsync("http://127.0.0.1:" + agentPort + "/ping");
+            using var doc = JsonDocument.Parse(s);
+            return doc.RootElement.TryGetProperty("root", out var r) ? (r.GetString() ?? "") : "(无 root 字段)";
+        }
+        catch (Exception ex) { return "探测失败: " + ex.GetType().Name; }
+    }
+
+    /// <summary>切档后立刻用"新档自己的历史"重画三张图（否则要等下一拍。历史为空时不动，等采样）。</summary>
+    private void RedrawChartsNow()
+    {
+        try
+        {
+            CpuNow.Text = "—"; MemNow.Text = "—"; NetNow.Text = "—";
+            if (timeHist.Count == 0) { return; }
+            if (!ConsoleView.IsVisible) { return; }
+            DrawChart(CpuChart, CpuYLabels, CpuXLabels, [cpuHist], ["#0A84FF"], "cpu", timeHist);
+            DrawChart(MemChart, MemYLabels, MemXLabels, [memHist], ["#30D158"], "mem", timeHist);
+            DrawChart(NetChart, NetYLabels, NetXLabels, [upHist, downHist], ["#FF9F0A", "#BF5AF2"], "net", timeHist);
+        }
+        catch { }
+    }
+
 
     private void OnShowConn(object? sender, RoutedEventArgs e)
     {
@@ -2893,6 +3329,12 @@ public partial class MainWindow : Window
             };
             ConnHostPanel.Children.Add(modeSwitch);
 
+            // ---- 当前正在编辑的是哪台服务器（多档：连接设置改的是【激活档】）----
+            var srvPanel = new StackPanel { Margin = new Avalonia.Thickness(0, 8, 0, 0) };
+            var tbSrvName = Field(srvPanel, "服务器名称:", ActiveSrv.Name, 260);
+            ConnHostPanel.Children.Add(srvPanel);
+            ConnHostPanel.Children.Add(Hint($"当前编辑：第 {ServersCfg.Servers.FindIndex(x => x.Id == ActiveSrv.Id) + 1} / {ServersCfg.Servers.Count} 台（id={ActiveSrv.Id}）· 隧道端口 REST {ConnPort} / agent {AgentLocalPort}。左侧卡片点一下就能切，切档后这里改的是新那台。"));
+
             Border cardLocal = Card("本机管理", "直接读写本机 UTSL 目录、本机启停进程、本机日志。REST 三项在远端模式下表示【隧道本地端】的地址。", out StackPanel bodyLocal, out TextBlock badgeLocal);
             Border cardRemote = Card("远端管理", "控制面走 SSH，数据面走同一条 SSH 隧道（REST + 云端 agent 两条转发）；也可以改成 agent 直连。", out StackPanel bodyRemote, out TextBlock badgeRemote);
             ConnHostPanel.Children.Add(cardLocal);
@@ -2905,7 +3347,7 @@ public partial class MainWindow : Window
             var tbTok = Field(bodyLocal, "令牌:", Token, 300);
             var btnAuto = Btn("自动检测（读本机 TShock 配置）");
             Row(bodyLocal, btnAuto);
-            bodyLocal.Children.Add(Hint("⚠ 安全提示：REST 请勿直接暴露公网 —— 仅监听内网 / 走 SSH 隧道 / 用强令牌。令牌在 connection.json 里以 DPAPI 加密保存。"));
+            bodyLocal.Children.Add(Hint("⚠ 安全提示：REST 请勿直接暴露公网 —— 仅监听内网 / 走 SSH 隧道 / 用强令牌。令牌在 servers.json 里以 DPAPI 加密保存（同机其它用户读到也解不开）。"));
 
             // ---- 远端卡片 ----
             var tbSshHost = Field(bodyRemote, "SSH 主机:", SshHost, 220);
@@ -2914,7 +3356,8 @@ public partial class MainWindow : Window
             var tbSshKey = Field(bodyRemote, "SSH 密钥:", SshKey, 380);
             var tbSshDir = Field(bodyRemote, "远端 UTSL 目录:", RemoteDir, 220);
             var tbRestPort = Field(bodyRemote, "远端 REST 端口:", RemoteRestPort.ToString(), 90);
-            bodyRemote.Children.Add(Hint("隧道：本地 REST " + ConnPort + " → 远端 127.0.0.1:" + RemoteRestPort + "；agent 另一端走 17879 → 7879。"));
+            var tbAgentPort = Field(bodyRemote, "agent 隧道端口:", AgentLocalPort.ToString(), 90);
+            bodyRemote.Children.Add(Hint("隧道：本地 REST " + ConnPort + " → 远端 127.0.0.1:" + RemoteRestPort + "；本地 agent " + AgentLocalPort + " → 远端 7879。★ 多台服务器必须各用一对不同的本地端口（REST/agent 各一个），否则会连到同一台上去。"));
             // ---- 直连（面板）模式 ----
             var chkDirect = new CheckBox
             {
@@ -2988,6 +3431,7 @@ public partial class MainWindow : Window
                     return;
                 }
                 SaveConn();
+                UpdateServerCards();
                 if (UseRemote) { EnsureTunnel(); }
                 ConnInfo.Text = UseRemote
                     ? $"已切换到远端管理 · SSH {SshUser}@{SshHost}:{SshPort} → {RemoteDir} —— 正在刷新各页面…"
@@ -3013,6 +3457,7 @@ public partial class MainWindow : Window
             // ---- 行为：保存并应用（两张卡片的字段一起落盘）----
             btnSave.Click += (_, _) =>
             {
+                if ((tbSrvName.Text ?? "").Trim().Length > 0) { ActiveSrv.Name = (tbSrvName.Text ?? "").Trim(); }
                 ConnHost = tbHost.Text ?? "127.0.0.1";
                 ConnPort = int.TryParse(tbPort.Text, out int p) && p > 0 ? p : 7878;
                 Token = tbTok.Text ?? "";
@@ -3023,6 +3468,7 @@ public partial class MainWindow : Window
                 SshKey = (tbSshKey.Text ?? "").Trim();
                 RemoteDir = (tbSshDir.Text ?? "").Trim();
                 RemoteRestPort = int.TryParse(tbRestPort.Text, out int rp) && rp > 0 ? rp : 7878;
+                if (int.TryParse(tbAgentPort.Text, out int ap) && ap > 0) { ActiveSrv.AgentPort = ap; }
                 DirectMode = chkDirect.IsChecked == true;
                 DirectHost = (tbDirectHost.Text ?? "").Trim();
                 DirectPort = int.TryParse(tbDirectPort.Text, out int dtp) && dtp > 0 ? dtp : 7879;
@@ -3034,6 +3480,7 @@ public partial class MainWindow : Window
                 // 直连可用时把开关拨到远端（否则界面显示"本机管理"却实际走远端，自相矛盾）
                 if (wantRemote && modeSwitch.IsChecked != true) { suppressMode = true; modeSwitch.IsChecked = true; suppressMode = false; ApplyMode(); }
                 SaveConn();
+                UpdateServerCards();
                 if (UseRemote) { EnsureTunnel(); }
                 ConnInfo.Text = UseRemote
                     ? $"已保存并应用 · 远端模式（SSH {SshUser}@{SshHost}:{SshPort} → {RemoteDir}）"
@@ -3107,8 +3554,8 @@ public partial class MainWindow : Window
 
             RefreshAgentStatus();
             ConnInfo.Text = UseRemote
-                ? $"当前：远端管理（SSH {SshUser}@{SshHost}）· 配置存于 {ConnFile}"
-                : $"当前：本机管理（{LocalDir}）· 配置存于 {ConnFile}";
+                ? $"当前：「{ActiveSrv.Name}」远端管理（SSH {SshUser}@{SshHost}）· 配置存于 {ServersFile}"
+                : $"当前：「{ActiveSrv.Name}」本机管理（{LocalDir}）· 配置存于 {ServersFile}";
         }
         catch (Exception ex) { ERR("连接设置失败: " + ex.Message); }
     }
@@ -3596,61 +4043,10 @@ public partial class MainWindow : Window
     private void OnFileCancelTransfer(object? sender, RoutedEventArgs e) { CancelTransfer(); ERR("已请求取消传输…"); }
 
     // ===== 凭据加密（DPAPI）：对标 MCSManager CVE-2025-50691 —— 别把 token 明文写在本地文件里 =====
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    private struct DataBlob { public int cbData; public IntPtr pbData; }
-    [System.Runtime.InteropServices.DllImport("crypt32.dll", SetLastError = true)]
-    private static extern bool CryptProtectData(ref DataBlob pDataIn, string? desc, IntPtr entropy, IntPtr reserved, IntPtr prompt, int flags, out DataBlob pDataOut);
-    [System.Runtime.InteropServices.DllImport("crypt32.dll", SetLastError = true)]
-    private static extern bool CryptUnprotectData(ref DataBlob pDataIn, IntPtr desc, IntPtr entropy, IntPtr reserved, IntPtr prompt, int flags, out DataBlob pDataOut);
-    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern IntPtr LocalFree(IntPtr h);
+    /// <summary>用当前 Windows 用户的 DPAPI 加密（只有本机本用户能解开）。实现已搬到 Servers\SecretBox，这里保留薄封装。</summary>
+    private static string DpapiProtect(string plain) => SecretBox.Protect(plain);
 
-    /// <summary>用当前 Windows 用户的 DPAPI 加密（只有本机本用户能解开）。失败返回空串。</summary>
-    private static string DpapiProtect(string plain)
-    {
-        if (string.IsNullOrEmpty(plain)) { return ""; }
-        byte[] inBytes = System.Text.Encoding.UTF8.GetBytes(plain);
-        IntPtr buf = System.Runtime.InteropServices.Marshal.AllocHGlobal(inBytes.Length);
-        try
-        {
-            System.Runtime.InteropServices.Marshal.Copy(inBytes, 0, buf, inBytes.Length);
-            var inBlob = new DataBlob { cbData = inBytes.Length, pbData = buf };
-            if (!CryptProtectData(ref inBlob, "UTSLManager", IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 0, out DataBlob outBlob)) { return ""; }
-            try
-            {
-                byte[] outBytes = new byte[outBlob.cbData];
-                System.Runtime.InteropServices.Marshal.Copy(outBlob.pbData, outBytes, 0, outBlob.cbData);
-                return Convert.ToBase64String(outBytes);
-            }
-            finally { LocalFree(outBlob.pbData); }
-        }
-        catch { return ""; }
-        finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buf); }
-    }
-
-    private static string DpapiUnprotect(string b64)
-    {
-        if (string.IsNullOrEmpty(b64)) { return ""; }
-        try
-        {
-            byte[] inBytes = Convert.FromBase64String(b64);
-            IntPtr buf = System.Runtime.InteropServices.Marshal.AllocHGlobal(inBytes.Length);
-            try
-            {
-                System.Runtime.InteropServices.Marshal.Copy(inBytes, 0, buf, inBytes.Length);
-                var inBlob = new DataBlob { cbData = inBytes.Length, pbData = buf };
-                if (!CryptUnprotectData(ref inBlob, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 0, out DataBlob outBlob)) { return ""; }
-                try
-                {
-                    byte[] outBytes = new byte[outBlob.cbData];
-                    System.Runtime.InteropServices.Marshal.Copy(outBlob.pbData, outBytes, 0, outBlob.cbData);
-                    return System.Text.Encoding.UTF8.GetString(outBytes);
-                }
-                finally { LocalFree(outBlob.pbData); }
-            }
-            finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buf); }
-        }
-        catch { return ""; }
-    }
+    private static string DpapiUnprotect(string b64) => SecretBox.Unprotect(b64);
 
     // ===== 传输进度与取消（对标面板的上传进度条；我们的链路只有 1.3~2.4 MB/s，长传输没有进度体验很差）=====
     public static Action<string>? TransferStatus;      // 由管理器接到状态栏（后台线程调用，内部会 Post 到 UI）

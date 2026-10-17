@@ -14,8 +14,9 @@ namespace UTSLManager.Plugins;
 public sealed class PluginHostOptions
 {
     public required string PluginDir { get; init; }
-    /// <summary>插件数据根目录（每个插件一个子目录）。</summary>
-    public required string DataRoot { get; init; }
+    /// <summary>插件数据根目录（每个插件一个子目录）。
+    /// ★ 多服务器：切档时要跟着激活档换（plugin-data<档id>），所以是 set 不是 init。</summary>
+    public required string DataRoot { get; set; }
     public required Func<string> DeployRoot { get; init; }
     public required Func<string> RestBase { get; init; }
     public required Func<string> Token { get; init; }
