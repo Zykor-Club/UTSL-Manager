@@ -300,6 +300,13 @@ public partial class MainWindow : Window
             tunnelTimer.Tick += (_, _) => { if (switching) { return; } if (HasSsh) { _ = Task.Run(() => EnsureTunnel()); } _ = Task.Run(() => TickAgentAsync()); };   // ★ agent 探活与本机/远端无关（本机 7879 / 远端走隧道 17879）   // 自检修复：隧道探测也放后台
             tunnelTimer.Start();
         _ = Task.Run(() => TickAgentAsync());     // 启动即探一次 agent（否则要等 20 秒）
+        // ★ 非激活档轻量探活（60 秒一次，只探端口，不开隧道）→ 卡片状态点不再是"上次已知"
+        {
+            var probeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
+            probeTimer.Tick += async (_, _) => { if (switching) { return; } await ProbeInactiveServersAsync(); };
+            probeTimer.Start();
+            _ = Task.Run(async () => { await Task.Delay(8000); Dispatcher.UIThread.Post(() => _ = ProbeInactiveServersAsync()); });
+        }
         // ★ 联调钩子：--switch-test <档id|档名> → 启动 6 秒后自动切过去并写 switchcheck.txt（真机验证用）
         {
             string st = StartupArg("--switch-test");
@@ -333,6 +340,25 @@ public partial class MainWindow : Window
         ApplyStartupArgs();
         _ = RefreshWorldsAsync();
         RefreshLog();
+        // 激活档令牌为空（典型：刚用「＋」建的档）→ 启动时也自动从服务端配置补一次，否则世界列表一直是空的
+        if (ActiveSrv.Token.Length == 0)
+        {
+            var target = ActiveSrv;
+            _ = Task.Run(async () =>
+            {
+                bool got = await TryFillTokenAsync(target);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (got)
+                    {
+                        SaveConn();
+                        ERR($"「{target.Name}」令牌为空 → 已从服务端配置自动读到（REST 端口 {target.Port}），已保存");
+                        _ = RefreshWorldsAsync();
+                    }
+                    else { ERR($"「{target.Name}」令牌为空 → 世界列表为空属预期，请到「连接设置 → 自动检测」填一次"); }
+                });
+            });
+        }
 
         // 关闭时通知插件（P0-4：保存状态 / 停后台任务 / 卸载可回收 ALC）
         Closing += (_, _) => { try { pluginHost?.Shutdown(); } catch { } };
@@ -2934,12 +2960,70 @@ public partial class MainWindow : Window
                 r.Name = p.Name.Length > 0 ? p.Name : p.Id;
                 r.Address = p.AddressText + (p.DirectReady ? " · 直连" : p.IsRemote ? " · SSH" : " · 本机");
                 r.Worlds = p.WorldCount >= 0 ? p.WorldCount + " 世界" : "—";
-                r.StatusBrush = GetBrush(p.Status switch { 1 => "#32D74B", 2 => "#FEBC2E", _ => "#6B6B70" });
+                // 激活档：绿=在线 / 黄=REST 不通 / 灰=未运行或未知；非激活档：绿=那台机器/端口可达（没开隧道）
+                string hex = active
+                    ? p.Status switch { 1 => "#32D74B", 2 => "#FEBC2E", _ => "#6B6B70" }
+                    : p.ProbeAtMs == 0 ? "#6B6B70" : p.ProbeOk ? "#32D74B" : "#6B6B70";
+                r.StatusBrush = GetBrush(hex);
                 r.IsActive = active;
-                r.Tip = (active ? "当前激活 · " : "点击切换 · ") + (p.DirectReady ? "直连 agent" : p.IsRemote ? "SSH " + p.SshUser + "@" + p.SshHost + ":" + p.SshPort : "本机目录 " + p.LocalDir);
+                string where = p.DirectReady ? "直连 agent " + p.DirectHost + ":" + p.DirectPort
+                    : p.IsRemote ? "SSH " + p.SshUser + "@" + p.SshHost + ":" + p.SshPort
+                    : "本机目录 " + p.LocalDir;
+                string state = active
+                    ? p.Status == 1 ? "在线" : p.Status == 2 ? "REST 不通（进程在）" : "未运行 / 未知"
+                    : p.ProbeText.Length > 0 ? p.ProbeText : "尚未探活";
+                string worldsTip = p.WorldCount >= 0 ? " · 世界数 " + p.WorldCount + "（上次连接时）" : "";
+                r.Tip = (active ? "当前激活 · " : "点击切换 · ") + where + " · " + state + worldsTip;
             }
         }
         catch { }
+    }
+
+    /// <summary>
+    /// 非激活档的轻量探活（60 秒一次）：只探"那台机器的端口通不通"，**不开隧道、不连 REST**。
+    /// 目的：卡片状态点不再显示"上次已知"的陈旧值（原来的灰色是什么都不知道）。
+    /// 代价：每档一次 TCP connect（1.5 秒超时），对远端机器极轻。
+    /// </summary>
+    private async Task ProbeInactiveServersAsync()
+    {
+        if (switching) { return; }
+        foreach (var p in ServersCfg.Servers.ToArray())
+        {
+            if (p.Id == ActiveSrv.Id) { continue; }        // 激活档的状态由 REST 心跳给，别重复探
+            bool ok;
+            string text;
+            if (p.DirectReady)
+            {
+                ok = await TcpOkAsync(p.DirectHost, p.DirectPort, 4000);
+                text = (ok ? "直连 agent 可达 " : "直连 agent 不可达 ") + p.DirectHost + ":" + p.DirectPort;
+            }
+            else if (p.HasSsh)
+            {
+                ok = await TcpOkAsync(p.SshHost, p.SshPort, 4000);   // ★ 这条链路 RTT ~1.7 秒，1.5 秒会误判成不可达
+                text = (ok ? "SSH 可达（未连接）" : "SSH 不可达") + " " + p.SshHost + ":" + p.SshPort;
+            }
+            else
+            {
+                ok = PortListening(p.Port);
+                text = (ok ? "本机 REST 在听 " : "本机 REST 没在听 ") + p.Port;
+            }
+            p.ProbeOk = ok;
+            p.ProbeAtMs = Environment.TickCount64;
+            p.ProbeText = text;
+        }
+        UpdateServerCards();
+    }
+
+    private static async Task<bool> TcpOkAsync(string host, int port, int timeoutMs)
+    {
+        try
+        {
+            using var c = new System.Net.Sockets.TcpClient();
+            using var cts = new CancellationTokenSource(timeoutMs);
+            await c.ConnectAsync(host, port, cts.Token);
+            return true;
+        }
+        catch { return false; }
     }
 
     /// <summary>点卡片 = 切到那台服务器；右键 = 重命名/复制/删除。</summary>
@@ -2968,7 +3052,22 @@ public partial class MainWindow : Window
         _ = SwitchServerAsync(id);
     }
 
-    private void OnAddServer(object? sender, RoutedEventArgs e) => AddServerCopy(ActiveSrv.Id);
+    /// <summary>「＋」= 打开新增服务器对话框（右键菜单里的"复制为新服务器"仍是快捷路径）。</summary>
+    private async void OnAddServer(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var (rest, agent) = AllocTunnelPorts();
+            var p = await NewServerDialog.ShowAsync(this, ActiveSrv, rest, agent, "服务器 " + (ServersCfg.Servers.Count + 1));
+            if (p is null) { return; }
+            ServersCfg.Servers.Add(p);
+            SaveConn();
+            UpdateServerCards();
+            ERR($"已新增服务器「{p.Name}」· {p.AddressText} · 隧道端口 REST {rest} / agent {agent} —— 正在切过去");
+            await SwitchServerAsync(p.Id);
+        }
+        catch (Exception ex) { ERR("新增服务器失败: " + ex.Message); }
+    }
 
     /// <summary>新增一台：复制当前档的连接设置（ssh/路径/令牌全带走），端口自动分一对空闲的。</summary>
     private void AddServerCopy(string fromId)
@@ -3112,6 +3211,46 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 令牌为空的新档：直接从服务端的配置文件里读一个（本机直读 / 远端走 agent 或 ssh）。
+    /// 与「连接设置 → 自动检测」同一套解析规则；只在切换后令牌为空时跑一次。
+    /// </summary>
+    private async Task<bool> TryFillTokenAsync(ServerProfile p)
+    {
+        try
+        {
+            string root = p.IsRemote ? p.RemoteDir : p.LocalDir;
+            string[] cands =
+            [
+                Path.Combine(root, "config", "TShockAPI", "config.json"),
+                Path.Combine(root, "tshock", "config.json"),
+                Path.Combine(root, "config", "config.json"),
+            ];
+            string txt = "";
+            foreach (string c in cands)
+            {
+                txt = await Task.Run(() => FsReadText(c));
+                if (!string.IsNullOrWhiteSpace(txt)) { break; }
+            }
+            if (string.IsNullOrWhiteSpace(txt)) { return false; }
+            if (ParseJsonObj(txt) is not JsonObject o) { return false; }
+            string tok = "";
+            int port = 0;
+            if (o["ApplicationRestTokens"] is JsonObject dict) { foreach (var kv in dict) { tok = kv.Key; break; } }
+            if (int.TryParse(o["RestApiPort"]?.ToString(), out int p1) && p1 > 0) { port = p1; }
+            if (tok.Length == 0 && o["Settings"] is JsonObject st)
+            {
+                if (int.TryParse(st["RestApiPort"]?.ToString(), out int p2) && p2 > 0) { port = p2; }
+                if (st["ApplicationRestTokens"] is JsonObject d2) { foreach (var kv in d2) { tok = kv.Key; break; } }
+            }
+            if (tok.Length == 0) { return false; }
+            p.Token = tok;
+            if (!p.IsRemote && port > 0) { p.Port = port; }   // 本机档的 Port 必须是服务端自己的 REST 端口
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
     /// 切到另一台服务器。顺序是硬要求：先停旧流（agent 三条 + 日志游标）→ 停旧隧道 → 换档 →
     /// 重置缓存与指标历史 → 插件按新档重建（DataRoot 跟着档走）→ 起新隧道 → 重取世界/日志。
     /// </summary>
@@ -3175,6 +3314,13 @@ public partial class MainWindow : Window
                 if (!restOk) { ERR($"警告：隧道 REST 端口 {target.Port} 5 秒内没就绪（世界列表可能暂时为空，20 秒定时器会自动重试）"); }
             }
             await TickAgentAsync();
+            // 令牌空的新档：先尝试从服务端配置里自动读（否则世界列表一定空，用户会以为切坏了）
+            if (target.Token.Length == 0)
+            {
+                bool got = await TryFillTokenAsync(target);
+                if (got) { SaveConn(); ERR($"「{target.Name}」令牌为空 → 已从服务端配置自动读到（REST 端口 {target.Port}），已保存"); }
+                else { ERR($"「{target.Name}」令牌为空 → 世界列表可能为空，请到「连接设置 → 自动检测」填一次并保存"); }
+            }
             await RefreshWorldsAsync();
             // ⑦ 世界列表到位后再重载插件（DataRoot 已换成新档的；旧插件 ALC 会被回收）
             _ = Task.Run(() => { try { pluginHost?.Reload(); } catch (Exception ex) { Dispatcher.UIThread.Post(() => ERR("切档重载插件失败: " + ex.Message)); } });

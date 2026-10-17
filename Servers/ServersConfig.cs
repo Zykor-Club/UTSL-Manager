@@ -64,6 +64,12 @@ public sealed class ServerProfile
     public int Status;
     /// <summary>该档读到过明文令牌（加载后要立刻重新加密落盘）。</summary>
     public bool PlainToken;
+    /// <summary>非激活档的轻量探活结果（只探 SSH/本地端口，不开隧道）。</summary>
+    public bool ProbeOk;
+    /// <summary>上次探活时间（Environment.TickCount64，0 = 没探过）。</summary>
+    public long ProbeAtMs;
+    /// <summary>探活文案（卡片 tooltip 用）。</summary>
+    public string ProbeText = "";
 
     // ===== 派生 =====
     public bool HasSsh => SshHost.Length > 0 && SshKey.Length > 0;
