@@ -3560,7 +3560,10 @@ public partial class MainWindow : Window
 
         string restBase = p.DirectReady ? "http://" + p.DirectHost + ":" + p.DirectPort
                                         : "http://127.0.0.1:" + p.Port;
-        string agentBase = p.DirectReady ? restBase : "http://127.0.0.1:" + p.AgentPort;
+        // ★ 本机档没有隧道：agent 就在 7879（AgentRemotePort）；档上的 AgentPort 是"隧道本地入口"，只对远端档有意义
+        string agentBase = p.DirectReady ? restBase
+            : p.IsRemote ? "http://127.0.0.1:" + p.AgentPort
+            : "http://127.0.0.1:" + AgentRemotePort;
 
         // ② 世界列表
         if (now - st.LastRestMs >= BgRestIntervalMs)

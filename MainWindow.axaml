@@ -106,7 +106,9 @@
                     Background="Transparent" Foreground="#66CCFF" VerticalAlignment="Center"
                     ToolTip.Tip="新增一台服务器（复制当前档的连接设置）" Click="OnAddServer"/>
           </Grid>
-          <ScrollViewer DockPanel.Dock="Top" MaxHeight="232" Margin="0,0,0,10" VerticalScrollBarVisibility="Auto">
+          <!-- ★ Avalonia 的滚动条是覆盖式的：必须给右侧留 12px，否则会压住卡片右边缘（"3 世界"会被切掉） -->
+          <ScrollViewer DockPanel.Dock="Top" MaxHeight="330" Margin="0,0,0,10" Padding="0,0,12,0"
+                        VerticalScrollBarVisibility="Auto" ScrollViewer.AllowAutoHide="False">
             <ItemsControl x:Name="ServerCards">
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
