@@ -3480,6 +3480,7 @@ public partial class MainWindow : Window
         public long LastRestMs;
         public long LastAgentMs;
         public long LastSent = -1, LastRecv = -1, LastNetMs;
+        public int RestFails;      // 连续失败次数：偶发一次不要把卡片打成"未运行"
     }
     private static readonly HttpClient BgHttp = NewLocalHttp(TimeSpan.FromSeconds(8));
     private readonly Dictionary<string, BgMon> bgMon = [];
@@ -3533,10 +3534,18 @@ public partial class MainWindow : Window
                                       w.GetProperty("running").GetBoolean()));
                     }
                 }
+                st.RestFails = 0;
                 p.Status = 1;
                 ApplyBackgroundWorlds(p, incoming);
             }
-            catch { p.Status = 3; }
+            catch
+            {
+                // 只要失败 1~2 次就显示"REST 不通"，连续 3 次才算"未运行"（避免网络抖一下卡片就红）
+                st.RestFails++;
+                if (st.RestFails >= 3) { p.Status = 3; }
+                else if (p.Status == 1) { p.Status = 2; }
+                UpdateServerCards();
+            }
         }
 
         // ③ 指标（agent /metrics：CPU 单核% / 私有内存 / 网卡累计字节 -> 差分算速率）
