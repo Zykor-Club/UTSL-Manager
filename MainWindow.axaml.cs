@@ -3443,6 +3443,32 @@ public partial class MainWindow : Window
             var wait = System.Diagnostics.Stopwatch.StartNew();
             while (switching && wait.ElapsedMilliseconds < 10000) { await Task.Delay(200); }
             if (switching || my != pluginReloadGen) { return; }
+            // ★ 用户关掉了"切档重载插件"：仍然把 DataRoot 指向新档（插件下次读写就走新目录），
+            //   但不动插件实例 —— 代价是插件的内存态（Lua 定时任务上次执行时间等）会跨档共用。
+            if (!ServersCfg.ReloadPluginsOnSwitch)
+            {
+                try
+                {
+                    string newRoot = ActiveSrv.PluginDataRoot(AppContext.BaseDirectory);
+                    if (pluginHost is not null)
+                    {
+                        pluginHost.Options.DataRoot = newRoot;
+                        // ★ 关键：DataDir 是"首次访问后缓存"的，只换 DataRoot 不会失效 ——
+                        //   不清缓存的话插件会继续读写上一档的目录（A-suite 文档代理复核时抓到的真 bug）
+                        pluginHost.InvalidateDataDirs();
+                    }
+                    string sample = pluginHost is null || pluginHost.Plugins.Count == 0 ? "(无插件)" : pluginHost.Plugins[0].Name;
+                    try
+                    {
+                        File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "switchperf.log"),
+                            $"{DateTime.Now:HH:mm:ss.fff}	switch-noreload	profile={ActiveSrv.Name}	dataRoot={newRoot}	samplePlugin={sample}" + Environment.NewLine);
+                    }
+                    catch { }
+                    Dispatcher.UIThread.Post(() => ERR($"已切档但不重载插件（reloadPluginsOnSwitch=false）：DataRoot→{newRoot}（已失效 DataDir 缓存）"));
+                }
+                catch { }
+                return;
+            }
             // ★ 已经按这一档加载过插件了就不重载：来回快切（A→B→A）最后回到原档时，这一步整个省掉
             //   （实测单次 Reload 2.3~12.8 秒，主要花在插件自己的 OnLoad：ApiProbe 一轮自检含 ssh、Lua 编译）
             if (ActiveSrv.Id == pluginLoadedProfileId) { return; }
@@ -3712,7 +3738,7 @@ public partial class MainWindow : Window
         public CancellationTokenSource Cts = new();
     }
     private readonly Dictionary<string, LogSub> logSubs = [];
-    private const int MaxBackgroundLogSubs = 4;
+    private const int MaxBackgroundLogSubs = 8;   // 硬上限（servers.json 的 bgLogSubs 会被夹到这个值）
 
     private ObservableCollection<TermLine> TermFor(string id)
     {
@@ -3733,12 +3759,14 @@ public partial class MainWindow : Window
     /// <summary>按当前档位情况增删后台日志订阅（由 5 秒定时器调用）。</summary>
     private void SyncBackgroundLogs()
     {
+        int head = 0;                      // 已订阅条数（含本轮新增）
         foreach (var p in ServersCfg.Servers.ToArray())
         {
             bool want = p.Id != ActiveSrv.Id && p.IsRemote && p.HasSsh;
             if (!want) { StopBackgroundLog(p.Id); continue; }
-            if (logSubs.ContainsKey(p.Id)) { continue; }
-            if (logSubs.Count >= MaxBackgroundLogSubs) { continue; }
+            if (logSubs.ContainsKey(p.Id)) { head++; continue; }
+            int cap = Math.Max(0, Math.Min(ServersCfg.BgLogSubs, MaxBackgroundLogSubs));
+            if (head < cap) { head++; } else { continue; }
             var sub = new LogSub();
             logSubs[p.Id] = sub;
             _ = Task.Run(() => BackgroundLogLoopAsync(p, sub.Cts.Token));
@@ -4189,6 +4217,45 @@ public partial class MainWindow : Window
                     : "已设为不显示世界控制台窗口（headless）—— 重启服务端后生效");
             };
             ConnHostPanel.Children.Add(chkWorldConsoles);
+
+            // ---- 多服务器行为（全档通用，落 servers.json 顶层）----
+            ConnHostPanel.Children.Add(new TextBlock
+            {
+                Text = "多服务器行为", FontSize = 11, FontWeight = Avalonia.Media.FontWeight.SemiBold,
+                Foreground = new SolidColorBrush(Color.Parse("#9BA3AE")), Margin = new Avalonia.Thickness(0, 14, 0, 2),
+            });
+            var chkReloadPlugins = new CheckBox
+            {
+                Content = "切换服务器时重载插件（关掉可省 4~26 秒后台开销）",
+                IsChecked = ServersCfg.ReloadPluginsOnSwitch, FontSize = 12, Margin = new Avalonia.Thickness(0, 2, 0, 0),
+            };
+            ConnHostPanel.Children.Add(chkReloadPlugins);
+            ConnHostPanel.Children.Add(Hint("关掉后：插件数据目录仍会随档切换（下次读写就是新档的），但插件**内存态**（Lua 定时任务的上次执行时间、插件计数器）会跨档共用。"
+                + "默认开：每个档都从干净状态开始，代价是切档后台重载 4~26 秒（不冻界面）。"));
+            chkReloadPlugins.IsCheckedChanged += (_, _) =>
+            {
+                ServersCfg.ReloadPluginsOnSwitch = chkReloadPlugins.IsChecked == true;
+                SaveConn();
+                ERR(ServersCfg.ReloadPluginsOnSwitch
+                    ? "已开启：切档后重载插件（干净状态）"
+                    : "已关闭：切档不重载插件（省后台开销，插件内存态跨档共用）");
+            };
+
+            var bgLogPanel = new StackPanel { Margin = new Avalonia.Thickness(0, 6, 0, 0) };
+            var tbBgLogs = Field(bgLogPanel, "后台日志流上限:", ServersCfg.BgLogSubs.ToString(), 90);
+            ConnHostPanel.Children.Add(bgLogPanel);
+            ConnHostPanel.Children.Add(Hint("非激活档各订阅一条 /stream/log（默认 4 条，0 = 不订阅）。上限越少越省连接，但切到没访问过的档时终端会空约 1 秒。"));
+            tbBgLogs.LostFocus += (_, _) =>
+            {
+                if (int.TryParse(tbBgLogs.Text, out int n) && n >= 0)
+                {
+                    ServersCfg.BgLogSubs = Math.Min(n, 8);
+                    tbBgLogs.Text = ServersCfg.BgLogSubs.ToString();
+                    SaveConn();
+                    try { SyncBackgroundLogs(); } catch { }
+                    ERR($"后台日志流上限 = {ServersCfg.BgLogSubs}");
+                }
+            };
             ConnHostPanel.Children.Add(Hint("说明：UTSL 的窗口模式在服务端【进程启动时】由环境变量 UTSL_CONSOLE_MODE 决定；" +
                 "而且每个世界的控制台会话是循环守护的 —— 你手动关掉窗口它会被重新拉起。想让它们彻底不出现，就在这里关掉并重启服务端。"));
 

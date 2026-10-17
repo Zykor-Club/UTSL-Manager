@@ -88,6 +88,16 @@ public sealed class PluginHost
         HostAssemblies = BuildHostAssemblies();
     }
 
+    /// <summary>
+    /// 让所有插件的 DataDir 缓存失效（下次访问按当前 Options.DataRoot 重新解析）。
+    /// 用于"切档只换数据目录、不重载插件"（servers.json 的 reloadPluginsOnSwitch=false）：
+    /// 否则插件会继续读写上一档的目录（DataDir 是首次访问后缓存的，换 DataRoot 不会自动失效）。
+    /// </summary>
+    public void InvalidateDataDirs()
+    {
+        foreach (var c in _contexts) { try { c.InvalidateDataDir(); } catch { } }
+    }
+
     /// <summary>当前事件总线（每次重载都会换成新实例，旧订阅随之丢弃）。</summary>
     public ManagerEvents Events { get; private set; }
 
@@ -265,6 +275,8 @@ internal sealed class PluginContext : IManagerContext
 
     public string PluginName => _instance.Name;
     public string PluginDir => Descriptor.Directory;
+    /// <summary>丢掉已解析的 DataDir 缓存（切档换了 DataRoot 但决定不重载插件时用）。</summary>
+    internal void InvalidateDataDir() => _dataDir = null;
     public string DataDir
     {
         get

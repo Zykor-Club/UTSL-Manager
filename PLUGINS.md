@@ -12,6 +12,7 @@
 | 5 分钟跑通一个插件 | §1 快速开始 |
 | 知道自己该用哪种扩展方式 | **§2 扩展点决策表** |
 | 查某个 API 的签名/语义 | **§3 API 速查** |
+| 多台服务器下插件要不要改 | **§3.6 多档（servers.json）** |
 | 查 manifest 字段 / 权限 | §4 清单 · §5 权限 |
 | 写界面、配色 | §7 写界面 |
 | 用脚本（不想建工程） | §8 脚本插件（.csx / .lua） |
@@ -178,12 +179,12 @@ dotnet build -c Release -p:ManagerDir="D:\path\to\AvaloniaUTSL"   # 管理器不
 
 | 分类 | 成员 | 说明 | 权限 |
 |:--|:--|:--|:--|
-| 身份 | `PluginName` / `PluginDir` / `DataDir` | 插件名 / 所在目录 / 专属数据目录（自动创建） | — |
-| 连接 | `DeployRoot` / `RestBase` / `Token` / `Language` | 部署根 / REST 基地址 / 令牌 / 界面语言 | — |
+| 身份 | `PluginName` / `PluginDir` / `DataDir` | 插件名 / 所在目录 / 专属数据目录（自动创建）。**`DataDir` 随激活档变**，见 §3.6 | — |
+| 连接 | `DeployRoot` / `RestBase` / `Token` / `Language` | 部署根 / REST 基地址 / 令牌 / 界面语言（**前三个随激活档变**，都是惰性回调） | — |
 | 权限 | `Permissions` | 声明的权限集合（未声明 = 空集合 = **全部允许**） | — |
 | 日志 | `Log(string)` | 往管理器终端写一行（按级别着色） | — |
 | REST | `RestGet(url)` / `RestPost(url)` | 访问当前连接的 UTSL REST，自动带令牌 | `rest` |
-| 世界 | `Worlds` | 世界列表快照（`WorldInfo{ Name, Size, Running }`） | — |
+| 世界 | `Worlds` | **当前激活档**的世界列表快照（`WorldInfo{ Name, Size, Running }`） | — |
 | 事件 | `Events` | 事件总线，见 §3.3 | — |
 | 生命周期 | `ShutdownToken` / `RunBackground(work, name?)` | 关闭令牌 / 后台任务（异常写终端，关闭时自动取消） | — |
 | 命令 | `RegisterCommand(name, desc, handler)` / `UnregisterCommand(name)` | 终端 `!name 参数` 触发 | — |
@@ -265,6 +266,94 @@ public sealed class MyPlugin : IManagerPlugin, IFileActionPlugin
 
 ---
 
+### 3.6 多服务器（多档）：插件要改什么、不用改什么
+
+管理器现在能同时管多台服务器（`<管理器目录>\servers.json`，每台一条"档"；点左侧服务器卡片 = **切档**）。对插件只有一句结论：
+
+> **插件永远只看到"当前激活档"。** 没有"给第 2 档单独传参数"的 API，也不需要 —— 所有连接类成员都是惰性回调，切档后自动指向新档。
+
+**插件看到的 = 激活档**
+
+| 成员 | 随激活档变 | 实现 |
+|:--|:--|:--|
+| `DeployRoot` / `RestBase` / `Token` / `FilesRoot` | ✅ 变 | `InitPluginHost` 传的是 lambda，**取值那一刻**才读激活档 |
+| `Worlds` | ✅ 变 | 同上（激活档的世界列表快照） |
+| `ServerOnline` | ✅ 变 | 管理器心跳探测结果，切档后按新档重探 |
+| `DataDir` / `GetConfig` / `SaveConfig` | ✅ 变（**换插件实例后才生效**，见下） | `plugin-data` 根目录跟着档走 |
+| 命令 / 指标 / 状态 | ❌ **全局一套** | 只有一份插件宿主；回调被调用时读到的是"那一刻的激活档" |
+
+**数据目录按档隔离**（由 `servers.json` 每条档的 `legacyDataRoot` 决定）：
+
+| 档的来源 | `ctx.DataDir` 实际路径 |
+|:--|:--|
+| 从旧 `connection.json` 迁移出来的第一档（`"legacyDataRoot": true`） | `<管理器目录>\plugin-data\<插件名>\` —— **沿用旧的全局目录**，老配置不搬家 |
+| 之后新建 / 复制的每一档 | `<管理器目录>\plugin-data\<档id>\<插件名>\`（档 id 会消毒，最长 40 字符） |
+
+发布目录实测：`plugin-data\` 下同时存在 `定时任务\config.json`（迁移档的全局目录）与 `srv-local-e472eb\定时任务\`、`srv-1a17af55\定时任务\`（新档目录）。
+
+**切档时到底发生什么（默认 + 开关）**
+
+`servers.json` 顶层有两个新键。**没有 UI，改完要重启管理器**才生效（启动时只读一次）；文件里不写 = 用默认值：
+
+~~~json
+{ "reloadPluginsOnSwitch": true, "bgLogSubs": 4 }
+~~~
+
+| 行为 | 默认 | 开关 | 影响 |
+|:--|:--|:--|:--|
+| 切档后**重载插件** | 开 | `reloadPluginsOnSwitch` | 去抖 **1.5 秒** + 等"切档空档"（最多等 **10 秒**）；已经按同一档加载过就**不重复重载**；重载期间 `[插件] 已加载` / `[API 探针]` 这类逐条日志被折叠成一行：`插件已按「<档名>」重载：N 个，用时 xxx ms（逐条加载日志已折叠）` |
+| 插件**内存态**是否跨档 | 不跨档（靠重载） | `reloadPluginsOnSwitch` | 关掉后 Lua 定时任务的"上次执行时间"、插件自己的计数器**跨档共用** |
+| `ctx.DataDir` 换目录 | 是，跟重载一起换 | 同上 | 关掉后宿主会把 `DataRoot` 指向新档**并让所有插件的 `DataDir` 缓存失效**（`PluginHost.InvalidateDataDirs()`，2026-10-17 修）→ 下次访问 `DataDir`/`GetConfig` 就是新档目录，不必重载。⚠ 但插件**自己缓存**过的路径/字段不会自动更新，仍要"用时现取" |
+| `Events.ServerStateChanged` | 切档后重新探测 | — | 切档时 `lastServerUp` 被清空 → 新档只要探到在线，就会**再发一次 `true`**（哪怕切档前也是在线）；新档本来就离线则**不发** `false`（未知不发事件），等它上线才发。所以别指望"切档 = 先收到一次 `false`" |
+| 非激活档的**日志** | 不进插件事件 | `bgLogSubs` | `Events.TerminalLine` **只收激活档**的日志；后台档的 `/stream/log` 由管理器直接灌进该档终端缓冲，不经过事件总线 |
+| 后台日志**连接数** | 4 | `bgLogSubs`（`0` = 不订阅） | 每条后台流一条长连接；**实际生效 = min(bgLogSubs, 4)**（管理器硬上限 `MaxBackgroundLogSubs = 4`，写更大也只取 4）；只有"远端 + 有 ssh"的非激活档才订阅（本机档不订阅） |
+
+**三条给插件作者的可执行建议**
+
+**a) 要"按档保存状态"，就用 `ctx.DataDir` / `GetConfig`。** 它已经随档变（新档 = `plugin-data\<档id>\<插件名>\`）；**别**把状态写死在 dll 旁边（`ctx.PluginDir`）或 `<管理器目录>` 根下 —— 那样两台服务器会互相覆盖：
+
+~~~csharp
+public void OnLoad(IManagerContext ctx)
+{
+    ctx.Log($"[我的插件] 本档数据目录 = {ctx.DataDir}");
+    var cfg = ctx.GetConfig<MyConfig>();          // <DataDir>\config.json（需 config 权限）
+
+    // ❌ 别这么干：路径不随档变，所有服务器共用一份
+    // File.WriteAllText(Path.Combine(ctx.PluginDir, "state.json"), json);
+}
+~~~
+
+**b) 别在 `OnLoad` 里把 `Worlds` / `DeployRoot` / `RestBase` / `Token` / `DataDir` 缓存进静态字段**（切档会变，`DataDir` 还会在重载时变）；**要用时现取** —— 背后是 lambda，代价极低：
+
+~~~csharp
+// ❌ static string _root = ctx.DeployRoot;     // 切档后还是第一台的值
+// ✅ 每次用的时候现取
+string root = _ctx!.FilesRoot;
+foreach (var w in _ctx.Worlds) { /* … */ }
+~~~
+
+自己算出来的派生值（拼好的绝对路径、缓存的令牌串）同理：要么现算，要么在 `ServerStateChanged` / 下次使用时重算。
+
+**c) 关掉 `reloadPluginsOnSwitch` 的取舍**
+
+| 做法 | 得到 | 失去 |
+|:--|:--|:--|
+| 保持默认（重载） | 插件内存态严格按档隔离，`DataDir` / `Worlds` / `Token` 全部干净切换 | 每次切档付一次重载开销：**约 4~26 秒**（源码注释里的实测值；单次 Reload 2.3~12.8 秒，大部分花在各插件自己的 `OnLoad` —— ApiProbe 一轮自检含 ssh、Lua 编译） |
+| `"reloadPluginsOnSwitch": false` | 省掉这笔开销，切档更快 | 插件内存态（Lua 定时任务上次执行时间、计数器、**插件自己缓存的字段**）**跨档共用**；`DataDir` 会跟着换（宿主会失效缓存），但你在 `OnLoad` 里存进字段的旧路径不会变 |
+
+**什么时候该关**：插件全部是"无状态、每次用现取"的（纯 REST 面板、只读展示），且切档频繁、嫌重载慢。
+**什么时候必须开**：插件有定时任务 / 计数器 / 按档配置（`LuaTaskScheduler` 是典型），或者你在 `OnLoad` 里缓存了任何与连接相关的值。
+
+**自测多档（5 步）**
+
+1. 左侧「＋」建第二档（名字随便，端口/ssh 按需）→ 保存；`servers.json` 的 `servers[]` 会多一条，`"legacyDataRoot": false`。不想点界面：`UTSLManager.exe --server "<档id 或档名>"` 可启动即激活指定档。
+2. 插件里把关键值露出来：`ctx.RegisterStatus("我的插件 · 档", () => ctx.DataDir)`，或 `ctx.Log($"[我的插件] DataDir={ctx.DataDir} RestBase={ctx.RestBase} 世界数={ctx.Worlds.Count}")`。
+3. 点第二档卡片切过去 → 等约 2~12 秒 → 终端出现 `插件已按「<档名>」重载：…（逐条加载日志已折叠）`。
+4. 核对三件事：`DataDir` 变成 `plugin-data\<新档id>\<插件名>`；`RestBase` 是新档的端口；`Worlds` 是新档的世界。
+5. 切回第一档：`DataDir` 回到 `plugin-data\<插件名>`（迁移档）—— 两档各自的 `config.json` 内容互不覆盖 = 隔离成立。想验证"关掉重载"：把 `"reloadPluginsOnSwitch": false` 写进 `servers.json` → **重启管理器** → 再切档，终端只出现一行 `已切档但不重载插件（reloadPluginsOnSwitch=false）：DataRoot→…`，插件不再重载。
+
+---
+
 ## 4. 清单：manifest.json
 
 文件名优先 `<插件名>.manifest.json`（Lua 用 `plugin.manifest.json`），找不到再找 `manifest.json`。**缺失或 JSON 损坏都不影响加载**（按“无清单”处理）。
@@ -333,7 +422,12 @@ plugins\
    └─ 你的私有依赖.dll
 ~~~
 
-每个插件有独立数据目录 `<管理器目录>\plugin-data\<插件名>\`（即 `ctx.DataDir`）。
+每个插件有独立数据目录（即 `ctx.DataDir`），**按服务器档隔离**（多档细节见 §3.6）：
+
+| 档 | `ctx.DataDir` |
+|:--|:--|
+| 从旧 `connection.json` 迁移来的第一档 | `<管理器目录>\plugin-data\<插件名>\`（沿用旧的全局目录，老配置不搬家） |
+| 之后新建的每一档 | `<管理器目录>\plugin-data\<档id>\<插件名>\` |
 
 **加载流程与错误隔离**：
 
@@ -554,5 +648,6 @@ end)
 | `Plugins\PluginHost.cs` | 宿主：生命周期、命令、指标、状态、权限、配置、i18n、服务端控制注入点 |
 | `Plugins\LuaPluginHost.cs` | Lua 运行时：适配器、ctx 桥、计时器、声明式面板 |
 | `Controls\ClockTimePicker.cs` | 钟表式时间选择器（外环分钟 / 内环小时，可拖动） |
-| `MainWindow.axaml(.cs)` | 「扩展」菜单、插件视图、插件管理页、事件触发、`!命令` 派发、文件页右键菜单挂载 |
+| `MainWindow.axaml(.cs)` | 「扩展」菜单、插件视图、插件管理页、事件触发、`!命令` 派发、文件页右键菜单挂载；`InitPluginHost` / `ScheduleProfilePluginReload`（切档重载插件） |
+| `Servers\ServersConfig.cs` | `servers.json` 多档：`PluginDataRoot()`（插件数据按档隔离）、`LegacyDataRoot`、`ReloadPluginsOnSwitch`、`BgLogSubs` |
 

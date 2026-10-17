@@ -112,6 +112,12 @@ public sealed class ServersConfig
     /// <summary>界面语言是全局偏好，不属于任何一台服务器。</summary>
     public string Language { get; set; } = "zh-CN";
     public string ActiveId { get; set; } = "";
+
+    /// <summary>后台日志流上限（非激活档各一条 /stream/log）。档数多、嫌占连接就调小；0=不订阅。</summary>
+    public int BgLogSubs { get; set; } = 4;
+
+    /// <summary>切档时是否重载插件（默认开：插件内存态不跨档；关掉可省 4~26 秒的后台开销，但 Lua 定时任务等状态会跨档共用）。</summary>
+    public bool ReloadPluginsOnSwitch { get; set; } = true;
     public List<ServerProfile> Servers { get; set; } = [];
 
     /// <summary>本次加载是否刚从 connection.json 迁移过来（只在内存里用）。</summary>
@@ -257,6 +263,8 @@ public sealed class ServersConfig
             Version = int.TryParse(o["version"]?.ToString(), out int v) && v > 0 ? v : 1,
             Language = o["language"]?.ToString() ?? "zh-CN",
             ActiveId = o["active"]?.ToString() ?? "",
+            BgLogSubs = int.TryParse(o["bgLogSubs"]?.ToString(), out int bl) && bl >= 0 ? bl : 4,
+            ReloadPluginsOnSwitch = o["reloadPluginsOnSwitch"]?.GetValue<bool>() ?? true,
         };
         if (o["servers"] is JsonArray arr)
         {
@@ -354,6 +362,8 @@ public sealed class ServersConfig
             ["version"] = Version,
             ["language"] = Language,
             ["active"] = ActiveId,
+            ["bgLogSubs"] = BgLogSubs,
+            ["reloadPluginsOnSwitch"] = ReloadPluginsOnSwitch,
             ["servers"] = arr,
         };
     }
