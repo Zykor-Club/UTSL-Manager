@@ -463,62 +463,6 @@
         </Border>
       </Grid>
 
-      <!-- ★ 多档概览：一屏看所有档的在线/世界/CPU/内存/延迟（只读轮询，不建隧道） -->
-      <Grid x:Name="OverviewView" IsVisible="False" RowDefinitions="Auto,Auto,*">
-        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,4,0,14">
-          <StackPanel Grid.Column="0">
-            <TextBlock Text="概览" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
-            <TextBlock x:Name="OverviewHint" Text="所有服务器一屏总览 · 每 10 秒只读刷新一次（不建立隧道）" FontSize="11"
-                       Foreground="{DynamicResource TextSecondary}" Margin="0,3,0,0"/>
-          </StackPanel>
-          <Button Grid.Column="1" x:Name="BtnOverviewRefresh" Content="刷新" FontSize="11" Padding="10,0"
-                  VerticalAlignment="Center" Click="OnRefreshOverview" ToolTip.Tip="立刻重新采样一次"/>
-        </Grid>
-        <TextBlock Grid.Row="1" x:Name="OverviewEmpty" IsVisible="False" Text="还没有服务器：点右上角 ＋ 新增一台。"
-                   FontSize="13" Foreground="{DynamicResource TextSecondary}" Margin="2,8,0,0"/>
-        <ScrollViewer Grid.Row="2" ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
-          <ItemsControl x:Name="OverviewList">
-            <ItemsControl.ItemTemplate>
-              <DataTemplate>
-                <Border Classes="card" Background="{DynamicResource MatPanel}" BorderThickness="1" CornerRadius="10"
-                        Padding="14,11" Margin="0,0,0,8"
-                        Tag="{Binding Id}" Cursor="Hand" PointerPressed="OnServerCardPressed"
-                        ToolTip.Tip="单击切换到这台服务器；右键可重命名/复制/删除">
-                  <Grid ColumnDefinitions="Auto,*,56,70,124,96,64" VerticalAlignment="Center">
-                    <Border Grid.Column="0" Width="8" Height="8" CornerRadius="4" Background="{Binding DotBrush}"
-                            VerticalAlignment="Center" Margin="0,0,10,0"/>
-                    <StackPanel Grid.Column="1" Spacing="2">
-                      <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
-                                   Foreground="{DynamicResource TextPrimary}" TextTrimming="CharacterEllipsis"/>
-                        <TextBlock Text="{Binding Mode}" FontSize="11" Foreground="{DynamicResource TextTertiary}"
-                                   VerticalAlignment="Center"/>
-                      </StackPanel>
-                      <TextBlock Text="{Binding Note}" IsVisible="{Binding HasNote}" FontSize="11"
-                                 Foreground="{DynamicResource SysRed}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
-                    </StackPanel>
-                    <TextBlock Grid.Column="2" Text="{Binding StateText}" FontSize="11" VerticalAlignment="Center"
-                               Foreground="{DynamicResource TextSecondary}"/>
-                    <TextBlock Grid.Column="3" Text="{Binding WorldsText}" FontSize="11" VerticalAlignment="Center"
-                               Foreground="{DynamicResource TextSecondary}"
-                               FontFamily="Cascadia Mono,Consolas,monospace"/>
-                    <TextBlock Grid.Column="4" Text="{Binding CpuText}" FontSize="11" VerticalAlignment="Center"
-                               Foreground="{DynamicResource TextSecondary}"
-                               FontFamily="Cascadia Mono,Consolas,monospace"/>
-                    <TextBlock Grid.Column="5" Text="{Binding MemText}" FontSize="11" VerticalAlignment="Center"
-                               Foreground="{DynamicResource TextSecondary}"
-                               FontFamily="Cascadia Mono,Consolas,monospace"/>
-                    <TextBlock Grid.Column="6" Text="{Binding LatText}" FontSize="11" VerticalAlignment="Center"
-                               Foreground="{DynamicResource TextTertiary}"
-                               FontFamily="Cascadia Mono,Consolas,monospace"/>
-                  </Grid>
-                </Border>
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
-        </ScrollViewer>
-      </Grid>
-
       <!-- 世界链可视化视图 -->
       <Grid x:Name="ChainView" IsVisible="False" RowDefinitions="Auto,*">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="0,4,0,12">
@@ -656,12 +600,6 @@
           <TextBlock x:Name="PluginMetricsHeader" Text="插件指标" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}" Margin="4,14,0,6" IsVisible="False"/>
           <StackPanel x:Name="PluginMetricsHost" Spacing="4"/>
           <TextBlock Text="功能" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}" Margin="4,14,0,6"/>
-          <Button x:Name="BtnOverview" Classes="menu" CornerRadius="6" AutomationProperties.Name="概览" Click="OnShowOverview">
-            <Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
-              <Path Grid.Column="0" Classes="icon" Data="{StaticResource IcoGauge}" Stroke="{Binding $parent[Button].Foreground}"/>
-              <TextBlock Grid.Column="1" Text="概览" VerticalAlignment="Center"/>
-            </Grid>
-          </Button>
           <Button x:Name="BtnConn" Classes="menu" CornerRadius="6" AutomationProperties.Name="连接设置" Click="OnShowConn">
             <Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
               <Path Grid.Column="0" Classes="icon" Data="{StaticResource IcoConn}" Stroke="{Binding $parent[Button].Foreground}"/>
