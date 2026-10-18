@@ -1631,6 +1631,7 @@ public partial class MainWindow : Window
     private static bool AgentAlive;
     // agent 指标（远端没装 MetricsChannel 插件时的 2 秒级来源；网络是累计字节，速率由管理器差分）
     private static double AgentCpuPct, AgentPrivateMB;
+    private static int AgentCores;          // 远端机器核数（agent /metrics 根节点 cores）→ 把"单核 %"换算成"满槽 %"
     private static long AgentSentBytes = -1, AgentRecvBytes = -1, AgentMetricsAtMs;
     private static long lastAgentSent = -1, lastAgentRecv = -1;
     // ★ 复用，别每轮 new；且禁用代理（本地/隧道地址走代理必失败）
@@ -1755,6 +1756,7 @@ public partial class MainWindow : Window
                 // ★ 直连（无 ssh）模式下没有快照可用，服务端存活改看 agent 的 /metrics（server.running）
                 AgentServerRunning = srv.TryGetProperty("running", out var rn) && rn.GetBoolean();
                 AgentCpuPct = srv.TryGetProperty("cpuSingleCorePct", out var c) ? c.GetDouble() : 0;
+                if (doc.RootElement.TryGetProperty("cores", out var cr) && cr.ValueKind == JsonValueKind.Number) { AgentCores = cr.GetInt32(); }
                 AgentPrivateMB = srv.TryGetProperty("privateMB", out var m) ? m.GetDouble() : 0;
                 var net = doc.RootElement.GetProperty("net");
                 AgentSentBytes = net.TryGetProperty("sentBytes", out var sb) ? sb.GetInt64() : -1;
@@ -2361,6 +2363,14 @@ public partial class MainWindow : Window
     /// <summary>四路序列必须**每拍各补一次**样本：值未知时沿用上一次（首次为 0）。
     /// 否则某一路（如进程消失时的内存、没装 metrics 插件时的内存）会漏拍 → 长度不一致 →
     /// 三张图的填充宽度就不齐（这是之前"看起来没对齐"的另一半原因）。</summary>
+    /// <summary>CPU 显示格式：`43.3% / 200%`（分子=占单核，分母=这台机器满槽）。
+    /// 只写 43.3% 会让人以为"才 43%"，只写 100% 又会让人以为"整机吃满"——两个都是误读。</summary>
+    private static string FmtCpu(double pct)
+    {
+        int cores = UseRemote && AgentCores > 0 ? AgentCores : Environment.ProcessorCount;
+        return cores > 0 ? $"{pct:F1}% / {cores * 100.0:F0}%" : $"{pct:F1}%";
+    }
+
     private static void PushCarry(List<double> list, double? v)
         => Push(list, v ?? (list.Count > 0 ? list[^1] : 0));
     private void SampleMetrics()
@@ -2375,7 +2385,12 @@ public partial class MainWindow : Window
             {
                 bool live = UseRemote && (AgentAlive || MetricsAtMs > 0);
                 // ★ 远端是 2 核机器：cpuSingleCorePct 是"单核 %"，标题必须写清楚，否则会被误读成整机占用
-                if (CpuTitle is not null) { CpuTitle.Text = !UseRemote ? "CPU 使用量（本机 · 单核 %）" : live ? "CPU（远端 · 单核 % · 实时 2s）" : "CPU（远端 · 单核 %）"; }
+                if (CpuTitle is not null)
+            {
+                // ★ 写清"几个核"：单核 % 满格是 100%，整机满槽是 N×100%——不写核数就会把 100% 误读成"整机吃满"
+                int cores = UseRemote && AgentCores > 0 ? AgentCores : Environment.ProcessorCount;
+                CpuTitle.Text = !UseRemote ? $"CPU 使用量（本机 · {cores} 核）" : live ? $"CPU（远端 · {cores} 核 · 实时 2s）" : $"CPU（远端 · {cores} 核）";
+            }
                 if (MemTitle is not null) { MemTitle.Text = !UseRemote ? "内存使用量（本机 · 私有）" : live ? "内存（远端 · 实时 2s）" : "内存（远端 · 私有）"; }
                 if (NetTitle is not null) { NetTitle.Text = !UseRemote ? "网络流量（本机全部网卡）" : live ? "网络（远端网卡 · 实时 2s）" : "网络（远端网卡）"; }
             }
@@ -2403,7 +2418,7 @@ public partial class MainWindow : Window
                 }
                 lastAgentSent = AgentSentBytes; lastAgentRecv = AgentRecvBytes;
                 PushCarry(cpuHist, cpuVal); PushCarry(memHist, memVal); PushCarry(upHist, up); PushCarry(downHist, down);
-                CpuNow.Text = $"{cpuVal:F2}%";
+                CpuNow.Text = FmtCpu(cpuVal);
                 MemNow.Text = $"{memVal:F2} GB";
                 NetNow.Text = up >= 1024 || down >= 1024
                     ? $"↑ {up / 1024.0:F2}  ↓ {down / 1024.0:F2} MB/s"
@@ -2419,7 +2434,7 @@ public partial class MainWindow : Window
                 PushCarry(cpuHist, cpuVal);
                 PushCarry(memHist, memVal);
                 PushCarry(upHist, up); PushCarry(downHist, down);
-                CpuNow.Text = $"{cpuVal:F2}%";
+                CpuNow.Text = FmtCpu(cpuVal);
                 MemNow.Text = $"{memVal:F2} GB";
                 NetNow.Text = up >= 1024 || down >= 1024
                     ? $"↑ {up / 1024.0:F2}  ↓ {down / 1024.0:F2} MB/s"
@@ -2435,7 +2450,7 @@ public partial class MainWindow : Window
                 up = SnapUpKbps;
                 down = SnapDownKbps;
                 PushCarry(cpuHist, cpuVal);
-                CpuNow.Text = $"{cpuVal:F2}%";
+                CpuNow.Text = FmtCpu(cpuVal);
                 PushCarry(memHist, SnapMemBytes > 0 ? memVal : null);
                 MemNow.Text = SnapMemBytes > 0 ? $"{memVal:F2} GB" : "—";
                 PushCarry(upHist, up); PushCarry(downHist, down);
@@ -2469,7 +2484,7 @@ public partial class MainWindow : Window
                         PushCarry(cpuHist, cpuVal);
                     }
                     lastCpuTime = srv.TotalProcessorTime;
-                    CpuNow.Text = $"{cpuVal:F2}%";
+                    CpuNow.Text = FmtCpu(cpuVal);
                     memVal = srv.PrivateMemorySize64 / 1073741824.0;
                     PushCarry(memHist, memVal);
                     MemNow.Text = $"{memVal:F2} GB";
