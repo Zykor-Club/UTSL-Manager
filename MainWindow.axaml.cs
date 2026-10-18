@@ -7322,7 +7322,7 @@ public partial class MainWindow : Window
         if (remote)
         {
             ProtectWatchdog(600, "remote-start");   // 启动后 10 分钟内掉线自启不介入（世界加载可能很久）
-            Term("--- 远端启动中（SSH + WMI + 控制台启动器），请稍候 ---", "#79C0FF");
+            Term("远端：启动服务端…", "#79C0FF");
             ErrText.Text = "远端启动中…";
         }
         else
@@ -7343,7 +7343,7 @@ public partial class MainWindow : Window
         bool remote = ProcessBackend.IsRemote;
         if (remote)
         {
-            Term("--- 远端停止中（只杀 UTSL，不动机器人）---", "#79C0FF");
+            Term("远端：停止服务端…", "#79C0FF");
             ErrText.Text = "远端停止中…";
         }
         var swStop = System.Diagnostics.Stopwatch.StartNew();
@@ -7375,14 +7375,14 @@ public partial class MainWindow : Window
         int timeoutSec = prof.StopTimeoutSec;
         if (cmd.Length == 0 || timeoutSec <= 0)
         {
-            Term("--- 停机：本档未配置停机指令 → 直接结束进程（可用「连接设置 → 停机指令」打开）---", "#8E8E93");
+            Term("该档未配置停机指令，直接结束进程。", "#8E8E93");
             Program.Log($"STOP cmd-sent cmd={cmd}");
             return;
         }
         try { _ = await Http.GetStringAsync(Rest + "/world/list?token=" + Uri.EscapeDataString(Token)); }
         catch
         {
-            Term("--- 停机：REST 不可达 → 跳过停机指令，直接结束进程 ---", "#FEBC2E");
+            Term("REST 不可达，跳过停机指令，直接结束进程。", "#FEBC2E");
             return;
         }
         try
