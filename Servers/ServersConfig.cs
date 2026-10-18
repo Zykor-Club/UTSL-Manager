@@ -145,9 +145,6 @@ public sealed class ServersConfig
     public bool ReloadPluginsOnSwitch { get; set; } = true;
     public List<ServerProfile> Servers { get; set; } = [];
 
-    /// <summary>定时任务（计划任务）。与档分离存放：任务引用 profileId，删档不连带删任务（任务会显示"档已不存在"）。</summary>
-    public List<ScheduledTask> Tasks { get; set; } = [];
-
     /// <summary>本次加载是否刚从 connection.json 迁移过来（只在内存里用）。</summary>
     public bool Migrated { get; set; }
     /// <summary>是否存在明文令牌（迁移后立刻重新加密落盘）。</summary>
@@ -296,13 +293,6 @@ public sealed class ServersConfig
             BgLogSubs = int.TryParse(o["bgLogSubs"]?.ToString(), out int bl) && bl >= 0 ? bl : 4,
             ReloadPluginsOnSwitch = o["reloadPluginsOnSwitch"]?.GetValue<bool>() ?? true,
         };
-        if (o["tasks"] is JsonArray tarr)
-        {
-            foreach (var tn in tarr)
-            {
-                if (tn is JsonObject to) { cfg.Tasks.Add(ScheduledTask.FromJson(to)); }
-            }
-        }
         if (o["servers"] is JsonArray arr)
         {
             bool localSeen = false;      // 本机档里的第一台 = 主档（缺启动参数键时才给它默认旧参数）
@@ -421,15 +411,7 @@ public sealed class ServersConfig
             ["bgLogSubs"] = BgLogSubs,
             ["reloadPluginsOnSwitch"] = ReloadPluginsOnSwitch,
             ["servers"] = arr,
-            ["tasks"] = TasksJson(),
         };
-    }
-
-    private JsonArray TasksJson()
-    {
-        var ta = new JsonArray();
-        foreach (var t in Tasks) { ta.Add(t.ToJson()); }
-        return ta;
     }
 
     /// <summary>最近一次落盘失败的原因（成功时为空串）。UI 用它提示 —— 原来 catch {} 静默吞掉，用户以为存上了。</summary>

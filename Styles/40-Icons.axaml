@@ -39,9 +39,6 @@
     <!-- 新增：加号 -->
     <StreamGeometry x:Key="IcoPlus">M12,5 V19 M5,12 H19</StreamGeometry>
 
-    <!-- 计划任务：时钟（圆 + 指针） -->
-    <StreamGeometry x:Key="IcoClock">M12,3.5 A8.5,8.5 0 1 1 11.99,3.5 M12,7.5 V12 L15.2,14</StreamGeometry>
-
     <!-- 指标卡：脉搏（CPU） -->
     <StreamGeometry x:Key="IcoPulse">M3,12 H7 L10,5 L14,19 L17,12 H21</StreamGeometry>
 
