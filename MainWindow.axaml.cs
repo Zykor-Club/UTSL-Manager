@@ -68,7 +68,7 @@ public sealed class ServerCardRow : System.ComponentModel.INotifyPropertyChanged
 /// ★ 三列显示（时间 / 级别 / 消息）：服务端日志行会被拆成三列，只给"级别"上色；
 ///   管理层自己写的消息（"已切换到…"）不拆列，原样落在消息列。
 ///   过滤 / 暂停计数 / 复制 仍然只看 Text（原始整行），所以这些功能的语义完全没变。</summary>
-public sealed class TermLine
+public sealed class TermLine : System.ComponentModel.INotifyPropertyChanged
 {
     private static readonly System.Text.RegularExpressions.Regex LogRx = new(
         @"^(?<t>\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+)\s+[+-]\d\d:\d\d\s+\[(?<lv>[A-Za-z]+)\](?<rest>.*)$",   // 时间列不含时区偏移（省 7 个字符，够宽不贴边）
@@ -95,6 +95,27 @@ public sealed class TermLine
 
     public IBrush Brush { get; set; } = new SolidColorBrush(Color.Parse("#B9B9C0"));
 
+    /// <summary>合并计数（连续重复行合成一行时 &gt; 1）。改了要通知 UI，否则徽标不刷新。</summary>
+    private int _repeat = 1;
+    public int Repeat
+    {
+        get => _repeat;
+        set
+        {
+            if (_repeat == value) { return; }
+            _repeat = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Repeat)));
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(HasRepeat)));
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(RepeatBadge)));
+        }
+    }
+    public bool HasRepeat => _repeat > 1;
+    public string RepeatBadge => _repeat > 1 ? $"×{_repeat}" : "";
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    /// <summary>合并签名：级别 + 消息（忽略时间戳）。相邻两行签名相同 = 同一条日志在刷。</summary>
+    public string Sig { get; private set; } = "";
+
     /// <summary>是否拆成了三列（服务端日志行才有时间/级别）。</summary>
     public bool HasColumns { get; private set; }
     public string ColTime { get; private set; } = "";
@@ -110,12 +131,14 @@ public sealed class TermLine
         if (!m.Success)
         {
             HasColumns = false; ColTime = ""; ColLevel = ""; ColText = _text;
+            Sig = "|" + _text;
             return;
         }
         HasColumns = true;
         ColTime = m.Groups["t"].Value;
         ColLevel = m.Groups["lv"].Value.ToUpperInvariant();
         ColText = m.Groups["rest"].Value.TrimStart();
+        Sig = ColLevel + "|" + ColText;
         ColLevelBrush = ColLevel switch
         {
             "WARN" or "WARNING" => LvWarn,
@@ -284,7 +307,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, ObservableCollection<TermLine>> termViewByServer = [];
     private readonly Dictionary<string, string> termFilterByServer = [];
     private bool suppressFilterEvent;      // 代码改过滤框文本时不要触发重建
-    private bool HideTermNoise;            // "隐藏抓包噪声"（全局偏好，不按档记）
+    private bool MergeRepeats;             // "合并重复"（连续相同日志压成一行 + 计数；全局偏好）
     private string lastLogFile = "";
     private long logPos;
     // ★ 自检修复（卡顿大主因）：ItemsControl 不虚拟化，1500 个 TextBlock（每行还 Wrap）
@@ -710,7 +733,9 @@ public partial class MainWindow : Window
         if (matches)
         {
             var view = TermViewFor(profileId);
-            view.Add(line);
+            // ★ 合并连续重复：签名（级别+消息，忽略时间）与上一行相同 → 不新增，只把计数 +1
+            if (MergeRepeats && view.Count > 0 && view[^1].Sig == line.Sig) { view[^1].Repeat++; }
+            else { view.Add(line); }
             while (view.Count > MaxTermLines) { view.RemoveAt(0); }
         }
         if (dropped > 0) { termDropped += dropped; }
@@ -725,30 +750,14 @@ public partial class MainWindow : Window
     /// 日志里的正则元字符太多，用户随手输入一个 "[" 就让整条过滤失效，得不偿失。</summary>
     private bool MatchesFilter(string profileId, TermLine line)
     {
-        string text = line.Text ?? "";
-        // ★ 噪声排除："隐藏抓包噪声"勾上时，先把这类每秒刷屏的行筛掉（只影响显示，Raw 不动）
-        if (HideTermNoise && IsNoiseLine(text)) { return false; }
         string q = FilterFor(profileId);
-        return q.Length == 0 || text.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0;
+        return q.Length == 0 || (line.Text ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
-    /// <summary>终端噪声判定。目前只认 UTSL 每秒刷的抓包行；
-    /// 要加新的，往这个数组里塞一个标记就行（别写成正则，用户输入的正则坑太多）。</summary>
-    private static readonly string[] TermNoiseMarkers =
+    /// <summary>"合并重复"开关：改完按 Raw 重建显示视图（和过滤同一个入口）。</summary>
+    private void OnMergeRepeatsToggle(object? sender, RoutedEventArgs e)
     {
-        "[NetPacketChannel]",
-    };
-
-    private static bool IsNoiseLine(string text)
-    {
-        foreach (var m in TermNoiseMarkers) { if (text.IndexOf(m, StringComparison.OrdinalIgnoreCase) >= 0) { return true; } }
-        return false;
-    }
-
-    /// <summary>"隐藏抓包噪声"开关：改完按 Raw 重建显示视图（和过滤同一个入口）。</summary>
-    private void OnHideNoiseToggle(object? sender, RoutedEventArgs e)
-    {
-        HideTermNoise = ChkHideNoise?.IsChecked == true;
+        MergeRepeats = ChkMergeRepeats?.IsChecked == true;
         RebuildTermView(ActiveSrv.Id);
     }
 
@@ -773,7 +782,13 @@ public partial class MainWindow : Window
         var raw = TermFor(profileId);
         var view = TermViewFor(profileId);
         view.Clear();
-        foreach (var line in raw) { if (MatchesFilter(profileId, line)) { view.Add(line); } }
+        foreach (var line in raw) { line.Repeat = 1; }      // 先复位，避免旧计数残留
+        foreach (var line in raw)
+        {
+            if (!MatchesFilter(profileId, line)) { continue; }
+            if (MergeRepeats && view.Count > 0 && view[^1].Sig == line.Sig) { view[^1].Repeat++; }
+            else { view.Add(line); }
+        }
         while (view.Count > MaxTermLines) { view.RemoveAt(0); }
 
         if (string.Equals(profileId, ActiveSrv.Id, StringComparison.Ordinal))
@@ -796,12 +811,11 @@ public partial class MainWindow : Window
     {
         if (TermTitle is null) { return; }
         string t = "服务器终端";
-        // 隐藏噪声时把"藏了多少行"写进标题，否则用户不知道是"没日志"还是"被藏了"
-        if (HideTermNoise)
+        // 合并时把"压掉了多少行"写进标题，否则用户不知道是"没日志"还是"被合并了"
+        if (MergeRepeats)
         {
-            int noise = 0;
-            foreach (var l in term) { if (IsNoiseLine(l.Text ?? "")) { noise++; } }
-            if (noise > 0) { t += $"（已隐藏噪声 {noise} 行）"; }
+            int saved = term.Count - termView.Count;
+            if (saved > 0) { t += $"（已合并 {saved} 行重复）"; }
         }
         string q = FilterFor(ActiveSrv.Id);
         if (q.Length > 0) { t += $"（过滤「{q}」：显示 {termView.Count}/{term.Count} 行）"; }

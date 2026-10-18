@@ -244,9 +244,9 @@
                 <TextBox x:Name="TbTermFilter" Width="150" FontSize="11" Padding="6,1" CornerRadius="6"
                          Watermark="过滤日志（关键字/正则）" ToolTip.Tip="只影响显示：原始缓冲保留，清空过滤即恢复；切档各自记住"
                          TextChanged="OnTermFilterChanged"/>
-                <CheckBox x:Name="ChkHideNoise" Content="隐藏抓包噪声" FontSize="11" IsChecked="False"
-                          ToolTip.Tip="隐藏 [NetPacketChannel] 这类每秒刷屏的噪声行（只影响显示，原始缓冲保留）"
-                          Click="OnHideNoiseToggle"/>
+                <CheckBox x:Name="ChkMergeRepeats" Content="合并重复" FontSize="11" IsChecked="False"
+                          ToolTip.Tip="连续相同的日志压成一行并在行尾显示 ×次数（只影响显示，原始缓冲保留）"
+                          Click="OnMergeRepeatsToggle"/>
                 <CheckBox x:Name="ChkAutoScroll" Content="自动滚动" FontSize="11" IsChecked="True" Click="OnAutoScrollToggle"/>
                 <Button x:Name="BtnClearTerm" Content="清屏" FontSize="11" Padding="8,1" CornerRadius="6" Click="OnClearTerm"/>
               </StackPanel>
@@ -287,7 +287,7 @@
                 <DataTemplate>
                   <!-- ★ 三列：时间（定宽 150，暗）｜级别（定宽 44，上色）｜消息（中性色）。
                        不是日志行时前两列 IsVisible=False 且定宽列会缩到 0，管理层消息照旧从左边开始。 -->
-                  <Grid ColumnDefinitions="Auto,Auto,*" Margin="12,0,12,1" ToolTip.Tip="{Binding Text}">
+                  <Grid ColumnDefinitions="Auto,Auto,*,Auto" Margin="12,0,12,1" ToolTip.Tip="{Binding Text}">
                     <TextBlock Grid.Column="0" Text="{Binding ColTime}" IsVisible="{Binding HasColumns}"
                                Width="168" FontSize="11" Foreground="{DynamicResource TextTertiary}"
                                FontFamily="Cascadia Mono,Consolas,monospace" VerticalAlignment="Center"/>
@@ -298,6 +298,14 @@
                     <TextBlock Grid.Column="2" Text="{Binding ColText}" Foreground="{Binding ColTextBrush}"
                                FontSize="13" FontFamily="Cascadia Mono,Consolas,monospace"
                                TextWrapping="Wrap"/>
+                    <!-- ★ 合并计数：连续相同日志压成一行时在行尾显示 ×N（与浏览器 Console 一致） -->
+                    <Border Grid.Column="3" IsVisible="{Binding HasRepeat}" Margin="8,0,4,0"
+                            Background="{DynamicResource FillPrimary}" CornerRadius="4" Padding="5,0"
+                            VerticalAlignment="Center">
+                      <TextBlock Text="{Binding RepeatBadge}" FontSize="11" FontWeight="SemiBold"
+                                 Foreground="{DynamicResource Accent}"
+                                 FontFamily="Cascadia Mono,Consolas,monospace"/>
+                    </Border>
                   </Grid>
                 </DataTemplate>
               </ListBox.ItemTemplate>
