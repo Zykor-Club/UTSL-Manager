@@ -222,6 +222,13 @@ public partial class MainWindow : Window
     private readonly List<ServerCardRow> srvRows = [];
     private ObservableCollection<TermLine> term = [];
     private readonly Dictionary<string, ObservableCollection<TermLine>> termByServer = [];
+
+    // ★ 过滤层：Raw（term/termByServer）永远是全量，显示用 termView（过滤后的子集）。
+    //   这样"改关键字"随时可以重新解释整段历史；若直接在 Raw 上过滤，暂停/缓存期间的行就再也找不回来了。
+    private ObservableCollection<TermLine> termView = [];
+    private readonly Dictionary<string, ObservableCollection<TermLine>> termViewByServer = [];
+    private readonly Dictionary<string, string> termFilterByServer = [];
+    private bool suppressFilterEvent;      // 代码改过滤框文本时不要触发重建
     private string lastLogFile = "";
     private long logPos;
     // ★ 自检修复（卡顿大主因）：ItemsControl 不虚拟化，1500 个 TextBlock（每行还 Wrap）
@@ -255,7 +262,7 @@ public partial class MainWindow : Window
         Program.Log("ctor:WarmupRemote queued");   // ★ 启动即后台预热常驻通道与常用配置，第一次点击就秒开   // ★ 必须在任何 REST 调用之前（TSManager 也是先读配置再启动 ✓）
         WorldList.ItemsSource = rows;
         ServerCards.ItemsSource = srvCards;
-        TermLines.ItemsSource = term;
+        TermLines.ItemsSource = termView;
         Term("UTSLManager 终端已就绪 —— 上方是服务端日志流，下方可直接输入指令", "#8E8E93");
         // 启动打点：诊断"点了图标到底起没起来 / 什么时候起来的"（与 switchperf.log 同文件，写满自动清）
         try
@@ -615,20 +622,85 @@ public partial class MainWindow : Window
         if (termPending.Count == 0) { return; }
         // ★ 写"当前激活档"的缓冲：字段 term 是"当前显示的那一份"，但它可能被切档过程短暂置换成
         //   别的档（历史 bug：切到新档后终端出现上一台的日志）。按 ActiveSrv.Id 路由可以从根上避免。
-        var target = TermFor(ActiveSrv.Id);
-        foreach (var line in termPending) { target.Add(line); }
+        foreach (var line in termPending) { AppendTermLine(ActiveSrv.Id, line); }
         termPending.Clear();
-        if (target.Count > MaxTermLines)
-        {
-            int drop = target.Count - MaxTermLines;
-            for (int i = 0; i < drop; i++) { target.RemoveAt(0); }
-            termDropped += drop;
-        }
         if (ChkAutoScroll?.IsChecked == true)
         {
-            try { if (term.Count > 0) { TermLines.ScrollIntoView(term[^1]); } } catch { }
+            try { if (termView.Count > 0) { TermLines.ScrollIntoView(termView[^1]); } } catch { }
         }
         UpdateTermTitle();
+    }
+
+    /// <summary>一行的唯一写入口：Raw 全量 → 命中过滤才进显示视图 → 顺便维护丢弃/暂停/标题。
+    /// ★ 服务端日志（TermTo）和管理层消息（Term→Flush）都走这里，计数才不会只统计一半。</summary>
+    private void AppendTermLine(string profileId, TermLine line)
+    {
+        var raw = TermFor(profileId);
+        raw.Add(line);
+        int dropped = 0;
+        while (raw.Count > MaxTermLines) { raw.RemoveAt(0); dropped++; }
+        bool active = string.Equals(profileId, ActiveSrv.Id, StringComparison.Ordinal);
+        if (!active) { return; }                       // 非激活档的显示视图等切过去时再重建
+        bool matches = MatchesFilter(profileId, line);
+        if (matches)
+        {
+            var view = TermViewFor(profileId);
+            view.Add(line);
+            while (view.Count > MaxTermLines) { view.RemoveAt(0); }
+        }
+        if (dropped > 0) { termDropped += dropped; }
+        if (ChkAutoScroll?.IsChecked != true && matches) { termPausedNew++; }
+        UpdateTermTitle();
+    }
+
+    private string FilterFor(string profileId)
+        => termFilterByServer.TryGetValue(profileId, out var q) ? q : "";
+
+    /// <summary>这一行是否命中过滤词（空过滤 = 全通过）。大小写不敏感；用 IndexOf 而不是正则：
+    /// 日志里的正则元字符太多，用户随手输入一个 "[" 就让整条过滤失效，得不偿失。</summary>
+    private bool MatchesFilter(string profileId, TermLine line)
+    {
+        string q = FilterFor(profileId);
+        return q.Length == 0 || (line.Text ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    /// <summary>取某档的"显示视图"。
+    /// ★ 激活档必须返回【字段 termView 本体】—— ListBox 绑的是这个字段；
+    ///   如果这里另建一个字典集合并往里写，界面就永远看不到过滤结果（实测：view=175 但界面仍是全量）。</summary>
+    private ObservableCollection<TermLine> TermViewFor(string id)
+    {
+        if (string.Equals(id, ActiveSrv.Id, StringComparison.Ordinal)) { return termView; }
+        if (!termViewByServer.TryGetValue(id, out var v))
+        {
+            v = []; termViewByServer[id] = v;
+            foreach (var line in TermFor(id)) { if (MatchesFilter(id, line)) { v.Add(line); } }
+            while (v.Count > MaxTermLines) { v.RemoveAt(0); }
+        }
+        return v;
+    }
+
+    /// <summary>过滤词变了 → 按 Raw 重建显示视图（Raw 不动，所以随时能改回来）。</summary>
+    private void RebuildTermView(string profileId)
+    {
+        var raw = TermFor(profileId);
+        var view = TermViewFor(profileId);
+        view.Clear();
+        foreach (var line in raw) { if (MatchesFilter(profileId, line)) { view.Add(line); } }
+        while (view.Count > MaxTermLines) { view.RemoveAt(0); }
+
+        if (string.Equals(profileId, ActiveSrv.Id, StringComparison.Ordinal))
+        {
+            if (ChkAutoScroll?.IsChecked == true) { try { if (view.Count > 0) { TermLines.ScrollIntoView(view[^1]); } } catch { } }
+            UpdateTermTitle();
+        }
+    }
+
+    /// <summary>过滤框文本变化：写入该档的过滤词并重建视图。</summary>
+    private void OnTermFilterChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (suppressFilterEvent || TbTermFilter is null) { return; }
+        termFilterByServer[ActiveSrv.Id] = TbTermFilter.Text ?? "";
+        RebuildTermView(ActiveSrv.Id);
     }
 
     /// <summary>标题上写清"丢了多少行 / 暂停期间新增多少行"——静默丢弃会让人以为日志断流。</summary>
@@ -636,6 +708,8 @@ public partial class MainWindow : Window
     {
         if (TermTitle is null) { return; }
         string t = "服务器终端";
+        string q = FilterFor(ActiveSrv.Id);
+        if (q.Length > 0) { t += $"（过滤「{q}」：显示 {termView.Count}/{term.Count} 行）"; }
         if (termDropped > 0) { t += $"（更早的 {termDropped} 行已丢弃）"; }
         if (ChkAutoScroll?.IsChecked != true && termPausedNew > 0) { t += $"（已暂停，期间新增 {termPausedNew} 行）"; }
         if (TermTitle.Text != t) { TermTitle.Text = t; }
@@ -2075,7 +2149,14 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnClearTerm(object? sender, RoutedEventArgs e) => TermFor(ActiveSrv.Id).Clear();
+    private void OnClearTerm(object? sender, RoutedEventArgs e)
+    {
+        TermFor(ActiveSrv.Id).Clear();
+        TermViewFor(ActiveSrv.Id).Clear();
+        termDropped = 0;
+        termPausedNew = 0;
+        UpdateTermTitle();
+    }
 
     private void RefreshLog()
     {
@@ -2670,20 +2751,7 @@ public partial class MainWindow : Window
     private void TermTo(string profileId, string text, string color)
     {
         if (!Dispatcher.UIThread.CheckAccess()) { Dispatcher.UIThread.Post(() => TermTo(profileId, text, color)); return; }
-        try
-        {
-            var c = TermFor(profileId);
-            c.Add(new TermLine { Text = text, Brush = GetBrush(color) });
-            int dropped = 0;
-            while (c.Count > MaxTermLines) { c.RemoveAt(0); dropped++; }
-            // 只有"当前显示的那一份"才影响标题与暂停计数
-            if (string.Equals(profileId, ActiveSrv.Id, StringComparison.Ordinal))
-            {
-                if (dropped > 0) { termDropped += dropped; }
-                if (ChkAutoScroll?.IsChecked != true) { termPausedNew++; }
-                UpdateTermTitle();
-            }
-        }
+        try { AppendTermLine(profileId, new TermLine { Text = text, Brush = GetBrush(color) }); }
         catch { }
     }
 
@@ -4111,12 +4179,12 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    var coll = TermFor(p.Id);
+                    // ★ 日志流是终端里绝大部分内容 —— 必须走统一写入口，否则过滤/暂停计数/丢弃计数全都统计不到它
+                    //   （原来这里直接 coll.Add，绕过了 AppendTermLine，导致"过滤 ExcuCmd 显示 0/245"）。
                     foreach (var raw in batch)
                     {
-                        coll.Add(new TermLine { Text = raw, Brush = GetBrush(PickColor(raw)) });
+                        AppendTermLine(p.Id, new TermLine { Text = raw, Brush = GetBrush(PickColor(raw)) });
                     }
-                    while (coll.Count > MaxTermLines) { coll.RemoveAt(0); }
                 }
                 catch { }
             });
@@ -4219,14 +4287,32 @@ public partial class MainWindow : Window
             //   结果它不进入字典、且控件可能还挂着旧集合 → 出现过"切到新档却看到上一台日志"）
             if (!termByServer.TryGetValue(target.Id, out var termNew)) { termNew = []; termByServer[target.Id] = termNew; }
             term = termNew;
+            // 过滤层同样"每档一份"：视图集合换引用，并按该档自己的过滤词重建一次
+            termViewByServer[fromId] = termView;                  // 旧档的视图原样存回
+            // ★ 必须显式取/建目标档的集合：此时 ActiveSrv 已经是 target，TermViewFor(target) 会返回"字段本体"，
+            //   直接用它会把旧档刚存好的那份清空并灌成新档内容（两个档共用一个集合）。
+            if (!termViewByServer.TryGetValue(target.Id, out var viewNew)) { viewNew = []; termViewByServer[target.Id] = viewNew; }
+            termView = viewNew;
+            termView.Clear();
+            foreach (var line in term) { if (MatchesFilter(target.Id, line)) { termView.Add(line); } }
+            while (termView.Count > MaxTermLines) { termView.RemoveAt(0); }
+            if (TbTermFilter is not null)
+            {
+                suppressFilterEvent = true;
+                TbTermFilter.Text = FilterFor(target.Id);
+                suppressFilterEvent = false;
+            }
+            termDropped = 0;
+            termPausedNew = 0;
             if (rows.Count == 0) { rows.Add(new WorldRow { Name = "全部世界", Size = "", Running = true }); }
             WorldList.ItemsSource = rows;
             // 先解绑再绑：避免 ItemsControl 复用旧集合的视觉缓存
             TermLines.ItemsSource = null;
-            TermLines.ItemsSource = term;
+            TermLines.ItemsSource = termView;
+            UpdateTermTitle();
             if (term.Count == 0)
             {
-                term.Add(new TermLine { Text = "已切换到「" + target.Name + "」，正在读取该档日志…", Brush = GetBrush("#9BA3AE") });
+                AppendTermLine(target.Id, new TermLine { Text = "已切换到「" + target.Name + "」，正在读取该档日志…", Brush = GetBrush("#9BA3AE") });
             }
             WorldList.SelectedIndex = 0;
             UpdateTarget();
