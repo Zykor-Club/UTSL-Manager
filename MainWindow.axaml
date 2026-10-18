@@ -39,9 +39,10 @@
       <Setter Property="Background" Value="{DynamicResource AccentHover}"/>
     </Style>
     <!-- ★ 多服务器：卡片样式（用 Classes 而不是直接绑 Background，:pointerover 才覆盖得动） -->
+    <!-- ★ L3：压平成一个"列表行" —— 不画面板底、不画边框，只靠 hover/选中表达状态（macOS 源列表的做法） -->
     <Style Selector="Border.srvcard">
-      <Setter Property="Background" Value="{DynamicResource MatPanel}"/>
-      <Setter Property="BorderBrush" Value="{DynamicResource Hairline}"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderBrush" Value="Transparent"/>
     </Style>
     <Style Selector="Border.srvcard:pointerover">
       <Setter Property="Background" Value="{DynamicResource FillTertiary}"/>
@@ -96,16 +97,16 @@
             <Border x:Name="BtnMin" Classes="tl" Width="12" Height="12" CornerRadius="6" Background="{DynamicResource SysYellow}" Cursor="Hand" PointerPressed="OnMin" ToolTip.Tip="最小化"><TextBlock Text="−" FontSize="8" Foreground="#8A5A00" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0"/></Border>
             <Border x:Name="BtnMax" Classes="tl" Width="12" Height="12" CornerRadius="6" Background="#28C840" Cursor="Hand" PointerPressed="OnMax" ToolTip.Tip="最大化"><TextBlock Text="+" FontSize="8" Foreground="#0B5A18" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0"/></Border>
           </StackPanel>
-          <TextBlock Grid.Column="1" Text="UTSLManager" FontSize="12" Foreground="{DynamicResource TextTertiary}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          <TextBlock Grid.Column="1" Text="UTSLManager" FontSize="13" Foreground="{DynamicResource TextTertiary}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
           <Border Grid.Column="2" Width="1"/>
         </Grid>
       </Border>
 
       <!-- 左侧栏：服务器卡片（一台一张）+ 当前服务器的世界列表 -->
-      <Border Grid.Row="1" Grid.Column="0" Background="{DynamicResource MatSidebar}" Padding="10,8,10,10">
+      <Border Grid.Row="1" Grid.Column="0" Background="{DynamicResource MatSidebar}" Padding="14,10,14,12">
         <DockPanel>
           <StackPanel DockPanel.Dock="Top" Margin="8,0,8,10">
-            <TextBlock Text="UTSLManager" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+            <TextBlock Text="UTSLManager" FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
             <TextBlock Text="UnifierTSL 多世界管理器" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,3,0,0"/>
           </StackPanel>
           <TextBlock DockPanel.Dock="Bottom" x:Name="ChainText" Text="世界链: —" FontSize="11" Foreground="{DynamicResource TextTertiary}" Margin="8,8,8,2" TextWrapping="Wrap"/>
@@ -122,7 +123,7 @@
             <ItemsControl x:Name="ServerCards">
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                  <Border Classes="srvcard" Margin="0,0,0,6" CornerRadius="10" Padding="10,8"
+                  <Border Classes="srvcard" Margin="0,0,0,6" CornerRadius="8" Padding="10,8"
                           BorderThickness="1" Tag="{Binding Id}" Cursor="Hand"
                           PointerPressed="OnServerCardPressed"
                           Classes.active="{Binding IsActive}">
@@ -132,22 +133,22 @@
                       <!-- 第 1 行：名称 + 状态 + 世界数 -->
                       <Grid Grid.Row="0" Grid.Column="1" ColumnDefinitions="*,Auto">
                         <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6">
-                          <TextBlock Classes="srvname" Text="{Binding Name}" FontSize="12.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                          <TextBlock Classes="srvstate" Text="{Binding State}" FontSize="10.5" VerticalAlignment="Center"/>
+                          <TextBlock Classes="srvname" Text="{Binding Name}" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                          <TextBlock Classes="srvstate" Text="{Binding State}" FontSize="11" VerticalAlignment="Center"/>
                         </StackPanel>
-                        <TextBlock Grid.Column="1" Classes="srvworlds" Text="{Binding Worlds}" FontSize="10.5" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                        <TextBlock Grid.Column="1" Classes="srvworlds" Text="{Binding Worlds}" FontSize="11" VerticalAlignment="Center" Margin="6,0,0,0"/>
                       </Grid>
                       <!-- 第 2 行：IP:端口 + 方式 -->
                       <TextBlock Grid.Row="1" Grid.Column="1" Classes="srvaddr" Text="{Binding Address}"
-                                 FontSize="10.5" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                                 FontSize="11" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
                       <!-- 第 3 行：CPU / 内存 -->
                       <Grid Grid.Row="2" Grid.Column="1" ColumnDefinitions="*,*" Margin="0,3,0,0">
-                        <TextBlock Grid.Column="0" Classes="srvmetric" Text="{Binding CpuText}" FontSize="10.5"/>
-                        <TextBlock Grid.Column="1" Classes="srvmetric" Text="{Binding MemText}" FontSize="10.5"/>
+                        <TextBlock Grid.Column="0" Classes="srvmetric" Text="{Binding CpuText}" FontSize="11"/>
+                        <TextBlock Grid.Column="1" Classes="srvmetric" Text="{Binding MemText}" FontSize="11"/>
                       </Grid>
                       <!-- 第 4 行：上下行流量 -->
                       <TextBlock Grid.Row="3" Grid.Column="1" Classes="srvmetric" Text="{Binding NetText}"
-                                 FontSize="10.5" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                                 FontSize="11" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
                     </Grid>
                   </Border>
                 </DataTemplate>
@@ -174,18 +175,18 @@
       <Grid x:Name="ConsoleView" RowDefinitions="Auto,Auto,Auto,*" HorizontalAlignment="Stretch">
         <Grid Grid.Row="0" Margin="0,4,0,12" ColumnDefinitions="*,Auto">
           <StackPanel Grid.Column="0" VerticalAlignment="Center">
-            <TextBlock Text="控制台" FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+            <TextBlock Text="控制台" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
             <TextBlock x:Name="TargetText" Text="目标: 全部世界" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,3,0,0"/>
           </StackPanel>
         </Grid>
         <TextBlock Grid.Row="1" x:Name="ErrText" Margin="0,0,0,8" FontSize="11" Foreground="{DynamicResource SysRed}" TextWrapping="Wrap"/>
 
         <!-- 监控卡片 -->
-        <Grid Grid.Row="2" ColumnDefinitions="*,*,*" Margin="0,0,0,12">
-          <Border Classes="card" Grid.Column="0" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" Padding="13,10" Margin="0,0,5,0">
+        <Grid Grid.Row="2" ColumnDefinitions="*,*,*" Margin="0,0,0,20">
+          <Border Classes="card" Grid.Column="0" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" Padding="16,14" Margin="0,0,5,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Grid.Column="0" x:Name="CpuTitle" Text="CPU 使用量" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                <TextBlock Grid.Column="0" x:Name="CpuTitle" Text="CPU 使用量" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
                 <TextBlock Grid.Column="1" x:Name="CpuNow" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
               </Grid>
               <Grid ColumnDefinitions="Auto,*" Margin="0,8,0,0">
@@ -195,10 +196,10 @@
                 <Canvas x:Name="CpuXLabels" Height="14" Margin="52,4,0,0"/>
             </StackPanel>
           </Border>
-          <Border Classes="card" Grid.Column="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" Padding="13,10" Margin="5,0">
+          <Border Classes="card" Grid.Column="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" Padding="16,14" Margin="5,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Grid.Column="0" x:Name="MemTitle" Text="内存使用量" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                <TextBlock Grid.Column="0" x:Name="MemTitle" Text="内存使用量" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
                 <TextBlock Grid.Column="1" x:Name="MemNow" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
               </Grid>
               <Grid ColumnDefinitions="Auto,*" Margin="0,8,0,0">
@@ -208,10 +209,10 @@
                 <Canvas x:Name="MemXLabels" Height="14" Margin="52,4,0,0"/>
             </StackPanel>
           </Border>
-          <Border Classes="card" Grid.Column="2" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" Padding="13,10" Margin="5,0,0,0">
+          <Border Classes="card" Grid.Column="2" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" Padding="16,14" Margin="5,0,0,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Grid.Column="0" x:Name="NetTitle" Text="网络流量" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                <TextBlock Grid.Column="0" x:Name="NetTitle" Text="网络流量" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
                 <TextBlock Grid.Column="1" x:Name="NetNow" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
               </Grid>
               <Grid ColumnDefinitions="Auto,*" Margin="0,8,0,0">
@@ -224,7 +225,7 @@
         </Grid>
 
         <!-- ★ 服务器终端（指令输出 + 服务器日志 合并，类 MCSManager 终端面板） -->
-        <Border Classes="card" Grid.Row="3" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" Margin="0,0,0,10" ClipToBounds="True">
+        <Border Classes="card" Grid.Row="3" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" Margin="0,0,0,10" ClipToBounds="True">
           <DockPanel>
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="14,9,14,7">
               <TextBlock Grid.Column="0" x:Name="TermTitle" Text="服务器终端" FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
@@ -238,9 +239,9 @@
             </Grid>
             <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource Hairline}" BorderThickness="0,1,0,0" Padding="12,9,12,11" Background="{DynamicResource MatWell}">
               <Grid ColumnDefinitions="Auto,*,Auto">
-                <TextBlock Grid.Column="0" x:Name="PromptText" Text="@ 全部世界" FontSize="12" FontWeight="SemiBold" Foreground="#0A84FF" VerticalAlignment="Center" Margin="0,0,9,0" FontFamily="Cascadia Mono,Consolas,monospace"/>
-                <TextBox Grid.Column="1" x:Name="CmdBox" Watermark="输入指令回车执行：@Dev /save · @2 /save · 不写前缀 = 全部世界 · 以 &gt; 开头 = 服务端控制台口径（输出显示在上方日志流）" FontSize="12" CornerRadius="8" FontFamily="Cascadia Mono,Consolas,monospace"/>
-                <Button Grid.Column="2" x:Name="SendBtn" Content="发送" Margin="9,0,0,0" CornerRadius="8"/>
+                <TextBlock Grid.Column="0" x:Name="PromptText" Text="@ 全部世界" FontSize="13" FontWeight="SemiBold" Foreground="#0A84FF" VerticalAlignment="Center" Margin="0,0,9,0" FontFamily="Cascadia Mono,Consolas,monospace"/>
+                <TextBox Grid.Column="1" x:Name="CmdBox" Watermark="输入指令回车执行：@Dev /save · @2 /save · 不写前缀 = 全部世界 · 以 &gt; 开头 = 服务端控制台口径（输出显示在上方日志流）" FontSize="13" CornerRadius="6" FontFamily="Cascadia Mono,Consolas,monospace"/>
+                <Button Grid.Column="2" x:Name="SendBtn" Content="发送" Margin="9,0,0,0" CornerRadius="6"/>
               </Grid>
             </Border>
             <!-- ★ 自检修复（卡顿主因）：原来是 ScrollViewer + ItemsControl，Avalonia 的 ItemsControl 不虚拟化，
@@ -270,7 +271,7 @@
               </ListBox.Styles>
               <ListBox.ItemTemplate>
                 <DataTemplate>
-                  <TextBlock Text="{Binding Text}" Foreground="{Binding Brush}" FontSize="12"
+                  <TextBlock Text="{Binding Text}" Foreground="{Binding Brush}" FontSize="13"
                              FontFamily="Cascadia Mono,Consolas,monospace" TextWrapping="Wrap" Margin="12,0,12,1"/>
                 </DataTemplate>
               </ListBox.ItemTemplate>
@@ -283,21 +284,21 @@
       <Grid x:Name="PluginsView" IsVisible="False" RowDefinitions="Auto,Auto,*">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,4,0,12">
           <StackPanel Grid.Column="0" VerticalAlignment="Center">
-            <TextBlock Text="文件管理" FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+            <TextBlock Text="文件管理" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
             <TextBlock x:Name="FileInfo" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="← 返回控制台" FontSize="13" Padding="12,5" CornerRadius="6" Click="OnBackToConsole"/>
         </Grid>
         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="6" Margin="0,0,0,10">
-          <Button Content="⬆ 上级" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnFileUp"/>
-          <Button Content="&#xE80F;  根目录" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnFileRoot"/>
-          <Button Content="＋ 新建文件夹" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnFileMkdir"/>
-          <Button Content="刷新" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnFileRefresh"/>
-          <Button Content="⬇ 上传文件" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnFileUpload"/>
-          <Button Content="✕ 取消传输" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnFileCancelTransfer"/>
+          <Button Content="⬆ 上级" FontSize="13" Padding="10,5" CornerRadius="6" Click="OnFileUp"/>
+          <Button Content="&#xE80F;  根目录" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="13" Padding="10,5" CornerRadius="6" Click="OnFileRoot"/>
+          <Button Content="＋ 新建文件夹" FontSize="13" Padding="10,5" CornerRadius="6" Click="OnFileMkdir"/>
+          <Button Content="刷新" FontSize="13" Padding="10,5" CornerRadius="6" Click="OnFileRefresh"/>
+          <Button Content="⬇ 上传文件" FontSize="13" Padding="10,5" CornerRadius="6" Click="OnFileUpload"/>
+          <Button Content="✕ 取消传输" FontSize="13" Padding="10,5" CornerRadius="6" Click="OnFileCancelTransfer"/>
           <TextBlock x:Name="FilePathText" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="10,0,0,0"/>
         </StackPanel>
-        <Border Grid.Row="2" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
+        <Border Grid.Row="2" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" ClipToBounds="True">
           <DockPanel>
             <StackPanel DockPanel.Dock="Top">
               <TextBlock Text="点文件名可编辑；点文件夹进入；.dll 行可勾选启用/停用" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="36,10,36,8" TextWrapping="Wrap"/>
@@ -323,12 +324,12 @@
       <Grid x:Name="ExtView" IsVisible="False" RowDefinitions="Auto,*">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,4,0,12">
           <StackPanel Grid.Column="0" VerticalAlignment="Center">
-            <TextBlock x:Name="ExtTitle" Text="扩展" FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+            <TextBlock x:Name="ExtTitle" Text="扩展" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
             <TextBlock x:Name="ExtDesc" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="← 返回控制台" FontSize="13" Padding="12,5" CornerRadius="6" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True" Padding="16,14">
+        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" ClipToBounds="True" Padding="16,14">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,13,0">
             <ContentControl x:Name="ExtContent"/>
           </ScrollViewer>
@@ -339,23 +340,23 @@
       <Grid x:Name="MgrPluginsView" IsVisible="False" RowDefinitions="Auto,Auto,*">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,4,0,12">
           <StackPanel Grid.Column="0" VerticalAlignment="Center">
-            <TextBlock Text="插件管理" FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+            <TextBlock Text="插件管理" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
             <TextBlock x:Name="MgrPluginInfo" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="← 返回控制台" FontSize="13" Padding="12,5" CornerRadius="6" Click="OnBackToConsole"/>
         </Grid>
         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="6" Margin="0,0,0,10">
-          <Button Content="&#xE72C;  重新加载" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnMgrPluginsReload"/>
-          <Button Content="&#xE8B7;  打开插件目录" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnMgrPluginsOpenDir"/>
-          <CheckBox x:Name="ChkPluginWatch" Content="监视目录自动重载" FontSize="12" VerticalAlignment="Center" Margin="6,0,0,0" ToolTip.Tip="plugins 目录里 dll/manifest 变化后自动卸载并重新加载（默认关闭）"/>
-          <TextBlock Text="插件语言" FontSize="12" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="12,0,0,0"/>
-          <ComboBox x:Name="CmbLang" Width="104" FontSize="12" VerticalAlignment="Center" SelectionChanged="OnLangChanged" ToolTip.Tip="插件用 ctx.L(...) 取字符串时使用">
+          <Button Content="&#xE72C;  重新加载" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="13" Padding="10,5" CornerRadius="6" Click="OnMgrPluginsReload"/>
+          <Button Content="&#xE8B7;  打开插件目录" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="13" Padding="10,5" CornerRadius="6" Click="OnMgrPluginsOpenDir"/>
+          <CheckBox x:Name="ChkPluginWatch" Content="监视目录自动重载" FontSize="13" VerticalAlignment="Center" Margin="6,0,0,0" ToolTip.Tip="plugins 目录里 dll/manifest 变化后自动卸载并重新加载（默认关闭）"/>
+          <TextBlock Text="插件语言" FontSize="13" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+          <ComboBox x:Name="CmbLang" Width="104" FontSize="13" VerticalAlignment="Center" SelectionChanged="OnLangChanged" ToolTip.Tip="插件用 ctx.L(...) 取字符串时使用">
             <ComboBoxItem>zh-CN</ComboBoxItem>
             <ComboBoxItem>en-US</ComboBoxItem>
           </ComboBox>
           <TextBlock x:Name="MgrPluginPath" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="10,0,0,0"/>
         </StackPanel>
-        <Border Grid.Row="2" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
+        <Border Grid.Row="2" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
             <StackPanel x:Name="MgrPluginList" Margin="12,10,12,12" Spacing="2"/>
           </ScrollViewer>
@@ -366,25 +367,25 @@
       <Grid x:Name="MaintView" IsVisible="False" RowDefinitions="Auto,*">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,4,0,12">
           <StackPanel Grid.Column="0" VerticalAlignment="Center">
-            <TextBlock Text="维护" FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+            <TextBlock Text="维护" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
             <TextBlock x:Name="MaintInfo" Text="整链重置 / 备份存档 / 恢复存档" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="← 返回控制台" FontSize="13" Padding="12,5" CornerRadius="6" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
+        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
             <StackPanel Margin="18,16,18,18" Spacing="10">
-              <TextBlock Text="&#xE72C;  整链重置" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="13.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+              <TextBlock Text="&#xE72C;  整链重置" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
               <TextBlock Text="按启动器世界列表重新生成源地图，再切成 N 份替换所有世界。会覆盖现有世界文件 ✗ 过程中服务端会自动重启。" FontSize="11" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap"/>
-              <Button Content="开始整链重置（需点两次确认）" FontSize="12" Padding="14,7" CornerRadius="8" HorizontalAlignment="Left" Click="OnResetClicked"/>
+              <Button Content="开始整链重置（需点两次确认）" FontSize="13" Padding="14,7" CornerRadius="6" HorizontalAlignment="Left" Click="OnResetClicked"/>
               <Border Height="1" Background="{DynamicResource Hairline}" Margin="0,10"/>
-              <TextBlock Text="&#xE74E;  备份存档" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="13.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+              <TextBlock Text="&#xE74E;  备份存档" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
               <TextBlock Text="把 Worlds 与 config 打包成 zip 存到 utsl-deploy\backup。建议在重置/改配置前先备份。" FontSize="11" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap"/>
-              <Button Content="立即备份" FontSize="12" Padding="14,7" CornerRadius="8" HorizontalAlignment="Left" Click="OnBackup"/>
+              <Button Content="立即备份" FontSize="13" Padding="14,7" CornerRadius="6" HorizontalAlignment="Left" Click="OnBackup"/>
               <Border Height="1" Background="{DynamicResource Hairline}" Margin="0,10"/>
-              <TextBlock Text="♻  恢复存档" FontSize="13.5" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+              <TextBlock Text="♻  恢复存档" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
               <TextBlock Text="从 backup 目录里最新的 zip 恢复 Worlds 与 config。会覆盖当前文件 ✗ 建议先停服 ✗ 需点两次确认。" FontSize="11" Foreground="{DynamicResource SysYellow}" TextWrapping="Wrap"/>
-              <Button Content="从最近备份恢复（需点两次确认）" FontSize="12" Padding="14,7" CornerRadius="8" HorizontalAlignment="Left" Click="OnRestoreClicked"/>
+              <Button Content="从最近备份恢复（需点两次确认）" FontSize="13" Padding="14,7" CornerRadius="6" HorizontalAlignment="Left" Click="OnRestoreClicked"/>
             </StackPanel>
           </ScrollViewer>
         </Border>
@@ -396,19 +397,19 @@
       <Grid x:Name="EditView" IsVisible="False" RowDefinitions="Auto,Auto,*,Auto">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,4,0,8">
           <StackPanel Grid.Column="0" VerticalAlignment="Center">
-            <TextBlock x:Name="EditTitle" Text="编辑文件" FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+            <TextBlock x:Name="EditTitle" Text="编辑文件" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
             <TextBlock x:Name="EditPathText" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,3,0,0"/>
           </StackPanel>
           <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
-            <Button x:Name="BtnEditSave" Content="保存 (Ctrl+S)" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnEditSave"/>
-            <Button Content="↻ 重新加载" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnEditReload"/>
-            <Button Content="← 返回文件列表" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnEditBack"/>
-            <CheckBox x:Name="ChkEditorWrap" Content="自动换行" FontSize="12" VerticalAlignment="Center" Margin="6,0,0,0" Click="OnEditorWrapChanged"/>
+            <Button x:Name="BtnEditSave" Content="保存 (Ctrl+S)" FontSize="13" Padding="12,5" CornerRadius="6" Click="OnEditSave"/>
+            <Button Content="↻ 重新加载" FontSize="13" Padding="12,5" CornerRadius="6" Click="OnEditReload"/>
+            <Button Content="← 返回文件列表" FontSize="13" Padding="12,5" CornerRadius="6" Click="OnEditBack"/>
+            <CheckBox x:Name="ChkEditorWrap" Content="自动换行" FontSize="13" VerticalAlignment="Center" Margin="6,0,0,0" Click="OnEditorWrapChanged"/>
           </StackPanel>
         </Grid>
         <TextBlock x:Name="EditHint" Grid.Row="1" Text="" FontSize="11" Foreground="{DynamicResource SysYellow}" Margin="0,0,0,6" TextWrapping="Wrap"/>
         <!-- 编辑区背景：深藏青（与编辑器控件内背景一致，避免边缘露出灰色底） -->
-        <Border Grid.Row="2" Background="#101B2E" BorderBrush="#22314D" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
+        <Border Grid.Row="2" Background="#101B2E" BorderBrush="#22314D" BorderThickness="1" CornerRadius="8" ClipToBounds="True">
           <Panel x:Name="EditHost"/>
         </Border>
         <TextBlock x:Name="EditStatus" Grid.Row="3" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,6,0,0" TextWrapping="NoWrap"/>
@@ -416,12 +417,12 @@
       <Grid x:Name="ConnView" IsVisible="False" RowDefinitions="Auto,*">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,4,0,12">
           <StackPanel Grid.Column="0" VerticalAlignment="Center">
-            <TextBlock Text="连接设置" FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+            <TextBlock Text="连接设置" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
             <TextBlock x:Name="ConnInfo" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="← 返回控制台" FontSize="13" Padding="12,5" CornerRadius="6" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
+        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
             <StackPanel x:Name="ConnHostPanel" Margin="18,16,18,18" Spacing="8"/>
           </ScrollViewer>
@@ -432,13 +433,13 @@
       <Grid x:Name="ChainView" IsVisible="False" RowDefinitions="Auto,*">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="0,4,0,12">
           <StackPanel Grid.Column="0" VerticalAlignment="Center">
-            <TextBlock Text="世界链" FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+            <TextBlock Text="世界链" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
             <TextBlock x:Name="ChainInfo" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="刷新" FontSize="12" Padding="12,5" CornerRadius="8" Margin="0,0,8,0" Click="OnShowChain"/>
-          <Button Grid.Column="2" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="刷新" FontSize="13" Padding="12,5" CornerRadius="6" Margin="0,0,8,0" Click="OnShowChain"/>
+          <Button Grid.Column="2" Content="← 返回控制台" FontSize="13" Padding="12,5" CornerRadius="6" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
+        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0" HorizontalScrollBarVisibility="Auto">
             <StackPanel x:Name="ChainHost" Margin="18,16,18,18" Spacing="16"/>
           </ScrollViewer>
@@ -449,13 +450,13 @@
       <Grid x:Name="ConfigView" IsVisible="False" RowDefinitions="Auto,*">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="0,4,0,12">
           <StackPanel Grid.Column="0" VerticalAlignment="Center">
-            <TextBlock Text="配置编辑" FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+            <TextBlock Text="配置编辑" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
             <TextBlock x:Name="ConfigInfo" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="保存并备份旧配置" FontSize="12" Padding="12,5" CornerRadius="8" Margin="0,0,8,0" Click="OnSaveConfig"/>
-          <Button Grid.Column="2" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
+          <Button Grid.Column="1" Content="保存并备份旧配置" FontSize="13" Padding="12,5" CornerRadius="6" Margin="0,0,8,0" Click="OnSaveConfig"/>
+          <Button Grid.Column="2" Content="← 返回控制台" FontSize="13" Padding="12,5" CornerRadius="6" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
+        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
             <StackPanel x:Name="ConfigHost" Margin="16,14,16,18" Spacing="8"/>
           </ScrollViewer>
@@ -467,33 +468,33 @@
         <!-- 行 0：标题 + 状态 + 返回。工具栏不挤在这一行，让它有整行宽度好自动换行 -->
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,4,0,8">
           <StackPanel Grid.Column="0" VerticalAlignment="Center">
-            <TextBlock Text="地图预览" FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+            <TextBlock Text="地图预览" FontSize="22" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
             <TextBlock x:Name="MapInfo" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,3,0,0"/>
           </StackPanel>
-          <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8"
+          <Button Grid.Column="1" Content="← 返回控制台" FontSize="13" Padding="12,5" CornerRadius="6"
                   VerticalAlignment="Center" Click="OnBackToConsole"/>
         </Grid>
         <!-- 行 1：工具栏。★ 用 WrapPanel 而非 StackPanel：控件多（宿主 6 个 + 插件若干）时窄窗口能自动换行，
              否则会被挤出可视区。v4 的插件贡献点也把控件追加到这个面板里（MapPluginBar 就是它本身）。 -->
         <WrapPanel Grid.Row="1" x:Name="MapPluginBar" Orientation="Horizontal" Margin="0,0,0,10">
-          <ComboBox x:Name="MapPicker" FontSize="12" Width="170" Margin="0,0,6,6" SelectionChanged="OnMapPickChanged"/>
-          <Button Content="适应" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapFit"/>
-          <Button Content="1:1" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapActual"/>
-          <Button Content="−" FontSize="12" Width="32" Padding="0,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapZoomOut"/>
-          <Button Content="+" FontSize="12" Width="32" Padding="0,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapZoomIn"/>
-          <Button Content="刷新" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnRefreshMap"/>
-          <TextBox x:Name="MapGotoBox" Width="96" FontSize="12" Margin="0,0,4,6" Padding="6,4" CornerRadius="8"
+          <ComboBox x:Name="MapPicker" FontSize="13" Width="170" Margin="0,0,6,6" SelectionChanged="OnMapPickChanged"/>
+          <Button Content="适应" FontSize="13" Padding="10,5" CornerRadius="6" Margin="0,0,6,6" Click="OnMapFit"/>
+          <Button Content="1:1" FontSize="13" Padding="10,5" CornerRadius="6" Margin="0,0,6,6" Click="OnMapActual"/>
+          <Button Content="−" FontSize="13" Width="32" Padding="0,5" CornerRadius="6" Margin="0,0,6,6" Click="OnMapZoomOut"/>
+          <Button Content="+" FontSize="13" Width="32" Padding="0,5" CornerRadius="6" Margin="0,0,6,6" Click="OnMapZoomIn"/>
+          <Button Content="刷新" FontSize="13" Padding="10,5" CornerRadius="6" Margin="0,0,6,6" Click="OnRefreshMap"/>
+          <TextBox x:Name="MapGotoBox" Width="96" FontSize="13" Margin="0,0,4,6" Padding="6,4" CornerRadius="6"
                    Watermark="x,y 跳转" ToolTip.Tip="输入世界坐标，如 3120,840，回车跳到该处"/>
-          <Button Content="跳转" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapGoto"/>
-          <CheckBox x:Name="ChkMapGrid" Content="网格" FontSize="12" Margin="0,0,8,6" Click="OnMapOverlayToggle"/>
-          <CheckBox x:Name="ChkMapSpawn" Content="出生点" FontSize="12" Margin="0,0,8,6" Click="OnMapOverlayToggle"/>
-          <ComboBox x:Name="MapLayers" Width="118" FontSize="12" Margin="0,0,6,6" SelectionChanged="OnMapLayersChanged"
+          <Button Content="跳转" FontSize="13" Padding="10,5" CornerRadius="6" Margin="0,0,6,6" Click="OnMapGoto"/>
+          <CheckBox x:Name="ChkMapGrid" Content="网格" FontSize="13" Margin="0,0,8,6" Click="OnMapOverlayToggle"/>
+          <CheckBox x:Name="ChkMapSpawn" Content="出生点" FontSize="13" Margin="0,0,8,6" Click="OnMapOverlayToggle"/>
+          <ComboBox x:Name="MapLayers" Width="118" FontSize="13" Margin="0,0,6,6" SelectionChanged="OnMapLayersChanged"
                     ToolTip.Tip="只影响显示与导出，不改动世界文件"/>
-          <Button Content="导出视口" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapExportView"/>
-          <Button Content="导出整图" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapExportFull"/>
+          <Button Content="导出视口" FontSize="13" Padding="10,5" CornerRadius="6" Margin="0,0,6,6" Click="OnMapExportView"/>
+          <Button Content="导出整图" FontSize="13" Padding="10,5" CornerRadius="6" Margin="0,0,6,6" Click="OnMapExportFull"/>
         </WrapPanel>
         <Grid Grid.Row="2">
-        <Border x:Name="MapCard" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True"
+        <Border x:Name="MapCard" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" ClipToBounds="True"
                 Cursor="Hand" PointerWheelChanged="OnMapWheel"
                 PointerPressed="OnMapPointerPressed" PointerMoved="OnMapPointerMoved"
                 PointerReleased="OnMapPointerReleased" DoubleTapped="OnMapDoubleTapped">
@@ -525,18 +526,18 @@
       </Panel>
 
       <!-- ★ 右侧功能菜单（插件/地图等迁移到这里） -->
-      <Border Grid.Row="1" Grid.Column="2" Background="{DynamicResource MatSidebar}" Padding="12,10">
+      <Border Grid.Row="1" Grid.Column="2" Background="{DynamicResource MatSidebar}" Padding="16,14">
         <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0" VerticalScrollBarVisibility="Auto">
         <StackPanel x:Name="MenuPanel" Spacing="6">
           <TextBlock Text="服务端" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}" Margin="4,0,0,6"/>
-          <Border Background="{DynamicResource FillPrimary}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" Padding="10,7">
+          <Border Background="{DynamicResource FillPrimary}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="6" Padding="10,7">
             <StackPanel Orientation="Horizontal" Spacing="7">
               <Border x:Name="SrvDot" Width="7" Height="7" CornerRadius="3.5" Background="{DynamicResource SysGray}" VerticalAlignment="Center"/>
               <TextBlock x:Name="ConnState" Text="未运行" FontSize="11" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
             </StackPanel>
           </Border>
           <!-- ★ 连接健康三灯（移植 MCSManager 的显式连接状态思路）：隧道 / 命令通道 / REST 接口 -->
-          <Border Background="{DynamicResource FillPrimary}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" Padding="10,7" Margin="0,4,0,0" ToolTip.Tip="绿灯=正常；橙灯=降级/回退；灰灯=未启用">
+          <Border Background="{DynamicResource FillPrimary}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="6" Padding="10,7" Margin="0,4,0,0" ToolTip.Tip="绿灯=正常；橙灯=降级/回退；灰灯=未启用">
             <StackPanel Orientation="Horizontal" Spacing="12">
               <StackPanel Orientation="Horizontal" Spacing="5">
                 <Border x:Name="DotTunnel" Width="7" Height="7" CornerRadius="3.5" Background="{DynamicResource SysGray}" VerticalAlignment="Center"/>
@@ -553,21 +554,21 @@
             </StackPanel>
           </Border>
           <Grid ColumnDefinitions="*,*" Margin="0,4,0,0">
-            <Button Grid.Column="0" x:Name="BtnStart" Content="▶  启动" FontSize="12" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,6" CornerRadius="8" Margin="0,0,3,0" Click="OnStartServer"/>
-            <Button Grid.Column="1" x:Name="BtnStop" Content="■  停止" FontSize="12" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,6" CornerRadius="8" Margin="3,0,0,0" Click="OnStopServer"/>
+            <Button Grid.Column="0" x:Name="BtnStart" Content="▶  启动" FontSize="13" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,6" CornerRadius="6" Margin="0,0,3,0" Click="OnStartServer"/>
+            <Button Grid.Column="1" x:Name="BtnStop" Content="■  停止" FontSize="13" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,6" CornerRadius="6" Margin="3,0,0,0" Click="OnStopServer"/>
           </Grid>
-          <Button x:Name="BtnRestart" Content="⟳  重启服务端" FontSize="12" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,6" CornerRadius="8" Click="OnRestartServer"/>
-          <CheckBox x:Name="ChkWatchdog" Content="掉线自启" FontSize="12" Margin="4,2,0,0"/>
+          <Button x:Name="BtnRestart" Content="⟳  重启服务端" FontSize="13" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,6" CornerRadius="6" Click="OnRestartServer"/>
+          <CheckBox x:Name="ChkWatchdog" Content="掉线自启" FontSize="13" Margin="4,2,0,0"/>
           <TextBlock x:Name="PluginMetricsHeader" Text="插件指标" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}" Margin="4,14,0,6" IsVisible="False"/>
           <StackPanel x:Name="PluginMetricsHost" Spacing="4"/>
           <TextBlock Text="功能" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}" Margin="4,14,0,6"/>
-          <Button x:Name="BtnConn" Classes="menu" Content="&#xE774;  连接设置" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowConn"/>
-          <Button x:Name="BtnChain" Classes="menu" Content="&#xE71B;  世界链" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowChain"/>
-          <Button x:Name="BtnConfig" Classes="menu" Content="&#xE713;  配置编辑" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowConfig"/>
-          <Button x:Name="BtnPlugins" Classes="menu" Content="&#xE8B7;  文件管理" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowPlugins"/>
-          <Button x:Name="BtnMap" Classes="menu" Content="&#xE707;  地图预览" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowMap"/>
-          <Button x:Name="BtnMaint" Classes="menu" Content="&#xE90F;  维护" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowMaint"/>
-          <Button x:Name="BtnMgrPlugins" Classes="menu" Content="&#xEA86;  插件管理" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="8" Click="OnShowMgrPlugins"/>
+          <Button x:Name="BtnConn" Classes="menu" Content="&#xE774;  连接设置" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="6" Click="OnShowConn"/>
+          <Button x:Name="BtnChain" Classes="menu" Content="&#xE71B;  世界链" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="6" Click="OnShowChain"/>
+          <Button x:Name="BtnConfig" Classes="menu" Content="&#xE713;  配置编辑" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="6" Click="OnShowConfig"/>
+          <Button x:Name="BtnPlugins" Classes="menu" Content="&#xE8B7;  文件管理" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="6" Click="OnShowPlugins"/>
+          <Button x:Name="BtnMap" Classes="menu" Content="&#xE707;  地图预览" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="6" Click="OnShowMap"/>
+          <Button x:Name="BtnMaint" Classes="menu" Content="&#xE90F;  维护" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="6" Click="OnShowMaint"/>
+          <Button x:Name="BtnMgrPlugins" Classes="menu" Content="&#xEA86;  插件管理" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="6" Click="OnShowMgrPlugins"/>
           <!-- 下面的按钮已合并进「维护」视图，保留元素是为了不破坏代码里对 BtnReset/BtnBackup/BtnRestore 的引用 -->
           <StackPanel IsVisible="False">
             <Button x:Name="BtnReset" Click="OnResetClicked"/>

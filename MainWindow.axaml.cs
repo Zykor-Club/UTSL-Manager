@@ -2549,7 +2549,7 @@ public partial class MainWindow : Window
         double scale = NiceMax(max);   // 轴取"顺眼"刻度（1/2/5 × 10^n）
 
         var gridBrush = new SolidColorBrush(Color.Parse("#14FFFFFF"));   // L2：网格线也用 alpha 白 hairline
-        var axisBrush = new SolidColorBrush(Color.Parse("#59FFFFFF"));   // L2：轴标签 35% 白（文档允许的唯一破例）
+        var axisBrush = new SolidColorBrush(Color.Parse("#73FFFFFF"));   // L2：轴标签 35% 白（文档允许的唯一破例）
 
         if (!ChartCacheMap.TryGetValue(canvas, out ChartCache? cc)) { cc = new ChartCache(); ChartCacheMap[canvas] = cc; }
         bool gridSame = Math.Abs(cc.W - w) < 0.5 && Math.Abs(cc.H - h) < 0.5 && Math.Abs(cc.Scale - scale) < 1e-9 && cc.Kind == kind;
@@ -2595,8 +2595,15 @@ public partial class MainWindow : Window
             var pts = new List<Avalonia.Point>();
             for (int i = 0; i < s.Count; i++) { pts.Add(new Avalonia.Point(XFor(i, w), YFor(s[i], scale, h))); }
             var brush = new SolidColorBrush(Color.Parse(colors[si]));
-            var areaPts = new List<Avalonia.Point>(pts) { new(pts[^1].X, PlotBottom(h)), new(pts[0].X, PlotBottom(h)) };
-            canvas.Children.Add(new Avalonia.Controls.Shapes.Polygon { Points = areaPts, Fill = new SolidColorBrush(Color.Parse(colors[si]), 0.18) });
+            // ★ L3：常驻值不填充 —— 内存这种"一条直线"填到 0 就是一块实心方块（比折线噪声还大）；只有波动的序列才给 10% 淡面积
+            double mn = double.MaxValue, mx = 0;
+            foreach (var v in s) { if (v < mn) { mn = v; } if (v > mx) { mx = v; } }
+            bool flatLine = mx <= 0.0001 || (mx - mn) / mx < 0.05;
+            if (!flatLine)
+            {
+                var areaPts = new List<Avalonia.Point>(pts) { new(pts[^1].X, PlotBottom(h)), new(pts[0].X, PlotBottom(h)) };
+                canvas.Children.Add(new Avalonia.Controls.Shapes.Polygon { Points = areaPts, Fill = new SolidColorBrush(Color.Parse(colors[si]), 0.10) });
+            }
             canvas.Children.Add(new Avalonia.Controls.Shapes.Polyline
             {
                 Points = pts,

@@ -1,0 +1,52 @@
+<!--
+  L3 · 尺度（Scale）
+  ────────────────────────────────────────────────────────────────────────────
+  macOS 的一条常被做反的规则（UTSL-UI-优化建议.md §四 L3）：
+
+      「控件收紧 + 区块间距放大」，而不是「控件变大」
+
+  数值（同文档 §3.5）：
+    控件高度 22–28（取 26）· 面板圆角 10 · 控件圆角 6
+    字号 11 / 13 / 15 / 17 / 22 / 28，13 最常用
+    间距 2 / 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64
+
+  ★ 这里只管"控件层级"的默认值；页面级的字号/边距仍写在 MainWindow.axaml（可读性更好，
+    也方便逐处微调）。把它做成全局样式的意义是：以后新加的按钮/输入框自动就是 26 高 + 圆角 6，
+    不会再回到 32 高 + 圆角 8 的"网页味"。
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- 按钮：26 高、圆角 6、body 字号 13 -->
+  <Style Selector="Button">
+    <Setter Property="MinHeight" Value="26" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="Padding" Value="12,0" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+
+  <!-- 输入框 / 下拉：与按钮同高同圆角（否则一行里会一高一低） -->
+  <Style Selector="TextBox">
+    <Setter Property="MinHeight" Value="26" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="Padding" Value="8,0" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="ComboBox">
+    <Setter Property="MinHeight" Value="26" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="FontSize" Value="13" />
+  </Style>
+
+  <!-- 分段控件用的"轨道"（L1 里预留的形态；本轮先在 隧道/通道/接口 上用） -->
+  <Style Selector="Border.segment">
+    <Setter Property="Background" Value="{DynamicResource FillTertiary}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource HairlineSubtle}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Padding" Value="2" />
+  </Style>
+</Styles>
