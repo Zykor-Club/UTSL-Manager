@@ -39,6 +39,9 @@
     <!-- 新增：加号 -->
     <StreamGeometry x:Key="IcoPlus">M12,5 V19 M5,12 H19</StreamGeometry>
 
+    <!-- 概览：仪表盘（半圆 + 指针） -->
+    <StreamGeometry x:Key="IcoGauge">M3.5,16 A8.5,8.5 0 0 1 20.5,16 M12,16 L15.6,10.4 M12,16.6 A1.2,1.2 0 1 1 11.99,16.59</StreamGeometry>
+
     <!-- 指标卡：脉搏（CPU） -->
     <StreamGeometry x:Key="IcoPulse">M3,12 H7 L10,5 L14,19 L17,12 H21</StreamGeometry>
 

@@ -308,6 +308,12 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, string> termFilterByServer = [];
     private bool suppressFilterEvent;      // 代码改过滤框文本时不要触发重建
     private bool MergeRepeats;             // "合并重复"（连续相同日志压成一行 + 计数；全局偏好）
+
+    // ===== 多档概览：每 10 秒只读采样所有档（REST + 指标），不建隧道、不动当前档 =====
+    private readonly System.Collections.Generic.List<UTSLManager.Servers.OverviewRow> overviewRows = [];
+    private Avalonia.Threading.DispatcherTimer? overviewTimer;
+    private bool overviewBusy;
+    private static readonly System.Net.Http.HttpClient OverviewHttp = new() { Timeout = TimeSpan.FromSeconds(1.6) };
     private string lastLogFile = "";
     private long logPos;
     // ★ 自检修复（卡顿大主因）：ItemsControl 不虚拟化，1500 个 TextBlock（每行还 Wrap）
@@ -4677,6 +4683,120 @@ public partial class MainWindow : Window
     }
 
 
+    // ===== 多档概览 =====
+
+    private void OnShowOverview(object? sender, RoutedEventArgs e) => ShowView("overview");
+
+    /// <summary>建行（只在档数量变化时重建）并立刻采样一次。</summary>
+    private async Task ShowOverviewAsync()
+    {
+        try
+        {
+            var ids = ServersCfg.Servers.Select(p => p.Id).ToList();
+            bool needRebuild = overviewRows.Count != ids.Count || overviewRows.Select(r => r.Id).SequenceEqual(ids) == false;
+            if (needRebuild)
+            {
+                overviewRows.Clear();
+                foreach (var p in ServersCfg.Servers)
+                {
+                    overviewRows.Add(new UTSLManager.Servers.OverviewRow
+                    {
+                        Id = p.Id,
+                        Name = p.Name.Length > 0 ? p.Name : p.Id,
+                        Mode = p.IsRemote ? (p.DirectReady ? "远端 · 直连" : "远端 · 隧道") : "本机",
+                    });
+                }
+                if (OverviewList is not null) { OverviewList.ItemsSource = overviewRows; }
+            }
+            await RefreshOverviewAsync();
+        }
+        catch (Exception ex) { ERR("概览刷新失败: " + ex.Message); }
+    }
+
+    /// <summary>并行采样所有档；失败的档保留原有数值但标成离线并给出原因（不抛异常）。</summary>
+    private async Task RefreshOverviewAsync()
+    {
+        if (overviewBusy) { return; }
+        overviewBusy = true;
+        try
+        {
+            var rows = overviewRows.ToList();
+            await Task.WhenAll(rows.Select(async row =>
+            {
+                var p = ServersCfg.Servers.FirstOrDefault(x => x.Id == row.Id);
+                if (p is null) { return; }
+                try
+                {
+                    // ① REST（只读一次 /world/list，1.6s 超时；远端档隧道没起就是不可达，不会自动去建）
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    int total = 0, running = 0; string err = "";
+                    try
+                    {
+                        string url = $"http://{p.Host}:{p.Port}/world/list?token={Uri.EscapeDataString(p.Token ?? "")}";
+                        string txt = await OverviewHttp.GetStringAsync(url);
+                        using var doc = JsonDocument.Parse(txt);
+                        if (doc.RootElement.TryGetProperty("worlds", out var ws))
+                        {
+                            foreach (var w in ws.EnumerateArray())
+                            {
+                                total++;
+                                if (w.TryGetProperty("running", out var r) && r.GetBoolean()) { running++; }
+                            }
+                        }
+                        row.LatText = sw.ElapsedMilliseconds + " ms";
+                    }
+                    catch (Exception ex)
+                    {
+                        err = ex is TaskCanceledException || ex is OperationCanceledException ? "超时" :
+                              p.IsRemote ? "隧道未建立或服务端未启动" : "服务端未启动";
+                        row.LatText = "—";
+                    }
+
+                    row.Online = err.Length == 0;
+                    row.StateText = err.Length == 0 ? "在线" : "离线";
+                    row.Note = err;
+                    row.WorldsText = err.Length == 0 ? $"{running}/{total}" : "—";
+
+                    // ② 指标：远端读 agent /metrics；本机复用已有的进程采样
+                    if (row.Online || p.IsRemote)
+                    {
+                        if (p.IsRemote)
+                        {
+                            try
+                            {
+                                string mtxt = await OverviewHttp.GetStringAsync($"http://127.0.0.1:{p.AgentPort}/metrics");
+                                using var mdoc = JsonDocument.Parse(mtxt);
+                                var srv = mdoc.RootElement.GetProperty("server");
+                                double c = srv.TryGetProperty("cpuSingleCorePct", out var cj) ? cj.GetDouble() : 0;
+                                double m = srv.TryGetProperty("privateMB", out var mj) ? mj.GetDouble() : 0;
+                                int cores = mdoc.RootElement.TryGetProperty("cores", out var cc) && cc.ValueKind == JsonValueKind.Number ? cc.GetInt32() : 0;
+                                row.CpuText = cores > 0 ? $"{c:F1}% / {cores * 100}%" : $"{c:F1}%";
+                                row.MemText = m > 0 ? $"{m / 1024.0:F2} GB" : "—";
+                            }
+                            catch { row.CpuText = "—"; row.MemText = "—"; }
+                        }
+                        else
+                        {
+                            var lm = LocalMetrics(p);
+                            if (lm is { } v)
+                            {
+                                row.CpuText = $"{v.cpu:F1}% / {Environment.ProcessorCount * 100}%";
+                                row.MemText = v.memMb > 0 ? $"{v.memMb / 1024.0:F2} GB" : "—";
+                            }
+                            else { row.CpuText = "—"; row.MemText = "—"; }
+                        }
+                    }
+                    else { row.CpuText = "—"; row.MemText = "—"; }
+                }
+                catch (Exception ex) { row.Note = ex.Message; row.StateText = "采样失败"; }
+            }));
+        }
+        finally { overviewBusy = false; }
+    }
+
+    private async void OnOverviewTick(object? sender, EventArgs e) => await RefreshOverviewAsync();
+    private async void OnRefreshOverview(object? sender, RoutedEventArgs e) => await ShowOverviewAsync();
+
     private void OnShowConn(object? sender, RoutedEventArgs e)
     {
         // ★ 先切页面再填内容：填充过程万一抛异常，页面本身仍然打得开（错误由下面的 catch 报到控制台）。
@@ -5497,7 +5617,9 @@ public partial class MainWindow : Window
         ExtView.IsVisible = which == "ext";
         MaintView.IsVisible = which == "maint";
         BtnMaint?.Classes.Set("active", which == "maint");
+        OverviewView.IsVisible = which == "overview";
         ConnView.IsVisible = which == "conn";
+        BtnOverview?.Classes.Set("active", which == "overview");
         BtnConn?.Classes.Set("active", which == "conn");
         BtnChain?.Classes.Set("active", which == "chain");
         BtnConfig?.Classes.Set("active", which == "config");
@@ -5514,6 +5636,19 @@ public partial class MainWindow : Window
             _ => null,
         };
         FadeIn(incoming);
+
+        // ★ 概览页：进入时立刻采样并起 10 秒定时器；离开时停掉（不在后台空转）
+        if (which == "overview")
+        {
+            if (overviewTimer is null)
+            {
+                overviewTimer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
+                overviewTimer.Tick += OnOverviewTick;
+            }
+            overviewTimer.Start();
+            _ = ShowOverviewAsync();
+        }
+        else { overviewTimer?.Stop(); }
     }
 
     /// <summary>140ms 淡入。用 Transitions 而不是 Animation：只改一个 Opacity 值，
