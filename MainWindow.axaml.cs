@@ -7330,7 +7330,9 @@ public partial class MainWindow : Window
             if (ServerRunning) { return; }   // 只挡"本档已在跑"，同机另一份部署不算
             ProtectWatchdog(600, "local-start");
         }
+        var swStart = System.Diagnostics.Stopwatch.StartNew();
         ProcessResult r = await ProcessBackend.StartAsync();
+        Program.Log($"START spawned ok={r.Ok} after={swStart.Elapsed.TotalSeconds:F1}s");
         if (!remote) { if (!r.Ok) { ErrText.Text = r.Message; } return; }
         Term(r.Message, PickColor(r.Message));
         ErrText.Text = r.Ok ? "远端启动指令已下发" : r.Message;
@@ -7344,8 +7346,11 @@ public partial class MainWindow : Window
             Term("--- 远端停止中（只杀 UTSL，不动机器人）---", "#79C0FF");
             ErrText.Text = "远端停止中…";
         }
+        var swStop = System.Diagnostics.Stopwatch.StartNew();
+        Program.Log("STOP begin");
         await GracefulStopAsync();          // ★ 三段式第 1~2 段：先请它自己收尾（存盘/踢人），等世界全停
         ProcessResult r = await ProcessBackend.StopAsync();
+        Program.Log($"STOP backend-kill ok={r.Ok} total={swStop.Elapsed.TotalSeconds:F1}s");
         // ★ 用户手动停机：明确告诉掉线自启"这一次不要自动拉起"（重新点启动会清掉这个标记）
         ActiveSrv.UserStopped = true;
         if (remote)
@@ -7371,6 +7376,7 @@ public partial class MainWindow : Window
         if (cmd.Length == 0 || timeoutSec <= 0)
         {
             Term("--- 停机：本档未配置停机指令 → 直接结束进程（可用「连接设置 → 停机指令」打开）---", "#8E8E93");
+            Program.Log($"STOP cmd-sent cmd={cmd}");
             return;
         }
         try { _ = await Http.GetStringAsync(Rest + "/world/list?token=" + Uri.EscapeDataString(Token)); }
@@ -7392,30 +7398,49 @@ public partial class MainWindow : Window
             return;
         }
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        int restGoneFails = 0;
         while (sw.Elapsed.TotalSeconds < timeoutSec)
         {
             await Task.Delay(400);
             if (!UseRemote && !LocalProcessBackend.AnyAliveIn(ServerDir))
             {
                 Term($"停机：进程已在 {sw.Elapsed.TotalSeconds:F1}s 内自行退出", "#30D158");
+                Program.Log($"STOP proc-exited-by-itself {sw.Elapsed.TotalSeconds:F1}s");
                 return;
             }
             bool anyRunning;
+            bool restGone = false;
             try
             {
                 string txt = await Http.GetStringAsync(Rest + "/world/list?token=" + Uri.EscapeDataString(Token));
                 using var doc = JsonDocument.Parse(txt);
                 anyRunning = doc.RootElement.TryGetProperty("worlds", out var ws)
                              && ws.EnumerateArray().Any(w => w.TryGetProperty("running", out var r) && r.GetBoolean());
+                restGoneFails = 0;
             }
-            catch { anyRunning = false; }        // REST 已经不通 = 正在收尾
+            catch
+            {
+                // ★ REST 不通 ≠ 世界已停！可能在存盘、也可能只是网络抖一下。
+                //   实测踩到：停机 0.5s 就判定"世界全停"（因为 REST 恰好不通），会提前 kill 掉还在存盘的进程。
+                //   现在要求连续 3 次（约 1.2s）都拿不到 REST 才认为"进程确实在退出"。
+                anyRunning = false;
+                restGoneFails++;
+                restGone = restGoneFails >= 3;
+                if (!restGone) { continue; }     // 再等一拍，别急着下结论
+            }
             if (!anyRunning)
             {
-                Term($"停机：世界已全部停止（{sw.Elapsed.TotalSeconds:F1}s，已存盘），接下来结束进程", "#30D158");
+                string why = restGone ? "REST 连续 3 次不可达，判定进程已在退出" : "世界已全部停止";
+                Term($"停机：{why}（{sw.Elapsed.TotalSeconds:F1}s），接下来结束进程", "#30D158");
+                Program.Log($"STOP worlds-stopped {sw.Elapsed.TotalSeconds:F1}s restGone={restGone}");
+                // ★ 宽限 1.2s 再 kill：running=false 可能在"存盘/落盘"完成前就翻转，
+                //   立刻 Kill 等于赌它已经写完。实测停机判断最快 0.5s，多等 1.2s 的成本可以忽略。
+                if (!restGone) { await Task.Delay(1200); Program.Log("STOP grace-done 1200ms"); }
                 return;
             }
         }
         Term($"停机：{timeoutSec}s 内世界仍未全停 → 直接结束进程（可能有未保存的进度）", "#FEBC2E");
+        Program.Log($"STOP worlds-timeout {timeoutSec}s");
     }
 
     private async void OnRestartServer(object? sender, RoutedEventArgs e)
