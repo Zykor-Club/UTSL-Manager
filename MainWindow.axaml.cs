@@ -4904,6 +4904,32 @@ public partial class MainWindow : Window
         OnShowTasks(null, new RoutedEventArgs());
     }
 
+    /// <summary>删除任务里的某一条动作（Tag = 档|任务名|动作下标）。删空了就把整个任务删掉。</summary>
+    private void OnDeleteAction(object? sender, RoutedEventArgs e)
+    {
+        if ((sender as Avalonia.Controls.Control)?.Tag is not string tag) { return; }
+        var parts = tag.Split('|');
+        if (parts.Length < 3 || !int.TryParse(parts[^1], out int idx)) { return; }
+        string profileId = parts[0];
+        string name = string.Join("|", parts[1..^1]);
+        var t = FindTask(profileId, name);
+        if (t is null || idx < 0 || idx >= t.Actions.Count) { return; }
+        string removed = t.Actions[idx].Text;
+        t.Actions.RemoveAt(idx);
+        if (t.Actions.Count == 0)
+        {
+            ServersCfg.Tasks.Remove(t);
+            SaveCacheClear(profileId + "|" + name);
+            ERR($"任务「{name}」的最后一条动作被删除 → 已删除该任务");
+        }
+        else
+        {
+            ERR($"任务「{name}」已移除动作：{removed}");
+        }
+        SaveConn();
+        OnShowTasks(null, new RoutedEventArgs());
+    }
+
     private void OnDeleteTask(object? sender, RoutedEventArgs e)
     {
         if ((sender as Avalonia.Controls.Control)?.Tag is not string key) { return; }
@@ -5112,7 +5138,38 @@ public partial class MainWindow : Window
                 var timeTb = new TextBlock { Text = t.TimeText, FontSize = 11, Foreground = txtSec };
                 Avalonia.Controls.ToolTip.SetTip(timeTb, (t.Type == 1 ? "间隔：" : "cron：") + t.Time);
                 meta.Children.Add(timeTb);
-                meta.Children.Add(new TextBlock { Text = t.ActionsText, FontSize = 11, Foreground = txtSec, TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis });
+                // 动作以胶囊列出，每条可单独删除（MCSM 的动作列表就是一行行可删）
+                var acts = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 6 };
+                for (int ai = 0; ai < t.Actions.Count; ai++)
+                {
+                    var a = t.Actions[ai];
+                    var strip = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 4 };
+                    strip.Children.Add(new TextBlock
+                    {
+                        Text = a.Text, FontSize = 11, Foreground = txtSec,
+                        VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    });
+                    var del = new Button
+                    {
+                        Content = "×", FontSize = 11, Tag = t.ProfileId + "|" + t.Name + "|" + ai,
+                        MinHeight = 18, MinWidth = 18, Padding = new Avalonia.Thickness(0), Margin = new Avalonia.Thickness(0),
+                        Background = Brushes.Transparent, BorderThickness = new Avalonia.Thickness(0),
+                        Foreground = txtTer,
+                        VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    };
+                    Avalonia.Controls.ToolTip.SetTip(del, "删除这条动作");
+                    del.Click += OnDeleteAction;
+                    strip.Children.Add(del);
+                    var pill = new Border
+                    {
+                        Background = Br("FillPrimary", "#1AFFFFFF"),
+                        CornerRadius = new Avalonia.CornerRadius(5),
+                        Padding = new Avalonia.Thickness(6, 1),
+                        Child = strip,
+                    };
+                    acts.Children.Add(pill);
+                }
+                meta.Children.Add(acts);
                 info.Children.Add(meta);
                 info.Children.Add(new TextBlock
                 {
