@@ -308,6 +308,12 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, string> termFilterByServer = [];
     private bool suppressFilterEvent;      // 代码改过滤框文本时不要触发重建
     private bool MergeRepeats;             // "合并重复"（连续相同日志压成一行 + 计数；全局偏好）
+
+    // ===== 定时任务（计划任务）：20 秒扫一次 cron，按档执行 启动/停机/重启/发命令 =====
+    private Avalonia.Threading.DispatcherTimer? taskTimer;
+    private ComboBox? CmbTaskProfile, CmbTaskKind;
+    private TextBox? TbTaskCron, TbTaskCommand;
+    private readonly System.Collections.Generic.HashSet<string> taskFired = [];   // "taskId|yyyyMMddHHmm"，防同分钟重复触发
     private string lastLogFile = "";
     private long logPos;
     // ★ 自检修复（卡顿大主因）：ItemsControl 不虚拟化，1500 个 TextBlock（每行还 Wrap）
@@ -340,6 +346,7 @@ public partial class MainWindow : Window
             Activated += (_, __) => SetTrafficLightsActive(true);
             Deactivated += (_, __) => SetTrafficLightsActive(false);
             SetTrafficLightsActive(IsActive);
+            StartTaskScheduler();
             ToolTip.SetTip(CpuNow, "占单核 % / 整机满槽 %（满槽 = 核数 × 100）");
         }
         catch { }
@@ -4677,6 +4684,312 @@ public partial class MainWindow : Window
     }
 
 
+    // ===================== 定时任务（计划任务）=====================
+
+    /// <summary>启动调度器（构造时调一次；20 秒一跳，够一分钟粒度的 cron 用了）。</summary>
+    private void StartTaskScheduler()
+    {
+        if (taskTimer is not null) { return; }
+        taskTimer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
+        taskTimer.Tick += OnTaskTick;
+        taskTimer.Start();
+        Program.Log($"TASK scheduler started tasks={ServersCfg.Tasks.Count}");
+    }
+
+    private async void OnTaskTick(object? sender, EventArgs e)
+    {
+        try
+        {
+            var now = DateTime.Now;
+            foreach (var t in ServersCfg.Tasks.ToList())
+            {
+                if (!t.Enabled) { continue; }
+                if (!UTSLManager.Servers.ScheduledTask.CronMatches(t.Cron, now)) { continue; }
+                if (!taskFired.Add(t.Id + "|" + now.ToString("yyyyMMddHHmm"))) { continue; }   // 本分钟已触发过
+                await RunScheduledTaskAsync(t);
+            }
+        }
+        catch (Exception ex) { Program.Log("TASK tick-error " + ex.Message); }
+    }
+
+    /// <summary>手动"立即执行"：不检查 cron，也不占用防重标记。</summary>
+    private async void OnRunTaskNow(object? sender, RoutedEventArgs e)
+    {
+        if ((sender as Avalonia.Controls.Control)?.Tag is not string id) { return; }
+        var t = ServersCfg.Tasks.FirstOrDefault(x => x.Id == id);
+        if (t is null) { return; }
+        await RunScheduledTaskAsync(t);
+        OnShowTasks(null, new RoutedEventArgs());
+    }
+
+    private void OnDeleteTask(object? sender, RoutedEventArgs e)
+    {
+        if ((sender as Avalonia.Controls.Control)?.Tag is not string id) { return; }
+        var t = ServersCfg.Tasks.FirstOrDefault(x => x.Id == id);
+        if (t is null) { return; }
+        ServersCfg.Tasks.Remove(t);
+        SaveConn();
+        ERR($"已删除计划任务：{t.Summary}（{t.CronText}）");
+        OnShowTasks(null, new RoutedEventArgs());
+    }
+
+    private async Task RunScheduledTaskAsync(UTSLManager.Servers.ScheduledTask t)
+    {
+        var p = ServersCfg.Servers.FirstOrDefault(x => x.Id == t.ProfileId);
+        string who = p is null ? $"(档已不存在 {t.ProfileId})" : p.Name;
+        string head = $"[计划任务] {t.Summary} · {who} · {t.CronText}";
+        TaskSink(head + " → 执行中…", "#79C0FF");
+        Program.Log($"TASK fire id={t.Id} kind={t.Kind} profile={t.ProfileId}");
+        string result;
+        try
+        {
+            if (p is null) { result = "跳过：档已删除"; }
+            else
+            {
+                switch (t.Kind)
+                {
+                    case "command":
+                        if ((t.Command ?? "").Trim().Length == 0) { result = "跳过：没填指令"; }
+                        else { await TaskSendCommandAsync(p, t.Command.Trim()); result = "指令已发送"; }
+                        break;
+                    case "start":
+                        await TaskStartProfileAsync(p); result = "已启动"; break;
+                    case "stop":
+                        result = await TaskStopProfileAsync(p); break;
+                    case "restart":
+                        result = await TaskStopProfileAsync(p);
+                        await Task.Delay(4000);
+                        await TaskStartProfileAsync(p);
+                        result += " / 已启动";
+                        break;
+                    default: result = "跳过：未知动作"; break;
+                }
+            }
+        }
+        catch (Exception ex) { result = "失败：" + ex.Message; }
+        t.LastRunAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
+        t.LastResult = result;
+        try { SaveConn(); } catch { }
+        bool bad = result.StartsWith("失败") || result.StartsWith("跳过");
+        TaskSink($"{head} → {result}", bad ? "#FEBC2E" : "#30D158");
+        Program.Log($"TASK done id={t.Id} result={result}");
+        try { UpdateServerCards(); } catch { }
+    }
+
+    private static System.Net.Http.HttpClient TaskHttp(int secs = 10) => new() { Timeout = TimeSpan.FromSeconds(secs) };
+    private static string ProfileRest(ServerProfile p) => $"http://{p.Host}:{p.Port}";
+
+    private async Task TaskSendCommandAsync(ServerProfile p, string cmd)
+    {
+        using var http = TaskHttp(12);
+        string url = $"{ProfileRest(p)}/world/command?token={Uri.EscapeDataString(p.Token ?? "")}"
+                   + $"&world=all&cmd={Uri.EscapeDataString(cmd)}&scope=console";
+        await http.GetStringAsync(url);
+    }
+
+    /// <summary>停机：先发停机指令请它自己存盘，等世界停（最多 StopTimeoutSec），再结束进程。</summary>
+    private async Task<string> TaskStopProfileAsync(ServerProfile p)
+    {
+        string cmd = string.IsNullOrWhiteSpace(p.StopCommand) ? "/off" : p.StopCommand;
+        try { await TaskSendCommandAsync(p, cmd); } catch (Exception ex) { Program.Log("TASK stop cmd-error " + ex.Message); }
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int timeout = Math.Clamp(p.StopTimeoutSec <= 0 ? 10 : p.StopTimeoutSec, 3, 120);
+        while (sw.Elapsed.TotalSeconds < timeout)
+        {
+            await Task.Delay(400);
+            try
+            {
+                using var http = TaskHttp(4);
+                string txt = await http.GetStringAsync($"{ProfileRest(p)}/world/list?token={Uri.EscapeDataString(p.Token ?? "")}");
+                using var doc = System.Text.Json.JsonDocument.Parse(txt);
+                bool any = doc.RootElement.TryGetProperty("worlds", out var ws)
+                           && ws.EnumerateArray().Any(w => w.TryGetProperty("running", out var r) && r.GetBoolean());
+                if (!any) { break; }
+            }
+            catch { break; }   // REST 都不通了 = 基本停完了
+        }
+        await TaskKillProfileAsync(p);
+        p.UserStopped = true;
+        return $"已停机（{sw.Elapsed.TotalSeconds:F1}s）";
+    }
+
+    private async Task TaskKillProfileAsync(ServerProfile p)
+    {
+        if (p.IsRemote)
+        {
+            using var http = TaskHttp(15);
+            await http.GetStringAsync($"http://127.0.0.1:{p.AgentPort}/proc/stop");
+        }
+        else
+        {
+            string exe = Path.Combine(p.LocalDir, "UnifierTSL.exe");
+            var be = new LocalProcessBackend(exe, p.LocalDir, p.StartArgs ?? "", p.StartEnv ?? "");
+            await be.StopAsync();
+        }
+    }
+
+    private async Task TaskStartProfileAsync(ServerProfile p)
+    {
+        p.UserStopped = false;
+        if (p.IsRemote)
+        {
+            using var http = TaskHttp(20);
+            string console = p.WorldConsoles ? "perworld" : "headless";
+            string url = $"http://127.0.0.1:{p.AgentPort}/proc/start?console={console}"
+                       + $"&args={Uri.EscapeDataString(p.StartArgs ?? "")}&env={Uri.EscapeDataString(p.StartEnv ?? "")}";
+            await http.GetStringAsync(url);
+        }
+        else
+        {
+            string exe = Path.Combine(p.LocalDir, "UnifierTSL.exe");
+            if (!File.Exists(exe)) { throw new FileNotFoundException("服务端 exe 不存在: " + exe); }
+            var be = new LocalProcessBackend(exe, p.LocalDir, p.StartArgs ?? "", p.StartEnv ?? "");
+            var r = await be.StartAsync();
+            if (!r.Ok) { throw new Exception(r.Message); }
+        }
+        ProtectWatchdog(600, "task-start");
+    }
+
+    /// <summary>计划任务的消息也走终端（用户要能看到"凌晨 4 点自动重启了"）。</summary>
+    private void TaskSink(string text, string color)
+    {
+        try { Term(text, color); } catch { }
+        try { Program.Log("TASK " + text); } catch { }
+    }
+
+    private void OnAddTask(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string pid = CmbTaskProfile?.SelectedItem is ComboBoxItem ci ? (ci.Tag?.ToString() ?? "") : "";
+            string kind = CmbTaskKind?.SelectedItem is ComboBoxItem ck ? (ck.Tag?.ToString() ?? "restart") : "restart";
+            string cron = (TbTaskCron?.Text ?? "").Trim();
+            string cmd = (TbTaskCommand?.Text ?? "").Trim();
+            if (pid.Length == 0) { ERR("新增计划任务：请选择服务器档"); return; }
+            var f = cron.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (f.Length != 5) { ERR("cron 需要 5 段（分 时 日 月 周），例如 `0 4 * * *` = 每天 4:00"); return; }
+            if (kind == "command" && cmd.Length > 0 && !cmd.StartsWith('/')) { cmd = "/" + cmd; }
+            ServersCfg.Tasks.Add(new UTSLManager.Servers.ScheduledTask
+            {
+                ProfileId = pid, Kind = kind, Cron = cron, Command = cmd, Enabled = true,
+            });
+            SaveConn();
+            ERR($"已新增计划任务：{(kind == "command" ? "发命令 " + cmd : kind)} · {cron}");
+            OnShowTasks(null, new RoutedEventArgs());
+        }
+        catch (Exception ex) { ERR("新增计划任务失败: " + ex.Message); }
+    }
+
+    private void OnShowTasks(object? sender, RoutedEventArgs e)
+    {
+        ShowView("tasks");
+        try
+        {
+            if (TasksPanel is null) { return; }
+            TasksPanel.Children.Clear();
+
+            // 新增表单
+            var addCard = new Border
+            {
+                Background = (IBrush?)this.FindResource("MatPanel") ?? Brushes.Transparent,
+                BorderBrush = (IBrush?)this.FindResource("Hairline") ?? Brushes.Transparent,
+                BorderThickness = new Avalonia.Thickness(1),
+                CornerRadius = new Avalonia.CornerRadius(10),
+                Padding = new Avalonia.Thickness(16, 14),
+                Margin = new Avalonia.Thickness(0, 0, 0, 10),
+            };
+            var add = new StackPanel { Spacing = 8 };
+            add.Children.Add(new TextBlock { Text = "新增计划任务", FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold });
+            var row1 = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8 };
+            CmbTaskProfile = new ComboBox { Width = 190, FontSize = 12 };
+            foreach (var p in ServersCfg.Servers)
+            {
+                CmbTaskProfile.Items.Add(new ComboBoxItem { Content = p.Name.Length > 0 ? p.Name : p.Id, Tag = p.Id });
+            }
+            if (CmbTaskProfile.ItemCount > 0) { CmbTaskProfile.SelectedIndex = 0; }
+            CmbTaskKind = new ComboBox { Width = 120, FontSize = 12 };
+            foreach (var (tag, text) in new[] { ("restart", "重启"), ("stop", "停机"), ("start", "启动"), ("command", "发命令") })
+            {
+                CmbTaskKind.Items.Add(new ComboBoxItem { Content = text, Tag = tag });
+            }
+            CmbTaskKind.SelectedIndex = 0;
+            TbTaskCron = new TextBox { Width = 150, FontSize = 12, Text = "0 4 * * *", Watermark = "cron 分 时 日 月 周" };
+            TbTaskCommand = new TextBox { Width = 200, FontSize = 12, Text = "/save", Watermark = "仅发命令时用，如 /save" };
+            var btnAdd = new Button { Content = "新增", FontSize = 12, Padding = new Avalonia.Thickness(14, 0) };
+            btnAdd.Click += OnAddTask;
+            row1.Children.Add(CmbTaskProfile);
+            row1.Children.Add(CmbTaskKind);
+            row1.Children.Add(TbTaskCron);
+            row1.Children.Add(TbTaskCommand);
+            row1.Children.Add(btnAdd);
+            add.Children.Add(row1);
+            add.Children.Add(new TextBlock
+            {
+                Text = "cron 5 段：分 时 日 月 周。例：`0 4 * * *` 每天 4:00；`*/30 * * * *` 每 30 分钟；`0 5 * * 0` 每周日 5:00。",
+                FontSize = 11,
+                Foreground = (IBrush?)this.FindResource("TextTertiary") ?? Brushes.Gray,
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            });
+            addCard.Child = add;
+            TasksPanel.Children.Add(addCard);
+
+            // 列表
+            if (ServersCfg.Tasks.Count == 0)
+            {
+                TasksPanel.Children.Add(new TextBlock
+                {
+                    Text = "还没有计划任务。",
+                    FontSize = 13,
+                    Margin = new Avalonia.Thickness(2, 6, 0, 0),
+                    Foreground = (IBrush?)this.FindResource("TextSecondary") ?? Brushes.Gray,
+                });
+            }
+            foreach (var t in ServersCfg.Tasks.ToList())
+            {
+                var p = ServersCfg.Servers.FirstOrDefault(x => x.Id == t.ProfileId);
+                var card = new Border
+                {
+                    Background = (IBrush?)this.FindResource("MatPanel") ?? Brushes.Transparent,
+                    BorderBrush = (IBrush?)this.FindResource("Hairline") ?? Brushes.Transparent,
+                    BorderThickness = new Avalonia.Thickness(1),
+                    CornerRadius = new Avalonia.CornerRadius(10),
+                    Padding = new Avalonia.Thickness(14, 11),
+                    Margin = new Avalonia.Thickness(0, 0, 0, 8),
+                };
+                var g = new Grid { ColumnDefinitions = new Avalonia.Controls.ColumnDefinitions("*,Auto,Auto,Auto") };
+                var info = new StackPanel { Spacing = 3 };
+                info.Children.Add(new TextBlock
+                {
+                    Text = $"{t.Summary} · {(p?.Name ?? "档已不存在")}",
+                    FontSize = 13,
+                    FontWeight = Avalonia.Media.FontWeight.SemiBold,
+                });
+                info.Children.Add(new TextBlock
+                {
+                    Text = $"{t.CronText}   ·   上次：{(t.LastRunAt.Length > 0 ? t.LastRunAt + " " + t.LastResult : "还没跑过")}",
+                    FontSize = 11,
+                    Foreground = (IBrush?)this.FindResource("TextSecondary") ?? Brushes.Gray,
+                });
+                Avalonia.Controls.Grid.SetColumn(info, 0);
+                g.Children.Add(info);
+
+                var btnNow = new Button { Content = "立即执行", FontSize = 11, Tag = t.Id, Margin = new Avalonia.Thickness(0, 0, 8, 0) };
+                btnNow.Click += OnRunTaskNow;
+                Avalonia.Controls.Grid.SetColumn(btnNow, 1);
+                g.Children.Add(btnNow);
+
+                var btnDel = new Button { Content = "删除", FontSize = 11, Tag = t.Id };
+                btnDel.Click += OnDeleteTask;
+                Avalonia.Controls.Grid.SetColumn(btnDel, 2);
+                g.Children.Add(btnDel);
+
+                card.Child = g;
+                TasksPanel.Children.Add(card);
+            }
+        }
+        catch (Exception ex) { ERR("计划任务页打开失败: " + ex.Message); }
+    }
+
     private void OnShowConn(object? sender, RoutedEventArgs e)
     {
         // ★ 先切页面再填内容：填充过程万一抛异常，页面本身仍然打得开（错误由下面的 catch 报到控制台）。
@@ -5497,6 +5810,7 @@ public partial class MainWindow : Window
         ExtView.IsVisible = which == "ext";
         MaintView.IsVisible = which == "maint";
         BtnMaint?.Classes.Set("active", which == "maint");
+        TasksView.IsVisible = which == "tasks";
         ConnView.IsVisible = which == "conn";
         BtnConn?.Classes.Set("active", which == "conn");
         BtnChain?.Classes.Set("active", which == "chain");
