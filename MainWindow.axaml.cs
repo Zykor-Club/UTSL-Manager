@@ -311,13 +311,9 @@ public partial class MainWindow : Window
 
     // ===== 定时任务（计划任务）：20 秒扫一次 cron，按档执行 启动/停机/重启/发命令 =====
     private Avalonia.Threading.DispatcherTimer? taskTimer;
-    private ComboBox? CmbTaskProfile, CmbTaskKind;
-    // 结构化调度选择（不再让用户直接面对 cron）
-    private ComboBox? CmbTaskFreq, CmbTaskWeekday, CmbTaskDay;
-    private TextBox? TbTaskTime, TbTaskNum;
-    private CheckBox? ChkTaskAdvanced;
-    private TextBox? TbTaskCron, TbTaskCommand;
-    private readonly System.Collections.Generic.HashSet<string> taskFired = [];   // "taskId|yyyyMMddHHmm"，防同分钟重复触发
+    private ComboBox? CmbTaskType, CmbTaskAct;
+    private TextBox? TbTaskName, TbTaskTime, TbTaskNum, TbTaskCron, TbTaskCommand;
+
     private string lastLogFile = "";
     private long logPos;
     // ★ 自检修复（卡顿大主因）：ItemsControl 不虚拟化，1500 个 TextBlock（每行还 Wrap）
@@ -4688,13 +4684,22 @@ public partial class MainWindow : Window
     }
 
 
-    // ===================== 定时任务（计划任务）=====================
+    // ===================== 定时任务（结构照抄 MCSManager）=====================
+    //   MCSM 的模型（daemon/src/service/system_instance_control.ts）：
+    //     任务属于某个实例，按 name 在该实例内唯一；type=1 间隔(秒) / type=2 定时(cron 6 段)；
+    //     actions 是动作数组（delay/start/stop/restart/command/kill），可依次执行多条。
+    //   所以这里：页面只显示**当前档**的任务，不再有"服务器下拉"。
 
-    /// <summary>启动调度器（构造时调一次；20 秒一跳，够一分钟粒度的 cron 用了）。</summary>
+    private readonly System.Collections.Generic.Dictionary<string, long> taskLastRun = [];   // "档|任务名" → TickCount64（间隔任务用）
+    private readonly System.Collections.Generic.HashSet<string> taskFired = [];             // "档|任务名|yyyyMMddHHmmss"（定时任务防重）
+
+    private static string TaskKey(ServerProfile p, ScheduledTask t) => p.Id + "|" + t.Name;
+
     private void StartTaskScheduler()
     {
         if (taskTimer is not null) { return; }
-        taskTimer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
+        // 1 秒一跳：MCSM 的 cron 是 6 段（带秒），20 秒一跳会漏掉秒级任务；1 秒的检查成本可忽略
+        taskTimer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         taskTimer.Tick += OnTaskTick;
         taskTimer.Start();
         Program.Log($"TASK scheduler started tasks={ServersCfg.Tasks.Count}");
@@ -4708,82 +4713,80 @@ public partial class MainWindow : Window
             foreach (var t in ServersCfg.Tasks.ToList())
             {
                 if (!t.Enabled) { continue; }
-                if (!UTSLManager.Servers.ScheduledTask.CronMatches(t.Cron, now)) { continue; }
-                if (!taskFired.Add(t.Id + "|" + now.ToString("yyyyMMddHHmm"))) { continue; }   // 本分钟已触发过
-                await RunScheduledTaskAsync(t);
+                var p = ServersCfg.Servers.FirstOrDefault(x => x.Id == t.ProfileId);
+                if (p is null) { continue; }
+                string key = TaskKey(p, t);
+                bool due;
+                if (t.Type == 1)
+                {
+                    if (!int.TryParse(t.Time, out int sec) || sec < 1) { continue; }
+                    long nowMs = Environment.TickCount64;
+                    if (taskLastRun.TryGetValue(key, out long last) && nowMs - last < sec * 1000L) { continue; }
+                    taskLastRun[key] = nowMs;
+                    due = true;
+                }
+                else
+                {
+                    if (!UTSLManager.Servers.ScheduledTask.CronMatches(t.Time, now)) { continue; }
+                    if (!taskFired.Add(key + "|" + now.ToString("yyyyMMddHHmmss"))) { continue; }
+                    due = true;
+                }
+                if (!due) { continue; }
+                await RunScheduledTaskAsync(t, p);
             }
+            if (taskFired.Count > 800) { taskFired.Clear(); }   // 长期运行别把集合撑爆
         }
         catch (Exception ex) { Program.Log("TASK tick-error " + ex.Message); }
     }
 
-    /// <summary>手动"立即执行"：不检查 cron，也不占用防重标记。</summary>
-    private async void OnRunTaskNow(object? sender, RoutedEventArgs e)
+    private async Task RunScheduledTaskAsync(ScheduledTask t, ServerProfile p)
     {
-        if ((sender as Avalonia.Controls.Control)?.Tag is not string id) { return; }
-        var t = ServersCfg.Tasks.FirstOrDefault(x => x.Id == id);
-        if (t is null) { return; }
-        await RunScheduledTaskAsync(t);
-        OnShowTasks(null, new RoutedEventArgs());
-    }
-
-    private void OnDeleteTask(object? sender, RoutedEventArgs e)
-    {
-        if ((sender as Avalonia.Controls.Control)?.Tag is not string id) { return; }
-        var t = ServersCfg.Tasks.FirstOrDefault(x => x.Id == id);
-        if (t is null) { return; }
-        ServersCfg.Tasks.Remove(t);
-        SaveConn();
-        ERR($"已删除计划任务：{t.Summary}（{t.CronText}）");
-        OnShowTasks(null, new RoutedEventArgs());
-    }
-
-    private async Task RunScheduledTaskAsync(UTSLManager.Servers.ScheduledTask t)
-    {
-        var p = ServersCfg.Servers.FirstOrDefault(x => x.Id == t.ProfileId);
-        string who = p is null ? $"(档已不存在 {t.ProfileId})" : p.Name;
-        string head = $"[计划任务] {t.Summary} · {who} · {t.CronText}";
+        string head = $"[计划任务] {t.Name} · {p.Name} · {t.TimeText}";
         TaskSink(head + " → 执行中…", "#79C0FF");
-        Program.Log($"TASK fire id={t.Id} kind={t.Kind} profile={t.ProfileId}");
-        string result;
+        Program.Log($"TASK fire name={t.Name} profile={p.Id} type={t.Type} time={t.Time}");
+        var results = new List<string>();
+        bool bad = false;
         try
         {
-            if (p is null) { result = "跳过：档已删除"; }
-            else
+            await EnsureProfileReachableAsync(p);
+            foreach (var a in t.Actions)
             {
-                await EnsureProfileReachableAsync(p);   // 远端档：先按档把隧道拉起来（本机档是空操作）
-                switch (t.Kind)
+                switch (a.Type)
                 {
-                    case "command":
-                        if ((t.Command ?? "").Trim().Length == 0) { result = "跳过：没填指令"; }
-                        else { await TaskSendCommandAsync(p, t.Command.Trim()); result = "指令已发送"; }
+                    case "delay":
+                        int sec = Math.Clamp(a.Seconds, 0, 3600);
+                        if (sec > 0) { await Task.Delay(sec * 1000); results.Add($"等待 {sec}s"); }
                         break;
                     case "start":
-                        await TaskStartProfileAsync(p); result = "已启动"; break;
+                        await TaskStartProfileAsync(p); results.Add("已启动"); break;
                     case "stop":
-                        result = await TaskStopProfileAsync(p); break;
+                        results.Add(await TaskStopProfileAsync(p)); break;
                     case "restart":
-                        result = await TaskStopProfileAsync(p);
-                        await Task.Delay(4000);
+                        results.Add(await TaskStopProfileAsync(p));
+                        await Task.Delay(2000);
                         await TaskStartProfileAsync(p);
-                        result += " / 已启动";
+                        results.Add("已启动");
                         break;
-                    default: result = "跳过：未知动作"; break;
+                    case "kill":
+                        await TaskKillProfileAsync(p); results.Add("已强制结束"); break;
+                    case "command":
+                        await TaskSendCommandAsync(p, a.Payload); results.Add("已发送 " + a.Payload); break;
+                    default:
+                        results.Add("未知动作 " + a.Type); bad = true; break;
                 }
             }
         }
-        catch (Exception ex) { result = "失败：" + ex.Message; }
-        t.LastRunAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
-        t.LastResult = result;
+        catch (Exception ex) { results.Add("失败：" + ex.Message); bad = true; }
+        string text = string.Join(" / ", results);
+        t.LastRunAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        t.LastResult = text;
         try { SaveConn(); } catch { }
-        bool bad = result.StartsWith("失败") || result.StartsWith("跳过");
-        TaskSink($"{head} → {result}", bad ? "#FEBC2E" : "#30D158");
-        Program.Log($"TASK done id={t.Id} result={result}");
+        TaskSink($"{head} → {text}", bad ? "#FEBC2E" : "#30D158");
+        Program.Log($"TASK done name={t.Name} result={text}");
         try { UpdateServerCards(); } catch { }
     }
 
-    /// <summary>远端档执行前先确保该档的隧道（REST + agent 两条 -L）已建立。
-    /// ★ EnsureTunnel(profile) 本来就是按档参数化的，所以"任意远端档随时可控"不需要重构 AgentClient；
-    ///   真正缺的是"执行前先把它拉起来"这一步。</summary>
+    /// <summary>远端档执行前先确保该档的隧道（REST + agent 两条 -L）已建立。</summary>
     private static async Task EnsureProfileReachableAsync(ServerProfile p)
     {
         if (!p.IsRemote) { return; }
@@ -4815,13 +4818,13 @@ public partial class MainWindow : Window
         await http.GetStringAsync(url);
     }
 
-    /// <summary>停机：先发停机指令请它自己存盘，等世界停（最多 StopTimeoutSec），再结束进程。</summary>
     private async Task<string> TaskStopProfileAsync(ServerProfile p)
     {
         string cmd = string.IsNullOrWhiteSpace(p.StopCommand) ? "/off" : p.StopCommand;
         try { await TaskSendCommandAsync(p, cmd); } catch (Exception ex) { Program.Log("TASK stop cmd-error " + ex.Message); }
         var sw = System.Diagnostics.Stopwatch.StartNew();
         int timeout = Math.Clamp(p.StopTimeoutSec <= 0 ? 10 : p.StopTimeoutSec, 3, 120);
+        int restFails = 0;
         while (sw.Elapsed.TotalSeconds < timeout)
         {
             await Task.Delay(400);
@@ -4832,9 +4835,13 @@ public partial class MainWindow : Window
                 using var doc = System.Text.Json.JsonDocument.Parse(txt);
                 bool any = doc.RootElement.TryGetProperty("worlds", out var ws)
                            && ws.EnumerateArray().Any(w => w.TryGetProperty("running", out var r) && r.GetBoolean());
+                restFails = 0;
                 if (!any) { break; }
             }
-            catch { break; }   // REST 都不通了 = 基本停完了
+            catch
+            {
+                if (++restFails >= 3) { break; }   // 连续三次拿不到 REST 才认为在退出（网络抖一下不算）
+            }
         }
         await TaskKillProfileAsync(p);
         p.UserStopped = true;
@@ -4878,74 +4885,54 @@ public partial class MainWindow : Window
         ProtectWatchdog(600, "task-start");
     }
 
-    /// <summary>计划任务的消息也走终端（用户要能看到"凌晨 4 点自动重启了"）。</summary>
     private void TaskSink(string text, string color)
     {
         try { Term(text, color); } catch { }
         try { Program.Log("TASK " + text); } catch { }
     }
 
-    private void OnAddTask(object? sender, RoutedEventArgs e)
+    private ScheduledTask? FindTask(string profileId, string name)
+        => ServersCfg.Tasks.FirstOrDefault(x => x.ProfileId == profileId && x.Name == name);
+
+    private async void OnRunTaskNow(object? sender, RoutedEventArgs e)
     {
-        try
-        {
-            string pid = CmbTaskProfile?.SelectedItem is ComboBoxItem ci ? (ci.Tag?.ToString() ?? "") : "";
-            string kind = CmbTaskKind?.SelectedItem is ComboBoxItem ck ? (ck.Tag?.ToString() ?? "restart") : "restart";
-            string cmd = (TbTaskCommand?.Text ?? "").Trim();
-            if (pid.Length == 0) { ERR("新增计划任务：请选择服务器档"); return; }
-
-            string cron;
-            if (ChkTaskAdvanced?.IsChecked == true)
-            {
-                cron = (TbTaskCron?.Text ?? "").Trim();
-            }
-            else
-            {
-                string freq = CmbTaskFreq?.SelectedItem is ComboBoxItem cf ? (cf.Tag?.ToString() ?? "daily") : "daily";
-                if (!UTSLManager.Controls.ClockTimePicker.TryParse((TbTaskTime?.Text ?? "04:00").Trim(), out int hh, out int mm))
-                {
-                    ERR("时间格式要 HH:mm，例如 04:00"); return;
-                }
-                if (!int.TryParse((TbTaskNum?.Text ?? "").Trim(), out int n) || n <= 0) { n = 6; }
-                string dow = CmbTaskWeekday?.SelectedItem is ComboBoxItem cw ? (cw.Tag?.ToString() ?? "1") : "1";
-                string dom = CmbTaskDay?.SelectedItem is ComboBoxItem cd2 ? (cd2.Tag?.ToString() ?? "1") : "1";
-                cron = freq switch
-                {
-                    "daily" => $"{mm} {hh} * * *",
-                    "weekly" => $"{mm} {hh} * * {dow}",
-                    "monthly" => $"{mm} {hh} {dom} * *",
-                    "hourly" => $"{mm} */{Math.Clamp(n, 1, 23)} * * *",
-                    "minutely" => $"*/{Math.Clamp(n, 1, 59)} * * * *",
-                    _ => $"{mm} {hh} * * *",
-                };
-            }
-
-            if (cron.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length != 5) { ERR("调度不合法（需要 5 段）：" + cron); return; }
-
-            // ★ 护栏：重启/停机是破坏性动作，拒绝"每分钟级"的频率。
-            //   实测踩过：一条 `* * * * *` 的 restart 任务把生产服务端连着重启了两次。
-            //   要高频重启的人请用「高级」并自己确认——这里直接挡掉最常见的误配。
-            if (kind is "restart" or "stop")
-            {
-                var cf2 = cron.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                bool minuteLevel = cf2[0] == "*"
-                    || (cf2[0].StartsWith("*/") && int.TryParse(cf2[0][2..], out int stepMin) && stepMin < 5);
-                if (minuteLevel)
-                {
-                    ERR("拒绝：重启/停机的频率不能是「每分钟级」——这会反复重启生产服。请用「每 6 小时」「每天 04:00」这类。");
-                    return;
-                }
-            }
-            if (kind == "command" && cmd.Length > 0 && !cmd.StartsWith('/')) { cmd = "/" + cmd; }
-            var task = new UTSLManager.Servers.ScheduledTask { ProfileId = pid, Kind = kind, Cron = cron, Command = cmd, Enabled = true };
-            ServersCfg.Tasks.Add(task);
-            SaveConn();
-            ERR($"已新增计划任务：{task.Summary} · {task.CronText}");
-            OnShowTasks(null, new RoutedEventArgs());
-        }
-        catch (Exception ex) { ERR("新增计划任务失败: " + ex.Message); }
+        if ((sender as Avalonia.Controls.Control)?.Tag is not string key) { return; }
+        var t = ServersCfg.Tasks.FirstOrDefault(x => x.ProfileId + "|" + x.Name == key);
+        var p = t is null ? null : ServersCfg.Servers.FirstOrDefault(x => x.Id == t.ProfileId);
+        if (t is null || p is null) { return; }
+        await RunScheduledTaskAsync(t, p);
+        OnShowTasks(null, new RoutedEventArgs());
     }
-    private void OnShowTasks(object? sender, RoutedEventArgs e)
+
+    private void OnDeleteTask(object? sender, RoutedEventArgs e)
+    {
+        if ((sender as Avalonia.Controls.Control)?.Tag is not string key) { return; }
+        var t = ServersCfg.Tasks.FirstOrDefault(x => x.ProfileId + "|" + x.Name == key);
+        if (t is null) { return; }
+        ServersCfg.Tasks.Remove(t);
+        taskLastRun.Remove(key);
+        SaveConn();
+        ERR($"已删除定时任务：{t.Name}（{t.TimeText}）");
+        OnShowTasks(null, new RoutedEventArgs());
+    }
+
+    private void OnToggleTaskEnabled(object? sender, RoutedEventArgs e)
+    {
+        if ((sender as Avalonia.Controls.Control)?.Tag is not string key) { return; }
+        var t = ServersCfg.Tasks.FirstOrDefault(x => x.ProfileId + "|" + x.Name == key);
+        if (t is null) { return; }
+        t.Enabled = (sender as CheckBox)?.IsChecked == true;
+        SaveCacheClear(key);
+        SaveConn();
+        ERR($"定时任务「{t.Name}」已{(t.Enabled ? "启用" : "停用")}");
+        OnShowTasks(null, new RoutedEventArgs());
+    }
+
+    private void SaveCacheClear(string key)
+    {
+        taskLastRun.Remove(key);
+        taskFired.RemoveWhere(k => k.StartsWith(key + "|", StringComparison.Ordinal));
+    }    private void OnShowTasks(object? sender, RoutedEventArgs e)
     {
         ShowView("tasks");
         try
@@ -4959,9 +4946,9 @@ public partial class MainWindow : Window
             var txtPri = Br("TextPrimary", "#D9FFFFFF");
             var txtSec = Br("TextSecondary", "#8CFFFFFF");
             var txtTer = Br("TextTertiary", "#40FFFFFF");
+            var red = Br("SysRed", "#FF4245");
             var green = Br("SysGreen", "#30D158");
             var amber = Br("SysYellow", "#FFD600");
-            var red = Br("SysRed", "#FF4245");
 
             TextBlock Cap(string s) => new() { Text = s, FontSize = 11, Foreground = txtTer };
             Border Card() => new()
@@ -4972,115 +4959,90 @@ public partial class MainWindow : Window
                 CornerRadius = new Avalonia.CornerRadius(10),
                 Padding = new Avalonia.Thickness(16, 14),
             };
-
-            // ---- 新增表单：字段带标题、控件一行、cron 预设 ----
-            var addCard = Card();
-            addCard.Margin = new Avalonia.Thickness(0, 0, 0, 12);
-            var add = new StackPanel { Spacing = 12 };
-            add.Children.Add(new TextBlock { Text = "新增任务", FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = txtPri });
-
-            var fields = new Grid { ColumnDefinitions = new Avalonia.Controls.ColumnDefinitions("2*,1.2*,1.6*,1.6*"), };
-            StackPanel Field(Control ctl, string label)
+            StackPanel Field(Control ctl, string label, double width)
             {
-                var sp = new StackPanel { Spacing = 5 };
+                var sp = new StackPanel { Spacing = 5, Width = width };
                 sp.Children.Add(Cap(label));
                 ctl.MinHeight = 28;
                 sp.Children.Add(ctl);
                 return sp;
             }
-            CmbTaskProfile = new ComboBox { FontSize = 12, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch };
-            foreach (var p in ServersCfg.Servers)
-            {
-                CmbTaskProfile.Items.Add(new ComboBoxItem { Content = p.Name.Length > 0 ? p.Name : p.Id, Tag = p.Id });
-            }
-            if (CmbTaskProfile.ItemCount > 0) { CmbTaskProfile.SelectedIndex = 0; }
-            CmbTaskKind = new ComboBox { FontSize = 12, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch };
-            foreach (var (tag, text) in new[] { ("restart", "重启"), ("stop", "停机"), ("start", "启动"), ("command", "发命令") })
-            {
-                CmbTaskKind.Items.Add(new ComboBoxItem { Content = text, Tag = tag });
-            }
-            CmbTaskKind.SelectedIndex = 0;
 
-            // ★ 结构化调度：频率 + 时间/星期/日/N，cron 只在「高级」里出现。
-            //   之前直接给一个 cron 输入框，普通字体下 `0 4 * * *` 会被看成 `04***`（空格窄 + 星号偏高）。
-            CmbTaskFreq = new ComboBox { FontSize = 12, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch };
+            // ---- 顶部：说明 + 当前档 ----
+            var head = new StackPanel { Spacing = 4, Margin = new Avalonia.Thickness(0, 0, 0, 12) };
+            head.Children.Add(new TextBlock
+            {
+                Text = $"「{ActiveSrv.Name}」的定时任务",
+                FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = txtPri,
+            });
+            head.Children.Add(new TextBlock
+            {
+                Text = "任务只属于当前这台服务器（和 MCSManager 一样按实例管理）；切到别的档看它自己的任务。",
+                FontSize = 11, Foreground = txtTer, TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            });
+            TasksPanel.Children.Add(head);
+
+            // ---- 新增表单 ----
+            var addCard = Card();
+            addCard.Margin = new Avalonia.Thickness(0, 0, 0, 12);
+            var add = new StackPanel { Spacing = 12 };
+            add.Children.Add(new TextBlock { Text = "新增任务", FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = txtPri });
+
+            TbTaskName = new TextBox { FontSize = 12, Text = "每日重启", Watermark = "任务名（同档内唯一）" };
+            CmbTaskType = new ComboBox { FontSize = 12, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch };
+            CmbTaskType.Items.Add(new ComboBoxItem { Content = "定时（cron）", Tag = "2" });
+            CmbTaskType.Items.Add(new ComboBoxItem { Content = "间隔（秒）", Tag = "1" });
+            CmbTaskType.SelectedIndex = 0;
+
+            TbTaskCron = new TextBox
+            {
+                FontSize = 12, Text = "0 0 4 * * *",
+                FontFamily = new Avalonia.Media.FontFamily("Cascadia Mono,Consolas,monospace"),
+                Watermark = "秒 分 时 日 月 周",
+            };
+            TbTaskNum = new TextBox { FontSize = 12, Text = "3600", Watermark = "N 秒", IsVisible = false };
+
+            CmbTaskAct = new ComboBox { FontSize = 12, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch };
             foreach (var (tag, text) in new[]
             {
-                ("daily", "每天"), ("weekly", "每周"), ("monthly", "每月"),
-                ("hourly", "每 N 小时"), ("minutely", "每 N 分钟"),
+                ("restart", "重启"), ("stop", "停机"), ("start", "启动"),
+                ("kill", "强制结束"), ("command", "发送命令"), ("delay", "等待"),
             })
             {
-                CmbTaskFreq.Items.Add(new ComboBoxItem { Content = text, Tag = tag });
+                CmbTaskAct.Items.Add(new ComboBoxItem { Content = text, Tag = tag });
             }
-            CmbTaskFreq.SelectedIndex = 0;
-            TbTaskTime = new TextBox { FontSize = 12, Text = "04:00", Watermark = "HH:mm" };
-            CmbTaskWeekday = new ComboBox { FontSize = 12, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch };
-            for (int wi = 0; wi < 7; wi++)
+            CmbTaskAct.SelectedIndex = 0;
+            TbTaskCommand = new TextBox { FontSize = 12, Text = "/save", Watermark = "仅「发送命令」用" };
+
+            TbTaskTime = TbTaskCron;   // 复用同一个变量名给"时间"字段
+            var row1 = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 10 };
+            row1.Children.Add(Field(TbTaskName, "任务名", 160));
+            row1.Children.Add(Field(CmbTaskType, "类型", 120));
+            row1.Children.Add(Field(TbTaskCron, "时间（cron：秒 分 时 日 月 周）", 260));
+            row1.Children.Add(Field(TbTaskNum, "间隔秒数", 100));
+            add.Children.Add(row1);
+
+            var row2 = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 10 };
+            row2.Children.Add(Field(CmbTaskAct, "动作", 140));
+            row2.Children.Add(Field(TbTaskCommand, "命令", 220));
+            add.Children.Add(row2);
+
+            void SyncType()
             {
-                string[] names = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-                CmbTaskWeekday.Items.Add(new ComboBoxItem { Content = names[wi], Tag = wi.ToString() });
+                string ty = CmbTaskType?.SelectedItem is ComboBoxItem ci ? (ci.Tag?.ToString() ?? "2") : "2";
+                if (TbTaskCron is not null) { TbTaskCron.IsVisible = ty == "2"; }
+                if (TbTaskNum is not null) { TbTaskNum.IsVisible = ty == "1"; }
             }
-            CmbTaskWeekday.SelectedIndex = 1;
-            CmbTaskDay = new ComboBox { FontSize = 12, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch };
-            for (int di = 1; di <= 28; di++) { CmbTaskDay.Items.Add(new ComboBoxItem { Content = di + " 日", Tag = di.ToString() }); }
-            CmbTaskDay.SelectedIndex = 0;
-            TbTaskNum = new TextBox { FontSize = 12, Text = "6", Watermark = "N", Width = 70 };
+            if (CmbTaskType is not null) { CmbTaskType.SelectionChanged += (_, _) => SyncType(); }
+            SyncType();
 
-            var f1 = Field(CmbTaskProfile!, "服务器");
-            var f2 = Field(CmbTaskKind!, "动作");
-            var f3 = Field(CmbTaskFreq, "频率");
-            f1.Width = 240; f2.Width = 120; f3.Width = 150;
-            var rowA = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 10 };
-            rowA.Children.Add(f1); rowA.Children.Add(f2); rowA.Children.Add(f3);
-            add.Children.Add(rowA);
-            var f4 = Field(TbTaskTime, "时间（HH:mm）");
-            var f5 = Field(CmbTaskWeekday, "星期");
-            var f6 = Field(CmbTaskDay, "几号");
-            var f7 = Field(TbTaskNum, "N");
-            f4.Width = 130; f5.Width = 100; f6.Width = 100; f7.Width = 80;
-            var sub = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 10, Margin = new Avalonia.Thickness(0, 10, 0, 0) };
-            foreach (var c in new Control[] { f4, f5, f6, f7 }) { c.MinWidth = 0; sub.Children.Add(c); }
-            add.Children.Add(sub);
-
-            void SyncSched()
-            {
-                string freq = CmbTaskFreq?.SelectedItem is ComboBoxItem ci2 ? (ci2.Tag?.ToString() ?? "daily") : "daily";
-                // ★ 要隐藏整个"字段块"（标题 + 控件），只隐藏控件会留下 星期/几号/N 三个空标题
-                f4.IsVisible = freq is "daily" or "weekly" or "monthly" or "hourly";
-                f5.IsVisible = freq == "weekly";
-                f6.IsVisible = freq == "monthly";
-                f7.IsVisible = freq is "hourly" or "minutely";
-            }
-            if (CmbTaskFreq is not null)
-            {
-                CmbTaskFreq.SelectionChanged += (_, _) => SyncSched();
-            }
-            SyncSched();
-
-            // 高级：直接写 cron（保留老用户/复杂表达式的入口）
-            ChkTaskAdvanced = new CheckBox { Content = "高级：直接写 cron", FontSize = 11, Foreground = txtTer };
-            TbTaskCron = new TextBox { FontSize = 12, Text = "0 4 * * *", FontFamily = new Avalonia.Media.FontFamily("Cascadia Mono,Consolas,monospace"), IsVisible = false, Watermark = "分 时 日 月 周" };
-            ChkTaskAdvanced.Click += (_, _) =>
-            {
-                bool adv = ChkTaskAdvanced?.IsChecked == true;
-                if (TbTaskCron is not null) { TbTaskCron.IsVisible = adv; }
-                if (CmbTaskFreq is not null) { CmbTaskFreq.IsEnabled = !adv; }
-                if (TbTaskTime is not null) { TbTaskTime.IsEnabled = !adv; }
-                if (CmbTaskWeekday is not null) { CmbTaskWeekday.IsEnabled = !adv; }
-                if (CmbTaskDay is not null) { CmbTaskDay.IsEnabled = !adv; }
-                if (TbTaskNum is not null) { TbTaskNum.IsEnabled = !adv; }
-            };
-            add.Children.Add(ChkTaskAdvanced);
-            add.Children.Add(TbTaskCron);
-
-            // 常用预设 → 写进「高级」的 cron 并自动切到高级模式
             var presets = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8 };
             presets.Children.Add(new TextBlock { Text = "常用：", FontSize = 11, Foreground = txtTer, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center });
             foreach (var (label, cron) in new[]
             {
-                ("每天 04:00", "0 4 * * *"), ("每 6 小时", "0 */6 * * *"),
-                ("每 30 分钟", "*/30 * * * *"), ("每小时整点", "0 * * * *"),
-                ("每周日 05:00", "0 5 * * 0"), ("每分钟", "* * * * *"),
+                ("每天 04:00", "0 0 4 * * *"), ("每 6 小时", "0 0 */6 * * *"),
+                ("每 30 分钟", "0 */30 * * * *"), ("每小时整点", "0 0 * * * *"),
+                ("每周日 05:00", "0 0 5 * * 0"),
             })
             {
                 var chip = new Button
@@ -5094,21 +5056,20 @@ public partial class MainWindow : Window
                 };
                 chip.Click += (_, _) =>
                 {
+                    if (CmbTaskType is not null) { CmbTaskType.SelectedIndex = 0; }
                     if (TbTaskCron is not null) { TbTaskCron.Text = cron; }
-                    if (ChkTaskAdvanced is not null) { ChkTaskAdvanced.IsChecked = true; }
                 };
                 presets.Children.Add(chip);
             }
             add.Children.Add(presets);
 
             var bottom = new Grid { ColumnDefinitions = new Avalonia.Controls.ColumnDefinitions("*,Auto") };
-            var tip = new TextBlock
+            bottom.Children.Add(new TextBlock
             {
-                Text = "到点会写进终端与 switchperf.log；远端档执行前会自动把该档的隧道拉起来。",
-                FontSize = 11, Foreground = txtTer,
-                TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                Text = "同名任务会追加动作（例：再来一条「等待 5s」就是先存盘再重启）。到点会写终端 + switchperf.log。",
+                FontSize = 11, Foreground = txtTer, TextWrapping = Avalonia.Media.TextWrapping.Wrap,
                 VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-            };
+            });
             var btnAdd = new Button
             {
                 Content = "添加任务", FontSize = 12, Padding = new Avalonia.Thickness(18, 0), MinHeight = 28,
@@ -5118,124 +5079,151 @@ public partial class MainWindow : Window
                 HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
             };
             btnAdd.Click += OnAddTask;
-            Avalonia.Controls.Grid.SetColumn(tip, 0);
+            Avalonia.Controls.Grid.SetColumn(bottom.Children[0] as Control ?? new TextBlock(), 0);
             Avalonia.Controls.Grid.SetColumn(btnAdd, 1);
-            bottom.Children.Add(tip);
             bottom.Children.Add(btnAdd);
             add.Children.Add(bottom);
             addCard.Child = add;
             TasksPanel.Children.Add(addCard);
 
-            // ---- 任务列表 ----
-            if (ServersCfg.Tasks.Count == 0)
+            // ---- 当前档的任务列表 ----
+            var mine = ServersCfg.Tasks.Where(x => x.ProfileId == ActiveSrv.Id).ToList();
+            if (mine.Count == 0)
             {
                 var empty = Card();
                 empty.Child = new TextBlock
                 {
-                    Text = "还没有任务。上面选一台服务器、一个动作，再点「添加任务」——比如「每天 04:00 重启」。",
-                    FontSize = 12, Foreground = txtSec,
-                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                    Text = "这台服务器还没有定时任务。上面填「任务名 + 时间 + 动作」再点添加，例如「每日重启 / 每天 04:00 / 重启」。",
+                    FontSize = 12, Foreground = txtSec, TextWrapping = Avalonia.Media.TextWrapping.Wrap,
                 };
                 TasksPanel.Children.Add(empty);
                 return;
             }
 
-            foreach (var t in ServersCfg.Tasks.ToList())
+            foreach (var t in mine)
             {
-                var p = ServersCfg.Servers.FirstOrDefault(x => x.Id == t.ProfileId);
                 var card = Card();
                 card.Margin = new Avalonia.Thickness(0, 0, 0, 8);
-                var g = new Grid { ColumnDefinitions = new Avalonia.Controls.ColumnDefinitions("Auto,*,Auto,Auto,Auto,Auto") };
+                var g = new Grid { ColumnDefinitions = new Avalonia.Controls.ColumnDefinitions("*,Auto,Auto,Auto,Auto") };
 
-                // 动作胶囊
-                var kindColor = t.Kind switch { "start" => green, "stop" => amber, "restart" => accent, _ => txtSec };
-                var pill = new Border
-                {
-                    Background = Br("FillPrimary", "#1AFFFFFF"),
-                    CornerRadius = new Avalonia.CornerRadius(6),
-                    Padding = new Avalonia.Thickness(8, 2),
-                    Margin = new Avalonia.Thickness(0, 0, 12, 0),
-                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-                    Child = new TextBlock { Text = t.KindText, FontSize = 11, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = kindColor },
-                };
-                Avalonia.Controls.Grid.SetColumn(pill, 0);
-                g.Children.Add(pill);
-
-                // 名称 + 元信息
                 var info = new StackPanel { Spacing = 3, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
+                info.Children.Add(new TextBlock { Text = t.Name, FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = txtPri });
+                var meta = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 10 };
+                var timeTb = new TextBlock { Text = t.TimeText, FontSize = 11, Foreground = txtSec };
+                Avalonia.Controls.ToolTip.SetTip(timeTb, (t.Type == 1 ? "间隔：" : "cron：") + t.Time);
+                meta.Children.Add(timeTb);
+                meta.Children.Add(new TextBlock { Text = t.ActionsText, FontSize = 11, Foreground = txtSec, TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis });
+                info.Children.Add(meta);
                 info.Children.Add(new TextBlock
                 {
-                    Text = p is null ? $"{t.Summary}（档已不存在）" : (t.Kind == "command" ? $"向「{p.Name}」发送 {t.Command}" : $"{t.KindText}「{p.Name}」"),
-                    FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = txtPri,
+                    Text = t.LastRunAt.Length > 0 ? $"上次 {t.LastRunAt} · {t.LastResult}" : "还没运行过",
+                    FontSize = 11,
+                    Foreground = t.LastResult.StartsWith("失败") ? red : txtTer,
                 });
-                string last = t.LastRunAt.Length > 0 ? $"上次 {t.LastRunAt} · {t.LastResult}" : "还没运行过";
-                var meta = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 10 };
-                var cronTb = new TextBlock { Text = t.CronText, FontSize = 11, Foreground = txtSec };
-                Avalonia.Controls.ToolTip.SetTip(cronTb, "cron: " + t.Cron);
-                meta.Children.Add(cronTb);
-                meta.Children.Add(new TextBlock
-                {
-                    Text = last, FontSize = 11,
-                    Foreground = t.LastResult.StartsWith("失败") ? red : (t.LastResult.StartsWith("跳过") ? amber : txtTer),
-                });
-                info.Children.Add(meta);
-                Avalonia.Controls.Grid.SetColumn(info, 1);
+                Avalonia.Controls.Grid.SetColumn(info, 0);
                 g.Children.Add(info);
 
-                // 下次运行
-                string next = t.Enabled ? t.NextRunText(DateTime.Now) : "";
+                var key = t.ProfileId + "|" + t.Name;
                 var nextTb = new TextBlock
                 {
-                    Text = t.Enabled ? (next.Length > 0 ? "下次 " + next : "—") : "已停用",
-                    FontSize = 11, Foreground = txtTer,
-                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    Text = t.Enabled ? (t.NextRunText(DateTime.Now) is { Length: > 0 } nx ? "下次 " + nx : "—") : "已停用",
+                    FontSize = 11, Foreground = txtTer, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
                     Margin = new Avalonia.Thickness(0, 0, 14, 0),
                 };
-                Avalonia.Controls.Grid.SetColumn(nextTb, 2);
+                Avalonia.Controls.Grid.SetColumn(nextTb, 1);
                 g.Children.Add(nextTb);
 
-                // 启用开关
                 var chk = new CheckBox
                 {
-                    IsChecked = t.Enabled, Tag = t.Id, Content = "启用", FontSize = 11,
+                    IsChecked = t.Enabled, Tag = key, Content = "启用", FontSize = 11,
                     VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-                    Margin = new Avalonia.Thickness(0, 0, 12, 0),
-                    Foreground = txtSec,
+                    Margin = new Avalonia.Thickness(0, 0, 12, 0), Foreground = txtSec,
                 };
                 chk.Click += OnToggleTaskEnabled;
-                Avalonia.Controls.Grid.SetColumn(chk, 3);
+                Avalonia.Controls.Grid.SetColumn(chk, 2);
                 g.Children.Add(chk);
 
-                var btnNow = new Button { Content = "立即执行", FontSize = 11, Tag = t.Id, MinHeight = 24, Padding = new Avalonia.Thickness(10, 0), Margin = new Avalonia.Thickness(0, 0, 8, 0) };
+                var btnNow = new Button { Content = "立即执行", FontSize = 11, Tag = key, MinHeight = 24, Padding = new Avalonia.Thickness(10, 0), Margin = new Avalonia.Thickness(0, 0, 8, 0) };
                 btnNow.Click += OnRunTaskNow;
-                Avalonia.Controls.Grid.SetColumn(btnNow, 4);
+                Avalonia.Controls.Grid.SetColumn(btnNow, 3);
                 g.Children.Add(btnNow);
 
-                var btnDel = new Button
-                {
-                    Content = "删除", FontSize = 11, Tag = t.Id, MinHeight = 24, Padding = new Avalonia.Thickness(10, 0),
-                    Foreground = red,
-                };
+                var btnDel = new Button { Content = "删除", FontSize = 11, Tag = key, MinHeight = 24, Padding = new Avalonia.Thickness(10, 0), Foreground = red };
                 btnDel.Click += OnDeleteTask;
-                Avalonia.Controls.Grid.SetColumn(btnDel, 5);
+                Avalonia.Controls.Grid.SetColumn(btnDel, 4);
                 g.Children.Add(btnDel);
 
                 card.Child = g;
                 TasksPanel.Children.Add(card);
             }
         }
-        catch (Exception ex) { ERR("计划任务页打开失败: " + ex.Message); }
+        catch (Exception ex) { ERR("定时任务页打开失败: " + ex.Message); }
     }
 
-    private void OnToggleTaskEnabled(object? sender, RoutedEventArgs e)
+    private void OnAddTask(object? sender, RoutedEventArgs e)
     {
-        if ((sender as Avalonia.Controls.Control)?.Tag is not string id) { return; }
-        var t = ServersCfg.Tasks.FirstOrDefault(x => x.Id == id);
-        if (t is null) { return; }
-        t.Enabled = (sender as CheckBox)?.IsChecked == true;
-        SaveConn();
-        ERR($"计划任务「{t.Summary}」已{(t.Enabled ? "启用" : "停用")}");
-        OnShowTasks(null, new RoutedEventArgs());
+        try
+        {
+            string name = (TbTaskName?.Text ?? "").Trim();
+            if (name.Length == 0) { ERR("请填任务名"); return; }
+            string ty = CmbTaskType?.SelectedItem is ComboBoxItem ct ? (ct.Tag?.ToString() ?? "2") : "2";
+            string act = CmbTaskAct?.SelectedItem is ComboBoxItem ca ? (ca.Tag?.ToString() ?? "restart") : "restart";
+            string payload = (TbTaskCommand?.Text ?? "").Trim();
+            string time = ty == "1" ? (TbTaskNum?.Text ?? "").Trim() : (TbTaskCron?.Text ?? "").Trim();
+
+            // 时间校验
+            if (ty == "1")
+            {
+                if (!int.TryParse(time, out int sec) || sec < 5) { ERR("间隔秒数要 ≥ 5"); return; }
+                time = sec.ToString();
+            }
+            else
+            {
+                var f = time.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (f.Length != 5 && f.Length != 6) { ERR("cron 需要 5 段或 6 段（MCSM 风格是 6 段：秒 分 时 日 月 周）"); return; }
+            }
+            if (act == "command")
+            {
+                if (payload.Length == 0) { ERR("「发送命令」要填命令"); return; }
+                if (!payload.StartsWith('/')) { payload = "/" + payload; }
+            }
+
+            // 破坏性动作 + 高频 → 拒绝（实测踩过：每分钟重启把生产服重启了两次）
+            if (act is "restart" or "stop" or "kill")
+            {
+                bool tooFrequent = ty == "1" ? int.Parse(time) < 60 : IsMinuteLevelCron(time);
+                if (tooFrequent) { ERR("拒绝：重启/停机/强杀不能是「每分钟级」/「间隔<60秒」，这会反复重启生产服。"); return; }
+            }
+
+            var task = FindTask(ActiveSrv.Id, name);
+            if (task is null)
+            {
+                task = new ScheduledTask { Name = name, ProfileId = ActiveSrv.Id, Type = int.Parse(ty), Time = time, Enabled = true };
+                ServersCfg.Tasks.Add(task);
+            }
+            else
+            {
+                task.Type = int.Parse(ty);
+                task.Time = time;
+            }
+            task.Actions.Add(new TaskAction { Type = act, Payload = payload, Seconds = int.TryParse((TbTaskNum?.Text ?? "").Trim(), out int ds) && act == "delay" ? ds : 5 });
+            SaveConn();
+            SaveCacheClear(ActiveSrv.Id + "|" + name);
+            ERR($"已保存任务「{name}」：{task.TimeText} → {task.ActionsText}");
+            OnShowTasks(null, new RoutedEventArgs());
+        }
+        catch (Exception ex) { ERR("保存任务失败: " + ex.Message); }
+    }
+
+    /// <summary>cron 是否"每分钟级"（分钟字段是 * 或 */n 且 n&lt;5，或 6 段且秒字段过密）。</summary>
+    private static bool IsMinuteLevelCron(string cron)
+    {
+        var f = cron.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        bool six = f.Length == 6;
+        string mm = six ? f[1] : f[0];
+        if (mm == "*") { return true; }
+        if (mm.StartsWith("*/") && int.TryParse(mm[2..], out int n) && n < 5) { return true; }
+        return false;
     }
     private void OnShowConn(object? sender, RoutedEventArgs e)
     {
