@@ -105,6 +105,29 @@ public sealed class ScheduledTask
         }
     }
 
+    /// <summary>下一次会触发的时刻（从 now 起最多看 48 小时）；算不出来返回空串。
+    /// 任务卡上显示"下次 04:00"，比只写 cron 表达式好用得多。</summary>
+    public string NextRunText(DateTime now)
+    {
+        try
+        {
+            var t = now.AddSeconds(-now.Second).AddMinutes(1);
+            for (int i = 0; i < 48 * 60; i++)
+            {
+                if (CronMatches(Cron, t))
+                {
+                    bool sameDay = t.Date == now.Date;
+                    bool tomorrow = t.Date == now.Date.AddDays(1);
+                    string hm = t.ToString("HH:mm");
+                    return sameDay ? hm : (tomorrow ? "明天 " + hm : t.ToString("MM-dd HH:mm"));
+                }
+                t = t.AddMinutes(1);
+            }
+        }
+        catch { }
+        return "";
+    }
+
     public JsonObject ToJson() => new()
     {
         ["id"] = Id,

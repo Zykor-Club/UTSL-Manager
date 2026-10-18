@@ -4746,6 +4746,7 @@ public partial class MainWindow : Window
             if (p is null) { result = "跳过：档已删除"; }
             else
             {
+                await EnsureProfileReachableAsync(p);   // 远端档：先按档把隧道拉起来（本机档是空操作）
                 switch (t.Kind)
                 {
                     case "command":
@@ -4774,6 +4775,29 @@ public partial class MainWindow : Window
         TaskSink($"{head} → {result}", bad ? "#FEBC2E" : "#30D158");
         Program.Log($"TASK done id={t.Id} result={result}");
         try { UpdateServerCards(); } catch { }
+    }
+
+    /// <summary>远端档执行前先确保该档的隧道（REST + agent 两条 -L）已建立。
+    /// ★ EnsureTunnel(profile) 本来就是按档参数化的，所以"任意远端档随时可控"不需要重构 AgentClient；
+    ///   真正缺的是"执行前先把它拉起来"这一步。</summary>
+    private static async Task EnsureProfileReachableAsync(ServerProfile p)
+    {
+        if (!p.IsRemote) { return; }
+        EnsureTunnel(p);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+        string last = "";
+        while (sw.Elapsed.TotalSeconds < 15)
+        {
+            try
+            {
+                await http.GetStringAsync($"http://127.0.0.1:{p.AgentPort}/ping");
+                Program.Log($"TASK tunnel-ready {p.Name} agent={p.AgentPort} in {sw.Elapsed.TotalSeconds:F1}s");
+                return;
+            }
+            catch (Exception ex) { last = ex.Message; await Task.Delay(500); }
+        }
+        throw new Exception($"隧道/agent 不可达（agent 端口 {p.AgentPort}）：{last}");
     }
 
     private static System.Net.Http.HttpClient TaskHttp(int secs = 10) => new() { Timeout = TimeSpan.FromSeconds(secs) };
@@ -4888,99 +4912,206 @@ public partial class MainWindow : Window
             if (TasksPanel is null) { return; }
             TasksPanel.Children.Clear();
 
-            // 新增表单
-            var addCard = new Border
+            IBrush Br(string key, string fallback)
+                => this.TryFindResource(key, out object? v) && v is IBrush b ? b : new SolidColorBrush(Color.Parse(fallback));
+            var accent = Br("Accent", "#0A84FF");
+            var txtPri = Br("TextPrimary", "#D9FFFFFF");
+            var txtSec = Br("TextSecondary", "#8CFFFFFF");
+            var txtTer = Br("TextTertiary", "#40FFFFFF");
+            var green = Br("SysGreen", "#30D158");
+            var amber = Br("SysYellow", "#FFD600");
+            var red = Br("SysRed", "#FF4245");
+
+            TextBlock Cap(string s) => new() { Text = s, FontSize = 11, Foreground = txtTer };
+            Border Card() => new()
             {
-                Background = (IBrush?)this.FindResource("MatPanel") ?? Brushes.Transparent,
-                BorderBrush = (IBrush?)this.FindResource("Hairline") ?? Brushes.Transparent,
+                Background = Br("MatPanel", "#F22C2C2E"),
+                BorderBrush = Br("Hairline", "#14FFFFFF"),
                 BorderThickness = new Avalonia.Thickness(1),
                 CornerRadius = new Avalonia.CornerRadius(10),
                 Padding = new Avalonia.Thickness(16, 14),
-                Margin = new Avalonia.Thickness(0, 0, 0, 10),
             };
-            var add = new StackPanel { Spacing = 8 };
-            add.Children.Add(new TextBlock { Text = "新增计划任务", FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold });
-            var row1 = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8 };
-            CmbTaskProfile = new ComboBox { Width = 190, FontSize = 12 };
+
+            // ---- 新增表单：字段带标题、控件一行、cron 预设 ----
+            var addCard = Card();
+            addCard.Margin = new Avalonia.Thickness(0, 0, 0, 12);
+            var add = new StackPanel { Spacing = 12 };
+            add.Children.Add(new TextBlock { Text = "新增任务", FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = txtPri });
+
+            var fields = new Grid { ColumnDefinitions = new Avalonia.Controls.ColumnDefinitions("2*,1.2*,1.6*,1.6*"), };
+            StackPanel Field(Control ctl, string label)
+            {
+                var sp = new StackPanel { Spacing = 5 };
+                sp.Children.Add(Cap(label));
+                ctl.MinHeight = 28;
+                sp.Children.Add(ctl);
+                return sp;
+            }
+            CmbTaskProfile = new ComboBox { FontSize = 12, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch };
             foreach (var p in ServersCfg.Servers)
             {
                 CmbTaskProfile.Items.Add(new ComboBoxItem { Content = p.Name.Length > 0 ? p.Name : p.Id, Tag = p.Id });
             }
             if (CmbTaskProfile.ItemCount > 0) { CmbTaskProfile.SelectedIndex = 0; }
-            CmbTaskKind = new ComboBox { Width = 120, FontSize = 12 };
+            CmbTaskKind = new ComboBox { FontSize = 12, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch };
             foreach (var (tag, text) in new[] { ("restart", "重启"), ("stop", "停机"), ("start", "启动"), ("command", "发命令") })
             {
                 CmbTaskKind.Items.Add(new ComboBoxItem { Content = text, Tag = tag });
             }
             CmbTaskKind.SelectedIndex = 0;
-            TbTaskCron = new TextBox { Width = 150, FontSize = 12, Text = "0 4 * * *", Watermark = "cron 分 时 日 月 周" };
-            TbTaskCommand = new TextBox { Width = 200, FontSize = 12, Text = "/save", Watermark = "仅发命令时用，如 /save" };
-            var btnAdd = new Button { Content = "新增", FontSize = 12, Padding = new Avalonia.Thickness(14, 0) };
-            btnAdd.Click += OnAddTask;
-            row1.Children.Add(CmbTaskProfile);
-            row1.Children.Add(CmbTaskKind);
-            row1.Children.Add(TbTaskCron);
-            row1.Children.Add(TbTaskCommand);
-            row1.Children.Add(btnAdd);
-            add.Children.Add(row1);
-            add.Children.Add(new TextBlock
+            TbTaskCron = new TextBox { FontSize = 12, Text = "0 4 * * *", Watermark = "分 时 日 月 周" };
+            TbTaskCommand = new TextBox { FontSize = 12, Text = "/save", Watermark = "仅发命令时用" };
+            var f1 = Field(CmbTaskProfile, "服务器");
+            var f2 = Field(CmbTaskKind, "动作");
+            var f3 = Field(TbTaskCron, "调度（cron 5 段）");
+            var f4 = Field(TbTaskCommand, "命令（可选）");
+            Avalonia.Controls.Grid.SetColumn(f1, 0); Avalonia.Controls.Grid.SetColumn(f2, 1);
+            Avalonia.Controls.Grid.SetColumn(f3, 2); Avalonia.Controls.Grid.SetColumn(f4, 3);
+            f1.Margin = new Avalonia.Thickness(0, 0, 10, 0);
+            f2.Margin = new Avalonia.Thickness(0, 0, 10, 0);
+            f3.Margin = new Avalonia.Thickness(0, 0, 10, 0);
+            foreach (var c in new Control[] { f1, f2, f3, f4 }) { fields.Children.Add(c); }
+            add.Children.Add(fields);
+
+            // cron 预设：点一下填进输入框（比让用户背 cron 好得多）
+            var presets = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8 };
+            presets.Children.Add(new TextBlock { Text = "常用：", FontSize = 11, Foreground = txtTer, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center });
+            foreach (var (label, cron) in new[]
             {
-                Text = "cron 5 段：分 时 日 月 周。例：`0 4 * * *` 每天 4:00；`*/30 * * * *` 每 30 分钟；`0 5 * * 0` 每周日 5:00。",
-                FontSize = 11,
-                Foreground = (IBrush?)this.FindResource("TextTertiary") ?? Brushes.Gray,
+                ("每天 04:00", "0 4 * * *"), ("每 6 小时", "0 */6 * * *"),
+                ("每 30 分钟", "*/30 * * * *"), ("每小时整点", "0 * * * *"),
+                ("每周日 05:00", "0 5 * * 0"), ("每分钟", "* * * * *"),
+            })
+            {
+                var chip = new Button
+                {
+                    Content = label, FontSize = 11, Tag = cron,
+                    Padding = new Avalonia.Thickness(10, 0), MinHeight = 24,
+                    Background = Br("FillPrimary", "#1AFFFFFF"),
+                    BorderBrush = Br("Hairline", "#14FFFFFF"),
+                    BorderThickness = new Avalonia.Thickness(1),
+                    Foreground = txtSec,
+                };
+                chip.Click += (_, _) => { if (TbTaskCron is not null) { TbTaskCron.Text = cron; } };
+                presets.Children.Add(chip);
+            }
+            add.Children.Add(presets);
+
+            var bottom = new Grid { ColumnDefinitions = new Avalonia.Controls.ColumnDefinitions("*,Auto") };
+            var tip = new TextBlock
+            {
+                Text = "到点会写进终端与 switchperf.log；远端档执行前会自动把该档的隧道拉起来。",
+                FontSize = 11, Foreground = txtTer,
                 TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-            });
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            };
+            var btnAdd = new Button
+            {
+                Content = "添加任务", FontSize = 12, Padding = new Avalonia.Thickness(18, 0), MinHeight = 28,
+                Background = accent,
+                Foreground = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Colors.White),
+                FontWeight = Avalonia.Media.FontWeight.SemiBold,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            };
+            btnAdd.Click += OnAddTask;
+            Avalonia.Controls.Grid.SetColumn(tip, 0);
+            Avalonia.Controls.Grid.SetColumn(btnAdd, 1);
+            bottom.Children.Add(tip);
+            bottom.Children.Add(btnAdd);
+            add.Children.Add(bottom);
             addCard.Child = add;
             TasksPanel.Children.Add(addCard);
 
-            // 列表
+            // ---- 任务列表 ----
             if (ServersCfg.Tasks.Count == 0)
             {
-                TasksPanel.Children.Add(new TextBlock
+                var empty = Card();
+                empty.Child = new TextBlock
                 {
-                    Text = "还没有计划任务。",
-                    FontSize = 13,
-                    Margin = new Avalonia.Thickness(2, 6, 0, 0),
-                    Foreground = (IBrush?)this.FindResource("TextSecondary") ?? Brushes.Gray,
-                });
+                    Text = "还没有任务。上面选一台服务器、一个动作，再点「添加任务」——比如「每天 04:00 重启」。",
+                    FontSize = 12, Foreground = txtSec,
+                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                };
+                TasksPanel.Children.Add(empty);
+                return;
             }
+
             foreach (var t in ServersCfg.Tasks.ToList())
             {
                 var p = ServersCfg.Servers.FirstOrDefault(x => x.Id == t.ProfileId);
-                var card = new Border
+                var card = Card();
+                card.Margin = new Avalonia.Thickness(0, 0, 0, 8);
+                var g = new Grid { ColumnDefinitions = new Avalonia.Controls.ColumnDefinitions("Auto,*,Auto,Auto,Auto,Auto") };
+
+                // 动作胶囊
+                var kindColor = t.Kind switch { "start" => green, "stop" => amber, "restart" => accent, _ => txtSec };
+                var pill = new Border
                 {
-                    Background = (IBrush?)this.FindResource("MatPanel") ?? Brushes.Transparent,
-                    BorderBrush = (IBrush?)this.FindResource("Hairline") ?? Brushes.Transparent,
-                    BorderThickness = new Avalonia.Thickness(1),
-                    CornerRadius = new Avalonia.CornerRadius(10),
-                    Padding = new Avalonia.Thickness(14, 11),
-                    Margin = new Avalonia.Thickness(0, 0, 0, 8),
+                    Background = Br("FillPrimary", "#1AFFFFFF"),
+                    CornerRadius = new Avalonia.CornerRadius(6),
+                    Padding = new Avalonia.Thickness(8, 2),
+                    Margin = new Avalonia.Thickness(0, 0, 12, 0),
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    Child = new TextBlock { Text = t.KindText, FontSize = 11, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = kindColor },
                 };
-                var g = new Grid { ColumnDefinitions = new Avalonia.Controls.ColumnDefinitions("*,Auto,Auto,Auto") };
-                var info = new StackPanel { Spacing = 3 };
+                Avalonia.Controls.Grid.SetColumn(pill, 0);
+                g.Children.Add(pill);
+
+                // 名称 + 元信息
+                var info = new StackPanel { Spacing = 3, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
                 info.Children.Add(new TextBlock
                 {
-                    Text = $"{t.Summary} · {(p?.Name ?? "档已不存在")}",
-                    FontSize = 13,
-                    FontWeight = Avalonia.Media.FontWeight.SemiBold,
+                    Text = p is null ? $"{t.Summary}（档已不存在）" : (t.Kind == "command" ? $"向「{p.Name}」发送 {t.Command}" : $"{t.KindText}「{p.Name}」"),
+                    FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = txtPri,
                 });
-                info.Children.Add(new TextBlock
+                string last = t.LastRunAt.Length > 0 ? $"上次 {t.LastRunAt} · {t.LastResult}" : "还没运行过";
+                var meta = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 10 };
+                meta.Children.Add(new TextBlock { Text = t.CronText, FontSize = 11, Foreground = txtSec });
+                meta.Children.Add(new TextBlock
                 {
-                    Text = $"{t.CronText}   ·   上次：{(t.LastRunAt.Length > 0 ? t.LastRunAt + " " + t.LastResult : "还没跑过")}",
-                    FontSize = 11,
-                    Foreground = (IBrush?)this.FindResource("TextSecondary") ?? Brushes.Gray,
+                    Text = last, FontSize = 11,
+                    Foreground = t.LastResult.StartsWith("失败") ? red : (t.LastResult.StartsWith("跳过") ? amber : txtTer),
                 });
-                Avalonia.Controls.Grid.SetColumn(info, 0);
+                info.Children.Add(meta);
+                Avalonia.Controls.Grid.SetColumn(info, 1);
                 g.Children.Add(info);
 
-                var btnNow = new Button { Content = "立即执行", FontSize = 11, Tag = t.Id, Margin = new Avalonia.Thickness(0, 0, 8, 0) };
+                // 下次运行
+                string next = t.Enabled ? t.NextRunText(DateTime.Now) : "";
+                var nextTb = new TextBlock
+                {
+                    Text = t.Enabled ? (next.Length > 0 ? "下次 " + next : "—") : "已停用",
+                    FontSize = 11, Foreground = txtTer,
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    Margin = new Avalonia.Thickness(0, 0, 14, 0),
+                };
+                Avalonia.Controls.Grid.SetColumn(nextTb, 2);
+                g.Children.Add(nextTb);
+
+                // 启用开关
+                var chk = new CheckBox
+                {
+                    IsChecked = t.Enabled, Tag = t.Id, Content = "启用", FontSize = 11,
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    Margin = new Avalonia.Thickness(0, 0, 12, 0),
+                    Foreground = txtSec,
+                };
+                chk.Click += OnToggleTaskEnabled;
+                Avalonia.Controls.Grid.SetColumn(chk, 3);
+                g.Children.Add(chk);
+
+                var btnNow = new Button { Content = "立即执行", FontSize = 11, Tag = t.Id, MinHeight = 24, Padding = new Avalonia.Thickness(10, 0), Margin = new Avalonia.Thickness(0, 0, 8, 0) };
                 btnNow.Click += OnRunTaskNow;
-                Avalonia.Controls.Grid.SetColumn(btnNow, 1);
+                Avalonia.Controls.Grid.SetColumn(btnNow, 4);
                 g.Children.Add(btnNow);
 
-                var btnDel = new Button { Content = "删除", FontSize = 11, Tag = t.Id };
+                var btnDel = new Button
+                {
+                    Content = "删除", FontSize = 11, Tag = t.Id, MinHeight = 24, Padding = new Avalonia.Thickness(10, 0),
+                    Foreground = red,
+                };
                 btnDel.Click += OnDeleteTask;
-                Avalonia.Controls.Grid.SetColumn(btnDel, 2);
+                Avalonia.Controls.Grid.SetColumn(btnDel, 5);
                 g.Children.Add(btnDel);
 
                 card.Child = g;
@@ -4990,6 +5121,16 @@ public partial class MainWindow : Window
         catch (Exception ex) { ERR("计划任务页打开失败: " + ex.Message); }
     }
 
+    private void OnToggleTaskEnabled(object? sender, RoutedEventArgs e)
+    {
+        if ((sender as Avalonia.Controls.Control)?.Tag is not string id) { return; }
+        var t = ServersCfg.Tasks.FirstOrDefault(x => x.Id == id);
+        if (t is null) { return; }
+        t.Enabled = (sender as CheckBox)?.IsChecked == true;
+        SaveConn();
+        ERR($"计划任务「{t.Summary}」已{(t.Enabled ? "启用" : "停用")}");
+        OnShowTasks(null, new RoutedEventArgs());
+    }
     private void OnShowConn(object? sender, RoutedEventArgs e)
     {
         // ★ 先切页面再填内容：填充过程万一抛异常，页面本身仍然打得开（错误由下面的 catch 报到控制台）。
