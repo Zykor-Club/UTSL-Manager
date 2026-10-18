@@ -175,7 +175,9 @@ public sealed class MapTemplatesPlugin : IManagerPlugin, IMapContributionPlugin
             int sx = sel.X, sy = sel.Y;
             var r = await Task.Run(() =>
             {
-                string? worldPath = ResolveWorldFile(ctx, worldRel);
+                // ★ 优先用宿主解析好的本地绝对路径（服务器世界=缓存/下载副本；外部导入=暂存区），
+                //   插件不再自己拼路径，避免再出现"少一层 lib/Saves/Worlds"这类问题。
+                string? worldPath = host.CurrentWorldLocalPath ?? ResolveWorldFile(ctx, worldRel);
                 if (worldPath is null) { return (Ok: false, Msg: "找不到世界文件 " + worldRel); }
 
                 (World? world, string err) = WorldMapRenderer.LoadWorld(worldPath);

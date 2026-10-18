@@ -512,6 +512,8 @@
              否则会被挤出可视区。v4 的插件贡献点也把控件追加到这个面板里（MapPluginBar 就是它本身）。 -->
         <WrapPanel Grid.Row="1" x:Name="MapPluginBar" Orientation="Horizontal" Margin="0,0,0,10">
           <ComboBox x:Name="MapPicker" FontSize="13" Width="170" Margin="0,0,6,6" SelectionChanged="OnMapPickChanged"/>
+          <Button Content="导入世界…" FontSize="13" Padding="10,5" CornerRadius="6" Margin="0,0,6,6" Click="OnImportWorld"
+                  ToolTip.Tip="从任意位置导入 .wld 来框选模板（只存到管理器暂存区，不写入服务器世界目录）"/>
           <Button Content="适应" FontSize="13" Padding="10,5" CornerRadius="6" Margin="0,0,6,6" Click="OnMapFit"/>
           <Button Content="1:1" FontSize="13" Padding="10,5" CornerRadius="6" Margin="0,0,6,6" Click="OnMapActual"/>
           <Button Content="−" FontSize="13" Width="32" Padding="0,5" CornerRadius="6" Margin="0,0,6,6" Click="OnMapZoomOut"/>

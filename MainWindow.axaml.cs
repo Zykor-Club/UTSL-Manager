@@ -6046,6 +6046,19 @@ public partial class MainWindow : Window
         List<string> items = await Task.Run(() =>
         {
             var list = new List<string> { "全部（拼接图）" };
+            // ★ 外部导入的世界排在最前（管理器暂存区，不属于服务器世界目录）：
+            //   一是更好找，二是列表末尾的项在下拉弹出层里未必被渲染（UIA 取不到，用户也要滚动）
+            try
+            {
+                var imp = Directory.Exists(ImportedDir) ? Directory.GetFiles(ImportedDir, "*.wld") : [];
+                Program.Log($"MAP imported-scan dir={ImportedDir} files={imp.Length}");
+                foreach (var f in imp.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                {
+                    string nm = ExternMarker + Path.GetFileNameWithoutExtension(f);
+                    if (!list.Contains(nm, StringComparer.OrdinalIgnoreCase)) { list.Add(nm); }
+                }
+            }
+            catch (Exception ex) { Program.Log("MAP imported-scan-error " + ex.Message); }
             void Add(string s) { if (s.Length > 0 && !list.Contains(s, StringComparer.OrdinalIgnoreCase)) { list.Add(s); } }
             foreach (var n in ServerWorldNames(nameSnap)) { Add(n); }
             foreach (var n in WorldFilesIn(""))
@@ -6054,6 +6067,7 @@ public partial class MainWindow : Window
                 Add(n.StartsWith("尘歌壶_", StringComparison.Ordinal) ? VirtualMarker + n : n);
             }
             // ★ 世界基线模板目录很少变动：缓存 5 分钟，省掉每次重建下拉的一趟往返（远端 ~200ms）
+
             AddTemplates();
             void AddTemplates()
             {
@@ -6208,6 +6222,8 @@ public partial class MainWindow : Window
                 w.mapPluginButtons.RemoveAll(x => ReferenceEquals(x.Btn, btn));
             });
         }
+
+        public string? CurrentWorldLocalPath => w.lastWorldLocalPath;
 
         public Action AddToolbarControl(Control control)
         {
@@ -6411,6 +6427,45 @@ public partial class MainWindow : Window
         return null;
     }
 
+    /// <summary>从外部导入一个 .wld 到管理器暂存区（不写入服务器世界目录），然后在地图页选中它。</summary>
+    private async void OnImportWorld(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var types = new List<Avalonia.Platform.Storage.FilePickerFileType>
+            {
+                new("Terraria 世界文件") { Patterns = ["*.wld"] },
+            };
+            var files = await StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+            {
+                Title = "导入世界文件（.wld）",
+                AllowMultiple = false,
+                FileTypeFilter = types,
+            });
+            if (files.Count == 0) { return; }
+            string? src = (files[0] as Avalonia.Platform.Storage.IStorageFile)?.Path.LocalPath ?? files[0].Path.LocalPath;
+            if (src is null || !File.Exists(src)) { ERR("选中的不是本地文件"); return; }
+            if (!src.EndsWith(".wld", StringComparison.OrdinalIgnoreCase)) { ERR("只支持 .wld 世界文件"); return; }
+
+            Directory.CreateDirectory(ImportedDir);
+            string dest = Path.Combine(ImportedDir, Path.GetFileName(src));
+            File.Copy(src, dest, overwrite: true);
+            long size = new FileInfo(dest).Length;
+            Program.Log($"MAP import {Path.GetFileName(src)} → {dest} size={size}");
+
+            await RefreshMapPickerAsync();
+            string key = ExternMarker + Path.GetFileNameWithoutExtension(dest);
+            var items = MapPicker?.ItemsSource as IEnumerable<string>;
+            if (items is not null && MapPicker is not null)
+            {
+                int idx = items.ToList().IndexOf(key);
+                if (idx >= 0) { MapPicker.SelectedIndex = idx; }
+            }
+            ERR($"已导入外部世界：{Path.GetFileName(src)}（{(size / 1048576.0):F1} MB）→ 暂存区，未写入服务器世界目录");
+        }
+        catch (Exception ex) { ERR("导入世界失败: " + ex.Message); }
+    }
+
     private async void OnMapPickChanged(object? sender, SelectionChangedEventArgs e)
     {
         await LoadMap();
@@ -6438,6 +6493,7 @@ public partial class MainWindow : Window
             string relThisLoad = stitch ? ""
                 : pick.StartsWith(VirtualMarker, StringComparison.Ordinal) ? pick[VirtualMarker.Length..] + ".wld"
                 : pick.StartsWith(BaselineMarker, StringComparison.Ordinal) ? Path.Combine("_vwc_templates", pick[BaselineMarker.Length..] + ".wld")
+                : pick.StartsWith(ExternMarker, StringComparison.Ordinal) ? pick[ExternMarker.Length..] + ".wld"
                 : pick + ".wld";
 
             mapLoadSeq++;                       // 新一轮加载：上一轮遗留的预览全部作废
@@ -6532,8 +6588,20 @@ public partial class MainWindow : Window
                 // ---- 单个世界（服务端世界 / 假世界 / 世界基线）----
                 string rel = relThisLoad;
                 ShowMapProgress(true, 0.05);
-                string? path = ResolveWorldFile(rel, MapStatus);
+                string? path;
+                if (pick.StartsWith(ExternMarker, StringComparison.Ordinal))
+                {
+                    // 外部导入：直接读暂存区（不碰服务器世界目录，也不走下载缓存）
+                    string ext = Path.Combine(ImportedDir, rel);
+                    path = File.Exists(ext) ? ext : null;
+                    MapStatus(Path.GetFileName(rel) + "：外部导入");
+                }
+                else
+                {
+                    path = ResolveWorldFile(rel, MapStatus);
+                }
                 if (path is null) { return (Bmp: (SKBitmap?)null, Error: "找不到文件 " + rel, Stats: (MapRenderStats?)null); }
+                lastWorldLocalPath = path;      // 插件导出模板时读它
 
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 // 单世界实测：载入约 68%、渲染约 32% —— 按 0.6/0.4 合成，让进度条在载入阶段也在动
@@ -6659,6 +6727,11 @@ public partial class MainWindow : Window
 
     private string mapInfoHead = "";      // 状态行头部（文件名 + 统计），与缩放/选区分开拼
     private string lastWorldRel = "";      // 最近渲染的世界文件（相对 Worlds 目录），导出模板要用；拼接图为空
+    private string? lastWorldLocalPath;     // 最近渲染世界的本地绝对路径（插件导出模板用它读文件）
+    private const string ExternMarker = "外部：";   // 世界下拉里"外部导入"条目的前缀
+
+    /// <summary>外部导入世界的暂存区（按档分开；**绝不写进服务器的世界目录**）。</summary>
+    private string ImportedDir => Path.Combine(AppContext.BaseDirectory, "imported-worlds", ActiveSrv.Id);
 
     // ===== 地图查看增强（A1~A5）=====
     private int mapSpawnX = -1, mapSpawnY = -1;         // 当前图的出生点（拼接图为 -1）

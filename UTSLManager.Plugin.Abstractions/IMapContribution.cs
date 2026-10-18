@@ -58,6 +58,14 @@ public interface IMapContributionHost
     /// <summary>当前选区（图格坐标）；没有选区时为 null。</summary>
     MapSelection? CurrentSelection { get; }
 
+    /// <summary>
+    /// 当前世界的**本地可读绝对路径**（宿主已经解析好：服务器世界=本地缓存/下载副本；
+    /// 外部导入的世界=管理器暂存区）。
+    /// ★ 插件不要再自己拼路径 —— 之前按 FilesRoot + 相对名拼，少了一层 lib/Saves/Worlds，
+    ///   导致本机和远端都"找不到世界文件"。非世界视图（拼接图/模板预览）为 null。
+    /// </summary>
+    string? CurrentWorldLocalPath { get; }
+
     /// <summary>视图或选区变化时触发（在 UI 线程）。用它来刷新按钮 enabled 状态或自己的显示。</summary>
     event Action? Changed;
 
