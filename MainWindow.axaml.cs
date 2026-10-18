@@ -2572,9 +2572,10 @@ public partial class MainWindow : Window
     private static double CanvasH(Canvas c) => !double.IsNaN(c.Height) && c.Height > 0 ? c.Height : c.Bounds.Height;
 
     /// <summary>Y 轴标签：带单位、短数字（避免 18823250 这种把轴挤爆的值）。</summary>
-    private static string FmtAxis(double v, string kind)
+    private static string FmtAxis(double v, string kind, double scale = 0)
     {
-        if (kind == "cpu") { return v.ToString("F0") + "%"; }
+        // ★ 轴刻度小时必须留一位小数：scale=2、5 等分时 F0 会把 1.6% 和 2.0% 都舍成 "2%"，轴上出现两个 2%
+        if (kind == "cpu") { return v.ToString(scale > 0 && scale < 10 ? "F1" : "F0") + "%"; }
         if (kind == "mem") { return v.ToString(v >= 10 ? "F1" : "F2") + " GB"; }
         // net：≥1 MB/s 用 MB/s，否则 KB/s
         if (v >= 1024) { double mb = v / 1024.0; return mb.ToString(mb >= 10 ? "F0" : "F1") + " MB/s"; }
@@ -2635,7 +2636,7 @@ public partial class MainWindow : Window
                     Stroke = gridBrush,
                     StrokeThickness = 1,
                 });
-                var lab = new TextBlock { Text = FmtAxis(v, kind), FontSize = 9, Foreground = axisBrush };
+                var lab = new TextBlock { Text = FmtAxis(v, kind, scale), FontSize = 9, Foreground = axisBrush };
                 lab.Measure(Avalonia.Size.Infinity);
                 Canvas.SetLeft(lab, 52 - 7 - lab.DesiredSize.Width);      // 右对齐，与图表留 7px 间隙
                 Canvas.SetTop(lab, y - lab.DesiredSize.Height / 2);       // ★ 垂直居中在参考线上
@@ -2650,22 +2651,30 @@ public partial class MainWindow : Window
             var pts = new List<Avalonia.Point>();
             for (int i = 0; i < s.Count; i++) { pts.Add(new Avalonia.Point(XFor(i, w), YFor(s[i], scale, h))); }
             var brush = new SolidColorBrush(Color.Parse(colors[si]));
-            // ★ L3：常驻值不填充 —— 内存这种"一条直线"填到 0 就是一块实心方块（比折线噪声还大）；只有波动的序列才给 10% 淡面积
-            double mn = double.MaxValue, mx = 0;
-            foreach (var v in s) { if (v < mn) { mn = v; } if (v > mx) { mx = v; } }
-            bool flatLine = mx <= 0.0001 || (mx - mn) / mx < 0.05;
-            if (!flatLine)
-            {
-                var areaPts = new List<Avalonia.Point>(pts) { new(pts[^1].X, PlotBottom(h)), new(pts[0].X, PlotBottom(h)) };
-                canvas.Children.Add(new Avalonia.Controls.Shapes.Polygon { Points = areaPts, Fill = new SolidColorBrush(Color.Parse(colors[si]), 0.10) });
-            }
+            // ★ 三张图统一"纯折线 + 末端当前值圆点"，**不做面积填充**。
+            //   曾经按"有波动才填 10%"处理 → 内存是一条裸线、网络却有一大块暗红（两条线各填 10% 叠出来的），
+            //   三张图观感不一致比"少一个填充"更伤质感。Apple 的图表就是一条线 + 末端一点。
             canvas.Children.Add(new Avalonia.Controls.Shapes.Polyline
             {
                 Points = pts,
                 Stroke = brush,
                 StrokeThickness = 2,
                 StrokeJoin = Avalonia.Media.PenLineJoin.Round,
+                StrokeLineCap = Avalonia.Media.PenLineCap.Round,
             });
+            // 末端圆点：标出"当前值"，也让最后一段线不至于看起来断在半空
+            var tail = pts[^1];
+            var dot = new Avalonia.Controls.Shapes.Ellipse
+            {
+                Width = 7,
+                Height = 7,
+                Fill = brush,
+                Stroke = new SolidColorBrush(Color.Parse("#1A1A1C")),
+                StrokeThickness = 1.5,
+            };
+            Canvas.SetLeft(dot, tail.X - 3.5);
+            Canvas.SetTop(dot, tail.Y - 3.5);
+            canvas.Children.Add(dot);
         }
 
         // X 轴时间标签：★ 必须与**实际画出来的样本**同一套索引 ——
