@@ -6079,9 +6079,23 @@ public partial class MainWindow : Window
     ///   1) **先比大小，缓存一致就不下载** —— 否则每次开地图都把 24~72 MB 重拉一遍（按 1.3 MB/s 要几十秒）；
     ///   2) 下载时把进度/状态报出来 —— 原来不传 progress，进度条一直停在 0，看着像卡死。
     /// </summary>
+    /// <summary>缓存文件是否可用：存在且不是空/半截（&lt; 1KB 的 .wld 一定是坏的）。
+    /// ★ 原来只比"大小是否等于远端"，远端大小取不到时（remoteSize==0）会把 0 字节缓存当有效，
+    ///   结果交给解析器 → 报"世界尺寸非法 0×0"，看不出是坏文件还是坏路径。</summary>
+    private static bool CacheUsable(string path)
+    {
+        try
+        {
+            var fi = new FileInfo(path);
+            return fi.Exists && fi.Length >= 1024;
+        }
+        catch { return false; }
+    }
+
     private static string? ResolveWorldFile(string rel, Action<string>? status = null)
     {
         string full = Path.Combine(WorldsDir, rel);
+        Program.Log($"MAP resolve rel={rel} full={full} remote={Env.IsRemote} root={Env.FileRoot}");
         if (!Env.IsRemote) { return File.Exists(full) ? full : null; }
         string cache = Path.Combine(WorldCacheDir, rel.Replace('\\', '_').Replace('/', '_'));
         try
@@ -6115,10 +6129,17 @@ public partial class MainWindow : Window
                 bool timeOk = remoteMtime == default || Math.Abs((ci.LastWriteTimeUtc - remoteMtime.ToUniversalTime()).TotalSeconds) < 2;
                 cacheFresh = sizeOk && timeOk;
             }
-            if (cacheFresh)
+            if (cacheFresh && CacheUsable(cache))
             {
                 status?.Invoke(Path.GetFileName(rel) + "：本地缓存已是最新，跳过下载");
+                Program.Log($"MAP cache-hit {cache} size={new FileInfo(cache).Length}");
                 return cache;
+            }
+            if (cacheFresh)
+            {
+                Program.Log($"MAP cache-corrupt {cache} size={(File.Exists(cache) ? new FileInfo(cache).Length : -1)} remoteSize={remoteSize} → 删除重下");
+                try { File.Delete(cache); } catch { }
+                cacheFresh = false;
             }
             if (File.Exists(cache) && forceWorldReload) { status?.Invoke(Path.GetFileName(rel) + "：强制重新下载（忽略缓存）"); }
             status?.Invoke(Path.GetFileName(rel) + "：正在从远端下载" + (remoteSize > 0 ? "（" + (remoteSize / 1048576.0).ToString("F1") + " MB）" : "") + "…");
@@ -6129,9 +6150,18 @@ public partial class MainWindow : Window
                 {
                     try { File.SetLastWriteTimeUtc(cache, remoteMtime.ToUniversalTime()); } catch { }
                 }
+                long got = File.Exists(cache) ? new FileInfo(cache).Length : -1;
+                Program.Log($"MAP downloaded {cache} size={got} remoteSize={remoteSize}");
+                if (!CacheUsable(cache))
+                {
+                    status?.Invoke(Path.GetFileName(rel) + "：下载结果不可用（" + got + " 字节），已删除缓存");
+                    Program.Log($"MAP download-bad {cache} size={got}");
+                    try { File.Delete(cache); } catch { }
+                    return null;
+                }
                 return cache; }
         }
-        catch { }
+        catch (Exception ex) { Program.Log("MAP resolve-error " + ex.Message); }
         return null;
     }
 

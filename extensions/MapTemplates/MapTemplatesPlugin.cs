@@ -42,6 +42,9 @@ public sealed class MapTemplatesPlugin : IManagerPlugin, IMapContributionPlugin
 
     public void ContributeMap(IMapContributionHost host)
     {
+        // ★ 幂等：宿主每次进地图页/切档都会调一次，重复调用会把「框选/导出模板/浏览区块模板」
+        //   再追加一套（实测界面上出现两排一样的控件）。
+        if (_selBtn is not null) { return; }
         _host = host;
         IManagerContext? ctx = _ctx;
         if (ctx is null) { return; }
