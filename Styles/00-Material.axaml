@@ -1,0 +1,92 @@
+<!--
+  L0 · 材质（Material）
+  ────────────────────────────────────────────────────────────────────────────
+  目标：从"开发者工具的不透明蓝灰块"转向 macOS 的"分层材质"。
+
+  做法（不引入新依赖）：用**分层半透明 + 低对比渐变**模拟 vibrancy——
+    · 窗口底：极轻的上下渐变（#26262A → #1A1A1C），代替原来的实色 #0C0E12
+    · 面板  ：比窗口底亮一档、95% 不透明 → 会吃到窗口那点渐变，形成"浮在窗口上的面"
+    · 凹槽  ：20% 黑（日志/列表这类"凹陷"区域）
+    · 控件块：10% / 8% / 5% 白（macOS 的填充层级）
+    · 线    ：一律 alpha 白 hairline（8% / 5%），**不用实色灰** —— 实色灰叠在材质上会失效
+
+  为什么不真做模糊：真毛玻璃需要 Fluid.Avalonia.Acrylic 的 AcrylicSurface，并且要把内容
+  **包进一个新控件**（对 MainWindow.axaml 是结构性改动）。按"L0 先看效果、改动压到最小"的约定，
+  这一版先做分层材质；真要模糊，下一层再单独评审。
+
+  令牌来源：UTSL-UI-优化建议.md §3（macOS 深色令牌 / 阴影三段）。
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <Styles.Resources>
+    <!-- ===== 三级背景（材质）===== -->
+    <LinearGradientBrush x:Key="MatWindow" StartPoint="0%,0%" EndPoint="0%,100%">
+      <GradientStop Offset="0" Color="#26262A" />
+      <GradientStop Offset="1" Color="#1A1A1C" />
+    </LinearGradientBrush>
+
+    <!-- 面板：95% 不透明，让窗口那点渐变透上来（这就是"材质"的来源） -->
+    <SolidColorBrush x:Key="MatPanel" Color="#F22C2C2E" />
+    <!-- 侧栏 / 次一级面板：比 MatPanel 略深一点，靠近窗口色 -->
+    <SolidColorBrush x:Key="MatSidebar" Color="#E628282B" />
+    <!-- 浮层 / 菜单 / 悬停块：比面板再高一档（必须不透明，透明窗口下弹层会发黑） -->
+    <SolidColorBrush x:Key="MatRaised" Color="#FF3A3A3C" />
+    <!-- 凹槽：日志、列表这类"凹陷"区域 -->
+    <SolidColorBrush x:Key="MatWell" Color="#33000000" />
+
+    <!-- ===== 填充层级（白 @ 10 / 8 / 5 / 3%）===== -->
+    <SolidColorBrush x:Key="FillPrimary" Color="#1AFFFFFF" />
+    <SolidColorBrush x:Key="FillSecondary" Color="#14FFFFFF" />
+    <SolidColorBrush x:Key="FillTertiary" Color="#0DFFFFFF" />
+    <SolidColorBrush x:Key="FillQuaternary" Color="#08FFFFFF" />
+
+    <!-- ===== 线（hairline 一律 alpha 白）===== -->
+    <SolidColorBrush x:Key="Hairline" Color="#14FFFFFF" />
+    <SolidColorBrush x:Key="HairlineSubtle" Color="#0DFFFFFF" />
+    <SolidColorBrush x:Key="HairlineGhost" Color="#08FFFFFF" />
+    <SolidColorBrush x:Key="ControlBorder" Color="#1FFFFFFF" />
+
+    <!-- ===== 文字（alpha 白；L2 换用，先在此定义好，避免 L0 出现"半套令牌"）===== -->
+    <SolidColorBrush x:Key="TextPrimary" Color="#D9FFFFFF" />
+    <SolidColorBrush x:Key="TextSecondary" Color="#8CFFFFFF" />
+    <SolidColorBrush x:Key="TextTertiary" Color="#40FFFFFF" />
+    <SolidColorBrush x:Key="TextQuaternary" Color="#1AFFFFFF" />
+  </Styles.Resources>
+
+  <!-- 窗口底：所有窗口（含对话框）统一材质 -->
+  <Style Selector="Window">
+    <Setter Property="Background" Value="{DynamicResource MatWindow}" />
+  </Style>
+
+  <!-- 浮层类：不透明 + 抬升阴影 + hairline（透明窗口下弹层不能透底） -->
+  <Style Selector="ToolTip">
+    <Setter Property="Background" Value="{DynamicResource MatRaised}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Hairline}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="Padding" Value="8,5" />
+  </Style>
+
+  <Style Selector="FlyoutPresenter">
+    <Setter Property="Background" Value="{DynamicResource MatRaised}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Hairline}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="10" />
+  </Style>
+
+  <Style Selector="ContextMenu">
+    <Setter Property="Background" Value="{DynamicResource MatRaised}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Hairline}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Padding" Value="4" />
+  </Style>
+
+  <Style Selector="MenuFlyoutPresenter">
+    <Setter Property="Background" Value="{DynamicResource MatRaised}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Hairline}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="CornerRadius" Value="8" />
+  </Style>
+</Styles>

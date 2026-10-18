@@ -10,6 +10,10 @@
     <mac:DevolutionsMacOsTheme />
     <mac:DevolutionsMacOsThemeGlobalStyles />
 
+    <!-- ===== 界面整改：L0 材质 / L1 面与线（新增文件，不动业务代码）===== -->
+    <StyleInclude Source="avares://UTSLManager/Styles/00-Material.axaml" />
+    <StyleInclude Source="avares://UTSLManager/Styles/10-Surfaces.axaml" />
+
     <!-- ★ P0 全局字体链：此前【没有指定中文字体】→ 中文吃系统默认（微软雅黑，笔画偏重、层次差）。
          优先 Noto Sans SC（开源 OFL，本机已装），没装的机器依次降级，最后回退系统 UI 字体。
          注意：图标按钮用的是 Segoe MDL2 Assets 且已显式写死 FontFamily → 不受影响。 -->

@@ -3,7 +3,7 @@
         xmlns:maps="using:UTSLManager.Maps"
         x:Class="UTSLManager.MainWindow"
         Title="UTSLManager" Width="900" Height="620" MinWidth="760" MinHeight="480" WindowStartupLocation="CenterScreen" WindowState="Maximized"
-        Background="#0C0E12"
+        Background="{DynamicResource MatWindow}"
         ExtendClientAreaToDecorationsHint="True"
         ExtendClientAreaTitleBarHeightHint="40">
   <Window.Styles>
@@ -18,10 +18,10 @@
     </Style>
     <!-- ★ P2：导航按钮的 hover / pressed 反馈（原来只有"选中"态有反馈，鼠标划过毫无变化 → 不像可点） -->
     <Style Selector="Button.menu:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="#1E232B"/>
+      <Setter Property="Background" Value="{DynamicResource FillTertiary}"/>
     </Style>
     <Style Selector="Button.menu:pressed /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="#252B34"/>
+      <Setter Property="Background" Value="{DynamicResource FillPrimary}"/>
     </Style>
     <!-- ★ 当前视图高亮 #66CCFF（用户指定）；圆角必须同时设到模板内的 ContentPresenter 上 -->
     <Style Selector="Button.menu /template/ ContentPresenter#PART_ContentPresenter">
@@ -40,11 +40,11 @@
     </Style>
     <!-- ★ 多服务器：卡片样式（用 Classes 而不是直接绑 Background，:pointerover 才覆盖得动） -->
     <Style Selector="Border.srvcard">
-      <Setter Property="Background" Value="#171A20"/>
-      <Setter Property="BorderBrush" Value="#242A33"/>
+      <Setter Property="Background" Value="{DynamicResource MatPanel}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource Hairline}"/>
     </Style>
     <Style Selector="Border.srvcard:pointerover">
-      <Setter Property="Background" Value="#1E232B"/>
+      <Setter Property="Background" Value="{DynamicResource FillTertiary}"/>
     </Style>
     <Style Selector="Border.srvcard TextBlock.srvname">
       <Setter Property="Foreground" Value="#D9D9DE"/>
@@ -64,11 +64,11 @@
     </Style>
     <!-- 激活档：琥珀色描边 + 更亮的名字（与右侧导航的蓝色高亮区分开，避免两个"当前"打架） -->
     <Style Selector="Border.srvcard.active">
-      <Setter Property="Background" Value="#1B2430"/>
+      <Setter Property="Background" Value="{DynamicResource FillSecondary}"/>
       <Setter Property="BorderBrush" Value="#66CCFF"/>
     </Style>
     <Style Selector="Border.srvcard.active:pointerover">
-      <Setter Property="Background" Value="#213041"/>
+      <Setter Property="Background" Value="{DynamicResource FillPrimary}"/>
     </Style>
     <Style Selector="Border.srvcard.active TextBlock.srvname">
       <Setter Property="Foreground" Value="#F2F2F5"/>
@@ -93,7 +93,7 @@
       </Border>
 
       <!-- 左侧栏：服务器卡片（一台一张）+ 当前服务器的世界列表 -->
-      <Border Grid.Row="1" Grid.Column="0" Background="#16161A" Padding="10,8,10,10">
+      <Border Grid.Row="1" Grid.Column="0" Background="{DynamicResource MatSidebar}" Padding="10,8,10,10">
         <DockPanel>
           <StackPanel DockPanel.Dock="Top" Margin="8,0,8,10">
             <TextBlock Text="UTSLManager" FontSize="14" FontWeight="SemiBold" Foreground="#F2F2F5"/>
@@ -173,7 +173,7 @@
 
         <!-- 监控卡片 -->
         <Grid Grid.Row="2" ColumnDefinitions="*,*,*" Margin="0,0,0,12">
-          <Border Grid.Column="0" Background="#17171A" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" Padding="13,10" Margin="0,0,5,0">
+          <Border Classes="card" Grid.Column="0" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" Padding="13,10" Margin="0,0,5,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
                 <TextBlock Grid.Column="0" x:Name="CpuTitle" Text="CPU 使用量" FontSize="12" FontWeight="SemiBold" Foreground="#E8E8EC"/>
@@ -186,7 +186,7 @@
                 <Canvas x:Name="CpuXLabels" Height="14" Margin="52,4,0,0"/>
             </StackPanel>
           </Border>
-          <Border Grid.Column="1" Background="#17171A" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" Padding="13,10" Margin="5,0">
+          <Border Classes="card" Grid.Column="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" Padding="13,10" Margin="5,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
                 <TextBlock Grid.Column="0" x:Name="MemTitle" Text="内存使用量" FontSize="12" FontWeight="SemiBold" Foreground="#E8E8EC"/>
@@ -199,7 +199,7 @@
                 <Canvas x:Name="MemXLabels" Height="14" Margin="52,4,0,0"/>
             </StackPanel>
           </Border>
-          <Border Grid.Column="2" Background="#17171A" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" Padding="13,10" Margin="5,0,0,0">
+          <Border Classes="card" Grid.Column="2" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" Padding="13,10" Margin="5,0,0,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
                 <TextBlock Grid.Column="0" x:Name="NetTitle" Text="网络流量" FontSize="12" FontWeight="SemiBold" Foreground="#E8E8EC"/>
@@ -215,7 +215,7 @@
         </Grid>
 
         <!-- ★ 服务器终端（指令输出 + 服务器日志 合并，类 MCSManager 终端面板） -->
-        <Border Grid.Row="3" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" Margin="0,0,0,10" ClipToBounds="True">
+        <Border Classes="card" Grid.Row="3" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" Margin="0,0,0,10" ClipToBounds="True">
           <DockPanel>
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="14,9,14,7">
               <TextBlock Grid.Column="0" x:Name="TermTitle" Text="服务器终端" FontSize="11" Foreground="#9BA3AE"/>
@@ -227,7 +227,7 @@
                 <Button x:Name="BtnClearTerm" Content="清屏" FontSize="11" Padding="8,1" CornerRadius="6" Click="OnClearTerm"/>
               </StackPanel>
             </Grid>
-            <Border DockPanel.Dock="Bottom" BorderBrush="#242A33" BorderThickness="0,1,0,0" Padding="12,9,12,11" Background="#101013">
+            <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource Hairline}" BorderThickness="0,1,0,0" Padding="12,9,12,11" Background="{DynamicResource MatWell}">
               <Grid ColumnDefinitions="Auto,*,Auto">
                 <TextBlock Grid.Column="0" x:Name="PromptText" Text="@ 全部世界" FontSize="12" FontWeight="SemiBold" Foreground="#0A84FF" VerticalAlignment="Center" Margin="0,0,9,0" FontFamily="Cascadia Mono,Consolas,monospace"/>
                 <TextBox Grid.Column="1" x:Name="CmdBox" Watermark="输入指令回车执行：@Dev /save · @2 /save · 不写前缀 = 全部世界 · 以 &gt; 开头 = 服务端控制台口径（输出显示在上方日志流）" FontSize="12" CornerRadius="8" FontFamily="Cascadia Mono,Consolas,monospace"/>
@@ -236,7 +236,7 @@
             </Border>
             <!-- ★ 自检修复（卡顿主因）：原来是 ScrollViewer + ItemsControl，Avalonia 的 ItemsControl 不虚拟化，
                  300~1500 个 TextBlock（且 TextWrapping=Wrap）会让任何布局变化都重新测量整个日志 —— 改成 ListBox（自带虚拟化）。 -->
-            <ListBox x:Name="TermLines" Padding="0,0,12,0" Background="#0E0E10" BorderThickness="0" CornerRadius="0"
+            <ListBox x:Name="TermLines" Padding="0,0,12,0" Background="{DynamicResource MatWell}" BorderThickness="0" CornerRadius="0"
                      ScrollViewer.AllowAutoHide="False" SelectionMode="Multiple" IsTabStop="False"
                      KeyDown="OnTermKeyDown">
               <ListBox.ContextMenu>
@@ -288,7 +288,7 @@
           <Button Content="✕ 取消传输" FontSize="12" Padding="10,5" CornerRadius="8" Click="OnFileCancelTransfer"/>
           <TextBlock x:Name="FilePathText" Text="—" FontSize="11" Foreground="#9BA3AE" VerticalAlignment="Center" Margin="10,0,0,0"/>
         </StackPanel>
-        <Border Grid.Row="2" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
+        <Border Grid.Row="2" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
           <DockPanel>
             <StackPanel DockPanel.Dock="Top">
               <TextBlock Text="点文件名可编辑；点文件夹进入；.dll 行可勾选启用/停用" FontSize="11" Foreground="#9BA3AE" Margin="36,10,36,8" TextWrapping="Wrap"/>
@@ -301,7 +301,7 @@
                 <TextBlock Grid.Column="3" Text="启用" FontSize="11" FontWeight="SemiBold" Foreground="#848D9A" HorizontalAlignment="Center"/>
                 <TextBlock Grid.Column="4" Text="操作（下载/删除）" FontSize="11" FontWeight="SemiBold" Foreground="#848D9A" HorizontalAlignment="Center"/>
               </Grid>
-              <Border Height="1" Background="#26262B" Margin="36,0,36,4"/>
+              <Border Height="1" Background="{DynamicResource Hairline}" Margin="36,0,36,4"/>
             </StackPanel>
             <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
               <StackPanel x:Name="PluginList" Margin="10,0,10,12" Spacing="2"/>
@@ -319,7 +319,7 @@
           </StackPanel>
           <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True" Padding="16,14">
+        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True" Padding="16,14">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,13,0">
             <ContentControl x:Name="ExtContent"/>
           </ScrollViewer>
@@ -346,7 +346,7 @@
           </ComboBox>
           <TextBlock x:Name="MgrPluginPath" Text="—" FontSize="11" Foreground="#9BA3AE" VerticalAlignment="Center" Margin="10,0,0,0"/>
         </StackPanel>
-        <Border Grid.Row="2" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
+        <Border Grid.Row="2" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
             <StackPanel x:Name="MgrPluginList" Margin="12,10,12,12" Spacing="2"/>
           </ScrollViewer>
@@ -362,17 +362,17 @@
           </StackPanel>
           <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
+        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
             <StackPanel Margin="18,16,18,18" Spacing="10">
               <TextBlock Text="&#xE72C;  整链重置" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="13.5" FontWeight="SemiBold" Foreground="#E8E8EC"/>
               <TextBlock Text="按启动器世界列表重新生成源地图，再切成 N 份替换所有世界。会覆盖现有世界文件 ✗ 过程中服务端会自动重启。" FontSize="11" Foreground="#9A9AA0" TextWrapping="Wrap"/>
               <Button Content="开始整链重置（需点两次确认）" FontSize="12" Padding="14,7" CornerRadius="8" HorizontalAlignment="Left" Click="OnResetClicked"/>
-              <Border Height="1" Background="#26262B" Margin="0,10"/>
+              <Border Height="1" Background="{DynamicResource Hairline}" Margin="0,10"/>
               <TextBlock Text="&#xE74E;  备份存档" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" FontSize="13.5" FontWeight="SemiBold" Foreground="#E8E8EC"/>
               <TextBlock Text="把 Worlds 与 config 打包成 zip 存到 utsl-deploy\backup。建议在重置/改配置前先备份。" FontSize="11" Foreground="#9A9AA0" TextWrapping="Wrap"/>
               <Button Content="立即备份" FontSize="12" Padding="14,7" CornerRadius="8" HorizontalAlignment="Left" Click="OnBackup"/>
-              <Border Height="1" Background="#26262B" Margin="0,10"/>
+              <Border Height="1" Background="{DynamicResource Hairline}" Margin="0,10"/>
               <TextBlock Text="♻  恢复存档" FontSize="13.5" FontWeight="SemiBold" Foreground="#E8E8EC"/>
               <TextBlock Text="从 backup 目录里最新的 zip 恢复 Worlds 与 config。会覆盖当前文件 ✗ 建议先停服 ✗ 需点两次确认。" FontSize="11" Foreground="#E3B341" TextWrapping="Wrap"/>
               <Button Content="从最近备份恢复（需点两次确认）" FontSize="12" Padding="14,7" CornerRadius="8" HorizontalAlignment="Left" Click="OnRestoreClicked"/>
@@ -412,7 +412,7 @@
           </StackPanel>
           <Button Grid.Column="1" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
+        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
             <StackPanel x:Name="ConnHostPanel" Margin="18,16,18,18" Spacing="8"/>
           </ScrollViewer>
@@ -429,7 +429,7 @@
           <Button Grid.Column="1" Content="刷新" FontSize="12" Padding="12,5" CornerRadius="8" Margin="0,0,8,0" Click="OnShowChain"/>
           <Button Grid.Column="2" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
+        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0" HorizontalScrollBarVisibility="Auto">
             <StackPanel x:Name="ChainHost" Margin="18,16,18,18" Spacing="16"/>
           </ScrollViewer>
@@ -446,7 +446,7 @@
           <Button Grid.Column="1" Content="保存并备份旧配置" FontSize="12" Padding="12,5" CornerRadius="8" Margin="0,0,8,0" Click="OnSaveConfig"/>
           <Button Grid.Column="2" Content="← 返回控制台" FontSize="12" Padding="12,5" CornerRadius="8" Click="OnBackToConsole"/>
         </Grid>
-        <Border Grid.Row="1" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
+        <Border Grid.Row="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True">
           <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0">
             <StackPanel x:Name="ConfigHost" Margin="16,14,16,18" Spacing="8"/>
           </ScrollViewer>
@@ -484,7 +484,7 @@
           <Button Content="导出整图" FontSize="12" Padding="10,5" CornerRadius="8" Margin="0,0,6,6" Click="OnMapExportFull"/>
         </WrapPanel>
         <Grid Grid.Row="2">
-        <Border x:Name="MapCard" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" ClipToBounds="True"
+        <Border x:Name="MapCard" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="12" ClipToBounds="True"
                 Cursor="Hand" PointerWheelChanged="OnMapWheel"
                 PointerPressed="OnMapPointerPressed" PointerMoved="OnMapPointerMoved"
                 PointerReleased="OnMapPointerReleased" DoubleTapped="OnMapDoubleTapped">
@@ -503,7 +503,7 @@
         </Grid>
         <!-- 卡片下方的加载进度条（渲染/解码时显示；浅蓝取管理器强调色 #66CCFF） -->
         <ProgressBar Grid.Row="3" x:Name="MapProgress" Minimum="0" Maximum="1" Height="4" Margin="2,10,2,0"
-                     Foreground="#66CCFF" Background="#1E1E24" IsVisible="False">
+                     Foreground="#66CCFF" Background="{DynamicResource FillSecondary}" IsVisible="False">
           <!-- 0.25s 过渡：进度值变化时是"滑过去"而不是"跳过去" -->
           <ProgressBar.Transitions>
             <Transitions>
@@ -516,18 +516,18 @@
       </Panel>
 
       <!-- ★ 右侧功能菜单（插件/地图等迁移到这里） -->
-      <Border Grid.Row="1" Grid.Column="2" Background="#16161A" Padding="12,10">
+      <Border Grid.Row="1" Grid.Column="2" Background="{DynamicResource MatSidebar}" Padding="12,10">
         <ScrollViewer ScrollViewer.AllowAutoHide="False" Padding="0,0,12,0" VerticalScrollBarVisibility="Auto">
         <StackPanel x:Name="MenuPanel" Spacing="6">
           <TextBlock Text="服务端" FontSize="11" FontWeight="SemiBold" Foreground="#9BA3AE" Margin="4,0,0,6"/>
-          <Border Background="#1C1C1F" BorderBrush="#2E2E33" BorderThickness="1" CornerRadius="8" Padding="10,7">
+          <Border Background="{DynamicResource FillPrimary}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" Padding="10,7">
             <StackPanel Orientation="Horizontal" Spacing="7">
               <Border x:Name="SrvDot" Width="7" Height="7" CornerRadius="3.5" Background="#6B6B70" VerticalAlignment="Center"/>
               <TextBlock x:Name="ConnState" Text="未运行" FontSize="11" Foreground="#9A9AA0" VerticalAlignment="Center"/>
             </StackPanel>
           </Border>
           <!-- ★ 连接健康三灯（移植 MCSManager 的显式连接状态思路）：隧道 / 命令通道 / REST 接口 -->
-          <Border Background="#1C1C1F" BorderBrush="#2E2E33" BorderThickness="1" CornerRadius="8" Padding="10,7" Margin="0,4,0,0" ToolTip.Tip="绿灯=正常；橙灯=降级/回退；灰灯=未启用">
+          <Border Background="{DynamicResource FillPrimary}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" Padding="10,7" Margin="0,4,0,0" ToolTip.Tip="绿灯=正常；橙灯=降级/回退；灰灯=未启用">
             <StackPanel Orientation="Horizontal" Spacing="12">
               <StackPanel Orientation="Horizontal" Spacing="5">
                 <Border x:Name="DotTunnel" Width="7" Height="7" CornerRadius="3.5" Background="#6B6B70" VerticalAlignment="Center"/>

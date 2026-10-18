@@ -1,0 +1,39 @@
+<!--
+  L1 · 面与线（Surfaces & Hairlines）
+  ────────────────────────────────────────────────────────────────────────────
+  规则（来自 UTSL-UI-优化建议.md §四 L1）：
+
+    · 内容卡片 / 图表卡 / 面板  → 不靠硬边框，靠 BgPanel 与 BgWindow 的色差；
+                                 可选 card 级极淡阴影（本文件 .card 类）
+    · 分隔线                    → #14FFFFFF（8% 白）1px hairline
+    · 交互控件（按钮/输入/下拉） → 要 1px hairline + 极淡阴影（bezel）
+
+  ★ hairline 一律 alpha 白，不用实色灰 —— 实色灰叠在材质上会失效，而且显得硬。
+  ★ 这里只放"全局、无选择器冲突"的规则；控件级 bezel 留给 L2/L3 一起做
+    （Devolutions 的 macOS 主题本身已给按钮画了 bezel，过早覆盖会丢它的明暗层级）。
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- 内容卡：极淡 hairline + card 级阴影（黑 10% / blur 4 / y2） -->
+  <Style Selector="Border.card">
+    <Setter Property="BorderBrush" Value="{DynamicResource HairlineGhost}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="BoxShadow" Value="0 2 4 0 #1A000000" />
+  </Style>
+
+  <!-- 分隔线：alpha 白 hairline -->
+  <Style Selector="Separator">
+    <Setter Property="Background" Value="{DynamicResource Hairline}" />
+  </Style>
+
+  <!-- 浮层里的分隔线也统一 -->
+  <Style Selector="MenuFlyoutPresenter Separator">
+    <Setter Property="Background" Value="{DynamicResource Hairline}" />
+  </Style>
+
+  <!-- 表格/列表容器：透明，让下层材质透上来（原先各面板各写一个实色底） -->
+  <Style Selector="ListBox.plain">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+</Styles>
