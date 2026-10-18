@@ -210,19 +210,30 @@ public sealed class MapTemplatesPlugin : IManagerPlugin, IMapContributionPlugin
     /// <summary>拿世界文件的本地可读路径（本机直读；远端下载到插件数据目录 —— 不用 %TEMP%，它可能不可写）。</summary>
     private static string? ResolveWorldFile(IManagerContext ctx, string worldRel)
     {
-        string full = Path.Combine(ctx.FilesRoot, worldRel.Replace('/', Path.DirectorySeparatorChar));
-        if (File.Exists(full)) { return full; }
+        // ★ worldRel 是相对【世界目录】的（lib/Saves/Worlds），而 ctx.FilesRoot 是部署根。
+        //   原来直接 Path.Combine(ctx.FilesRoot, worldRel) → 少了一层，本机和远端都"找不到世界文件"。
+        try
+        {
+            string localRel = $"lib{Path.DirectorySeparatorChar}Saves{Path.DirectorySeparatorChar}Worlds{Path.DirectorySeparatorChar}";
+            string full = Path.Combine(ctx.FilesRoot, localRel + worldRel.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(full)) { return full; }
+            ctx.Log("[建筑模板] 本地世界路径不存在: " + full);
+        }
+        catch (Exception ex) { ctx.Log("[建筑模板] 本地路径异常: " + ex.Message); }
 
+        // 远端：下载时给"相对部署根"的路径
         string staging = Path.Combine(ctx.DataDir, "worlds", Path.GetFileName(worldRel));
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(staging)!);
-            if (ctx.Download(worldRel, staging) || File.Exists(staging)) { return staging; }
+            string relRoot = "lib/Saves/Worlds/" + worldRel.Replace('\\', '/');
+            ctx.Log("[建筑模板] 远端下载世界: " + relRoot);
+            if (ctx.Download(relRoot, staging) || File.Exists(staging)) { return staging; }
+            ctx.Log("[建筑模板] 远端下载失败: " + relRoot);
         }
-        catch { }
+        catch (Exception ex) { ctx.Log("[建筑模板] 远端下载异常: " + ex.Message); }
         return null;
     }
-
     // ==================== 插件自带的说明页（诊断用，不放操作提示） ====================
 
     public Control? CreateView(IManagerContext ctx)

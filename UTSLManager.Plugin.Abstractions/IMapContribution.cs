@@ -16,6 +16,7 @@ public sealed record MapViewState(
     int TilesHigh,
     string WorldRelPath);  // 世界文件相对 Worlds 目录的路径；非世界为空串
 
+
 /// <summary>图格坐标的矩形选区（相对当前视图左上角）。</summary>
 public sealed record MapSelection(int X, int Y, int Width, int Height);
 
@@ -60,6 +61,7 @@ public interface IMapContributionHost
 
     /// <summary>视图或选区变化时触发（在 UI 线程）。用它来刷新按钮 enabled 状态或自己的显示。</summary>
     event Action? Changed;
+
 
     /// <summary>往地图页状态行写一句话。</summary>
     void SetStatus(string text);
