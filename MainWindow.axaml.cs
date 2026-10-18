@@ -6167,6 +6167,10 @@ public partial class MainWindow : Window
 
     // ===== 地图页贡献点（插件 API v4）=====
     private readonly List<(Button Btn, Func<MapViewState, bool>? Enabled)> mapPluginButtons = [];
+    /// <summary>插件通过 AddToolbarControl 加的任意控件（框选/模板名/导出模板/下拉…）。
+    /// ★ 必须单独登记：ClearMapPluginBar 原来只清 mapPluginButtons（按钮），
+    ///   这些控件每重载一次插件就堆一套 —— 实测切几次档后地图栏出现两三排「框选/导出模板」。</summary>
+    private readonly List<Control> mapPluginControls = [];
     private MapViewState mapViewState = new("—", false, false, false, 0, 0, "");
     private event Action? MapViewChanged;
 
@@ -6210,6 +6214,9 @@ public partial class MainWindow : Window
             void Add()
             {
                 if (control.Margin == default) { control.Margin = new Avalonia.Thickness(0, 0, 6, 6); }
+                // 同一控件重复贡献（插件重载后重建实例不会命中这里，但同实例 repeated call 会）→ 先摘掉旧的
+                if (w.mapPluginControls.Contains(control)) { w.MapPluginBar?.Children.Remove(control); }
+                w.mapPluginControls.Add(control);
                 w.MapPluginBar?.Children.Add(control);
             }
             if (Dispatcher.UIThread.CheckAccess()) { Add(); } else { Dispatcher.UIThread.Post(Add); }
@@ -6272,6 +6279,12 @@ public partial class MainWindow : Window
             try { MapPluginBar?.Children.Remove(btn); } catch { }
         }
         mapPluginButtons.Clear();
+        // ★ 控件也要清（否则插件重载后地图栏每重来一次就多一套）
+        foreach (var ctl in mapPluginControls.ToArray())
+        {
+            try { MapPluginBar?.Children.Remove(ctl); } catch { }
+        }
+        mapPluginControls.Clear();
         MapViewChanged = null;      // ★ 一并清掉插件的事件订阅，否则旧插件实例被永久引用（热重载 ALC 收不回）
     }
 
