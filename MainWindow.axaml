@@ -192,7 +192,7 @@
                   <Path Classes="icon" Data="{StaticResource IcoPulse}" Stroke="{DynamicResource TextSecondary}" Width="13" Height="13" Margin="0,0,7,0"/>
                   <TextBlock x:Name="CpuTitle" Text="CPU 使用量" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
                 </StackPanel>
-                <TextBlock Grid.Column="1" x:Name="CpuNow" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
+                <TextBlock Grid.Column="1" x:Name="CpuNow" Text="—" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
               </Grid>
               <Grid ColumnDefinitions="Auto,*" Margin="0,8,0,0">
                   <Canvas x:Name="CpuYLabels" Grid.Column="0" Width="52" Height="118"/>
@@ -208,7 +208,7 @@
                   <Path Classes="icon" Data="{StaticResource IcoMem}" Stroke="{DynamicResource TextSecondary}" Width="13" Height="13" Margin="0,0,7,0"/>
                   <TextBlock x:Name="MemTitle" Text="内存使用量" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
                 </StackPanel>
-                <TextBlock Grid.Column="1" x:Name="MemNow" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
+                <TextBlock Grid.Column="1" x:Name="MemNow" Text="—" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
               </Grid>
               <Grid ColumnDefinitions="Auto,*" Margin="0,8,0,0">
                   <Canvas x:Name="MemYLabels" Grid.Column="0" Width="52" Height="118"/>
@@ -224,7 +224,7 @@
                   <Path Classes="icon" Data="{StaticResource IcoNet}" Stroke="{DynamicResource TextSecondary}" Width="13" Height="13" Margin="0,0,7,0"/>
                   <TextBlock x:Name="NetTitle" Text="网络流量" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
                 </StackPanel>
-                <TextBlock Grid.Column="1" x:Name="NetNow" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
+                <TextBlock Grid.Column="1" x:Name="NetNow" Text="—" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
               </Grid>
               <Grid ColumnDefinitions="Auto,*" Margin="0,8,0,0">
                   <Canvas x:Name="NetYLabels" Grid.Column="0" Width="52" Height="118"/>

@@ -310,6 +310,15 @@ public partial class MainWindow : Window
         {
             try { Dispatcher.UIThread.Post(() => { if (ErrText is not null) { ErrText.Text = msg; } }); } catch { }
         };
+        // ★ L5 窗口装饰：窗口失焦时三个"红绿灯"变淡（macOS 的做法），重新聚焦时恢复
+        try
+        {
+            Activated += (_, __) => SetTrafficLightsActive(true);
+            Deactivated += (_, __) => SetTrafficLightsActive(false);
+            SetTrafficLightsActive(IsActive);
+            ToolTip.SetTip(CpuNow, "占单核 % / 整机满槽 %（满槽 = 核数 × 100）");
+        }
+        catch { }
         Program.Log("ctor:begin");
         LoadConn();
         Program.Log("ctor:LoadConn done");
@@ -2371,6 +2380,16 @@ public partial class MainWindow : Window
         return cores > 0 ? $"{pct:F1}% / {cores * 100.0:F0}%" : $"{pct:F1}%";
     }
 
+    /// <summary>窗口失焦时把三个"红绿灯"调淡（macOS 行为）；不做隐藏，只降透明度，位置不跳。</summary>
+    private void SetTrafficLightsActive(bool active)
+    {
+        double op = active ? 1.0 : 0.45;
+        try { Program.Log($"trafficlights active={active} opacity={op}"); } catch { }
+        foreach (var b in new Avalonia.Controls.Border?[] { BtnClose, BtnMin, BtnMax })
+        {
+            if (b is not null) { b.Opacity = op; }
+        }
+    }
     private static void PushCarry(List<double> list, double? v)
         => Push(list, v ?? (list.Count > 0 ? list[^1] : 0));
     private void SampleMetrics()
