@@ -247,8 +247,11 @@ public partial class MainWindow : Window
         {
             try { Dispatcher.UIThread.Post(() => { if (ErrText is not null) { ErrText.Text = msg; } }); } catch { }
         };
+        Program.Log("ctor:begin");
         LoadConn();
-        WarmupRemote();   // ★ 启动即后台预热常驻通道与常用配置，第一次点击就秒开   // ★ 必须在任何 REST 调用之前（TSManager 也是先读配置再启动 ✓）
+        Program.Log("ctor:LoadConn done");
+        WarmupRemote();
+        Program.Log("ctor:WarmupRemote queued");   // ★ 启动即后台预热常驻通道与常用配置，第一次点击就秒开   // ★ 必须在任何 REST 调用之前（TSManager 也是先读配置再启动 ✓）
         WorldList.ItemsSource = rows;
         ServerCards.ItemsSource = srvCards;
         TermLines.ItemsSource = term;
@@ -379,7 +382,12 @@ public partial class MainWindow : Window
 
         // ★ 150% DPI 下窗口初始位置/尺寸会算错，导致右侧跑到屏幕外（控制区看不见）
         //   这里按屏幕工作区强制钳制并居中。
-        Opened += (_, _) => ClampToScreen();
+        Opened += (_, _) =>
+        {
+            Program.Log("window:Opened");
+            ClampToScreen();
+            Program.Log("window:Clamped");
+        };
 
         var chainTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };   // ★ 10s→30s：侧栏世界链摘要不必那么勤（且已走 90s 缓存）
         chainTimer.Tick += (_, _) =>
@@ -390,14 +398,17 @@ public partial class MainWindow : Window
             RefreshChain();
         };
         chainTimer.Start();
+        Program.Log("ctor:timers done");
         RefreshChain();
-
-
+        Program.Log("ctor:RefreshChain queued");
         InitPluginHost();
+        Program.Log("ctor:InitPluginHost done");
         pluginLoadedProfileId = ActiveSrv.Id;      // 启动时插件就是按这张档加载的
         ApplyStartupArgs();
+        Program.Log("ctor:ApplyStartupArgs done");
         _ = RefreshWorldsAsync();
         RefreshLog();
+        Program.Log("ctor:end");
         // 激活档令牌为空（典型：刚用「＋」建的档）→ 启动时也自动从服务端配置补一次，否则世界列表一直是空的
         if (ActiveSrv.Token.Length == 0)
         {
