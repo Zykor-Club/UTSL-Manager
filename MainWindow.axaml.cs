@@ -312,6 +312,10 @@ public partial class MainWindow : Window
     // ===== 定时任务（计划任务）：20 秒扫一次 cron，按档执行 启动/停机/重启/发命令 =====
     private Avalonia.Threading.DispatcherTimer? taskTimer;
     private ComboBox? CmbTaskProfile, CmbTaskKind;
+    // 结构化调度选择（不再让用户直接面对 cron）
+    private ComboBox? CmbTaskFreq, CmbTaskWeekday, CmbTaskDay;
+    private TextBox? TbTaskTime, TbTaskNum;
+    private CheckBox? ChkTaskAdvanced;
     private TextBox? TbTaskCron, TbTaskCommand;
     private readonly System.Collections.Generic.HashSet<string> taskFired = [];   // "taskId|yyyyMMddHHmm"，防同分钟重复触发
     private string lastLogFile = "";
@@ -4887,23 +4891,60 @@ public partial class MainWindow : Window
         {
             string pid = CmbTaskProfile?.SelectedItem is ComboBoxItem ci ? (ci.Tag?.ToString() ?? "") : "";
             string kind = CmbTaskKind?.SelectedItem is ComboBoxItem ck ? (ck.Tag?.ToString() ?? "restart") : "restart";
-            string cron = (TbTaskCron?.Text ?? "").Trim();
             string cmd = (TbTaskCommand?.Text ?? "").Trim();
             if (pid.Length == 0) { ERR("新增计划任务：请选择服务器档"); return; }
-            var f = cron.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (f.Length != 5) { ERR("cron 需要 5 段（分 时 日 月 周），例如 `0 4 * * *` = 每天 4:00"); return; }
-            if (kind == "command" && cmd.Length > 0 && !cmd.StartsWith('/')) { cmd = "/" + cmd; }
-            ServersCfg.Tasks.Add(new UTSLManager.Servers.ScheduledTask
+
+            string cron;
+            if (ChkTaskAdvanced?.IsChecked == true)
             {
-                ProfileId = pid, Kind = kind, Cron = cron, Command = cmd, Enabled = true,
-            });
+                cron = (TbTaskCron?.Text ?? "").Trim();
+            }
+            else
+            {
+                string freq = CmbTaskFreq?.SelectedItem is ComboBoxItem cf ? (cf.Tag?.ToString() ?? "daily") : "daily";
+                if (!UTSLManager.Controls.ClockTimePicker.TryParse((TbTaskTime?.Text ?? "04:00").Trim(), out int hh, out int mm))
+                {
+                    ERR("时间格式要 HH:mm，例如 04:00"); return;
+                }
+                if (!int.TryParse((TbTaskNum?.Text ?? "").Trim(), out int n) || n <= 0) { n = 6; }
+                string dow = CmbTaskWeekday?.SelectedItem is ComboBoxItem cw ? (cw.Tag?.ToString() ?? "1") : "1";
+                string dom = CmbTaskDay?.SelectedItem is ComboBoxItem cd2 ? (cd2.Tag?.ToString() ?? "1") : "1";
+                cron = freq switch
+                {
+                    "daily" => $"{mm} {hh} * * *",
+                    "weekly" => $"{mm} {hh} * * {dow}",
+                    "monthly" => $"{mm} {hh} {dom} * *",
+                    "hourly" => $"{mm} */{Math.Clamp(n, 1, 23)} * * *",
+                    "minutely" => $"*/{Math.Clamp(n, 1, 59)} * * * *",
+                    _ => $"{mm} {hh} * * *",
+                };
+            }
+
+            if (cron.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length != 5) { ERR("调度不合法（需要 5 段）：" + cron); return; }
+
+            // ★ 护栏：重启/停机是破坏性动作，拒绝"每分钟级"的频率。
+            //   实测踩过：一条 `* * * * *` 的 restart 任务把生产服务端连着重启了两次。
+            //   要高频重启的人请用「高级」并自己确认——这里直接挡掉最常见的误配。
+            if (kind is "restart" or "stop")
+            {
+                var cf2 = cron.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                bool minuteLevel = cf2[0] == "*"
+                    || (cf2[0].StartsWith("*/") && int.TryParse(cf2[0][2..], out int stepMin) && stepMin < 5);
+                if (minuteLevel)
+                {
+                    ERR("拒绝：重启/停机的频率不能是「每分钟级」——这会反复重启生产服。请用「每 6 小时」「每天 04:00」这类。");
+                    return;
+                }
+            }
+            if (kind == "command" && cmd.Length > 0 && !cmd.StartsWith('/')) { cmd = "/" + cmd; }
+            var task = new UTSLManager.Servers.ScheduledTask { ProfileId = pid, Kind = kind, Cron = cron, Command = cmd, Enabled = true };
+            ServersCfg.Tasks.Add(task);
             SaveConn();
-            ERR($"已新增计划任务：{(kind == "command" ? "发命令 " + cmd : kind)} · {cron}");
+            ERR($"已新增计划任务：{task.Summary} · {task.CronText}");
             OnShowTasks(null, new RoutedEventArgs());
         }
         catch (Exception ex) { ERR("新增计划任务失败: " + ex.Message); }
     }
-
     private void OnShowTasks(object? sender, RoutedEventArgs e)
     {
         ShowView("tasks");
@@ -4959,21 +5000,80 @@ public partial class MainWindow : Window
                 CmbTaskKind.Items.Add(new ComboBoxItem { Content = text, Tag = tag });
             }
             CmbTaskKind.SelectedIndex = 0;
-            TbTaskCron = new TextBox { FontSize = 12, Text = "0 4 * * *", Watermark = "分 时 日 月 周" };
-            TbTaskCommand = new TextBox { FontSize = 12, Text = "/save", Watermark = "仅发命令时用" };
-            var f1 = Field(CmbTaskProfile, "服务器");
-            var f2 = Field(CmbTaskKind, "动作");
-            var f3 = Field(TbTaskCron, "调度（cron 5 段）");
-            var f4 = Field(TbTaskCommand, "命令（可选）");
-            Avalonia.Controls.Grid.SetColumn(f1, 0); Avalonia.Controls.Grid.SetColumn(f2, 1);
-            Avalonia.Controls.Grid.SetColumn(f3, 2); Avalonia.Controls.Grid.SetColumn(f4, 3);
-            f1.Margin = new Avalonia.Thickness(0, 0, 10, 0);
-            f2.Margin = new Avalonia.Thickness(0, 0, 10, 0);
-            f3.Margin = new Avalonia.Thickness(0, 0, 10, 0);
-            foreach (var c in new Control[] { f1, f2, f3, f4 }) { fields.Children.Add(c); }
-            add.Children.Add(fields);
 
-            // cron 预设：点一下填进输入框（比让用户背 cron 好得多）
+            // ★ 结构化调度：频率 + 时间/星期/日/N，cron 只在「高级」里出现。
+            //   之前直接给一个 cron 输入框，普通字体下 `0 4 * * *` 会被看成 `04***`（空格窄 + 星号偏高）。
+            CmbTaskFreq = new ComboBox { FontSize = 12, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch };
+            foreach (var (tag, text) in new[]
+            {
+                ("daily", "每天"), ("weekly", "每周"), ("monthly", "每月"),
+                ("hourly", "每 N 小时"), ("minutely", "每 N 分钟"),
+            })
+            {
+                CmbTaskFreq.Items.Add(new ComboBoxItem { Content = text, Tag = tag });
+            }
+            CmbTaskFreq.SelectedIndex = 0;
+            TbTaskTime = new TextBox { FontSize = 12, Text = "04:00", Watermark = "HH:mm" };
+            CmbTaskWeekday = new ComboBox { FontSize = 12, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch };
+            for (int wi = 0; wi < 7; wi++)
+            {
+                string[] names = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+                CmbTaskWeekday.Items.Add(new ComboBoxItem { Content = names[wi], Tag = wi.ToString() });
+            }
+            CmbTaskWeekday.SelectedIndex = 1;
+            CmbTaskDay = new ComboBox { FontSize = 12, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch };
+            for (int di = 1; di <= 28; di++) { CmbTaskDay.Items.Add(new ComboBoxItem { Content = di + " 日", Tag = di.ToString() }); }
+            CmbTaskDay.SelectedIndex = 0;
+            TbTaskNum = new TextBox { FontSize = 12, Text = "6", Watermark = "N", Width = 70 };
+
+            var f1 = Field(CmbTaskProfile!, "服务器");
+            var f2 = Field(CmbTaskKind!, "动作");
+            var f3 = Field(CmbTaskFreq, "频率");
+            f1.Width = 240; f2.Width = 120; f3.Width = 150;
+            var rowA = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 10 };
+            rowA.Children.Add(f1); rowA.Children.Add(f2); rowA.Children.Add(f3);
+            add.Children.Add(rowA);
+            var f4 = Field(TbTaskTime, "时间（HH:mm）");
+            var f5 = Field(CmbTaskWeekday, "星期");
+            var f6 = Field(CmbTaskDay, "几号");
+            var f7 = Field(TbTaskNum, "N");
+            f4.Width = 130; f5.Width = 100; f6.Width = 100; f7.Width = 80;
+            var sub = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 10, Margin = new Avalonia.Thickness(0, 10, 0, 0) };
+            foreach (var c in new Control[] { f4, f5, f6, f7 }) { c.MinWidth = 0; sub.Children.Add(c); }
+            add.Children.Add(sub);
+
+            void SyncSched()
+            {
+                string freq = CmbTaskFreq?.SelectedItem is ComboBoxItem ci2 ? (ci2.Tag?.ToString() ?? "daily") : "daily";
+                // ★ 要隐藏整个"字段块"（标题 + 控件），只隐藏控件会留下 星期/几号/N 三个空标题
+                f4.IsVisible = freq is "daily" or "weekly" or "monthly" or "hourly";
+                f5.IsVisible = freq == "weekly";
+                f6.IsVisible = freq == "monthly";
+                f7.IsVisible = freq is "hourly" or "minutely";
+            }
+            if (CmbTaskFreq is not null)
+            {
+                CmbTaskFreq.SelectionChanged += (_, _) => SyncSched();
+            }
+            SyncSched();
+
+            // 高级：直接写 cron（保留老用户/复杂表达式的入口）
+            ChkTaskAdvanced = new CheckBox { Content = "高级：直接写 cron", FontSize = 11, Foreground = txtTer };
+            TbTaskCron = new TextBox { FontSize = 12, Text = "0 4 * * *", FontFamily = new Avalonia.Media.FontFamily("Cascadia Mono,Consolas,monospace"), IsVisible = false, Watermark = "分 时 日 月 周" };
+            ChkTaskAdvanced.Click += (_, _) =>
+            {
+                bool adv = ChkTaskAdvanced?.IsChecked == true;
+                if (TbTaskCron is not null) { TbTaskCron.IsVisible = adv; }
+                if (CmbTaskFreq is not null) { CmbTaskFreq.IsEnabled = !adv; }
+                if (TbTaskTime is not null) { TbTaskTime.IsEnabled = !adv; }
+                if (CmbTaskWeekday is not null) { CmbTaskWeekday.IsEnabled = !adv; }
+                if (CmbTaskDay is not null) { CmbTaskDay.IsEnabled = !adv; }
+                if (TbTaskNum is not null) { TbTaskNum.IsEnabled = !adv; }
+            };
+            add.Children.Add(ChkTaskAdvanced);
+            add.Children.Add(TbTaskCron);
+
+            // 常用预设 → 写进「高级」的 cron 并自动切到高级模式
             var presets = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8 };
             presets.Children.Add(new TextBlock { Text = "常用：", FontSize = 11, Foreground = txtTer, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center });
             foreach (var (label, cron) in new[]
@@ -4992,7 +5092,11 @@ public partial class MainWindow : Window
                     BorderThickness = new Avalonia.Thickness(1),
                     Foreground = txtSec,
                 };
-                chip.Click += (_, _) => { if (TbTaskCron is not null) { TbTaskCron.Text = cron; } };
+                chip.Click += (_, _) =>
+                {
+                    if (TbTaskCron is not null) { TbTaskCron.Text = cron; }
+                    if (ChkTaskAdvanced is not null) { ChkTaskAdvanced.IsChecked = true; }
+                };
                 presets.Children.Add(chip);
             }
             add.Children.Add(presets);
