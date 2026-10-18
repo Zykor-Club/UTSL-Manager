@@ -4828,8 +4828,9 @@ public partial class MainWindow : Window
             void ApplyMode()
             {
                 bool remoteOn = modeSwitch.IsChecked == true;
-                cardLocal.BorderBrush = new SolidColorBrush(Color.Parse(remoteOn ? "#2A2A30" : "#0A84FF"));
-                cardRemote.BorderBrush = new SolidColorBrush(Color.Parse(remoteOn ? "#0A84FF" : "#2A2A30"));
+                // ★ 用"accent 30% 渐隐描边"代替整圈纯 accent：卡片面积大，纯 accent 边框太吵（当前态已有"当前正在使用"文字提示）
+            cardLocal.BorderBrush = new SolidColorBrush(Color.Parse(remoteOn ? "#14FFFFFF" : "#4D0A84FF"));
+                cardRemote.BorderBrush = new SolidColorBrush(Color.Parse(remoteOn ? "#4D0A84FF" : "#14FFFFFF"));
                 badgeLocal.IsVisible = !remoteOn;
                 badgeRemote.IsVisible = remoteOn;
             }
@@ -5449,6 +5450,41 @@ public partial class MainWindow : Window
         BtnPlugins?.Classes.Set("active", which == "plugins");
         BtnMap?.Classes.Set("active", which == "map");
         BtnMgrPlugins?.Classes.Set("active", which == "mgrplugins");
+
+        // ★ L4 收尾：只给"进入的那个视图"做 140ms 淡入（macOS 的分页切换是淡入，不是硬切）
+        Avalonia.Controls.Control? incoming = which switch
+        {
+            "console" => ConsoleView, "config" => ConfigView, "chain" => ChainView,
+            "plugins" => PluginsView, "mgrplugins" => MgrPluginsView, "map" => MapView,
+            "maint" => MaintView, "conn" => ConnView, "ext" => ExtView, "edit" => EditView,
+            _ => null,
+        };
+        FadeIn(incoming);
+    }
+
+    /// <summary>140ms 淡入。用 Transitions 而不是 Animation：只改一个 Opacity 值，
+    /// 由控件的过渡系统插值，不需要每帧调度，也不会跟布局打架。</summary>
+    private static void FadeIn(Avalonia.Controls.Control? c)
+    {
+        if (c is null) { return; }
+        try
+        {
+            if (c.Transitions is null || c.Transitions.Count == 0)
+            {
+                c.Transitions = new Avalonia.Animation.Transitions
+                {
+                    new Avalonia.Animation.DoubleTransition
+                    {
+                        Property = Avalonia.Visual.OpacityProperty,
+                        Duration = TimeSpan.FromMilliseconds(140),
+                    },
+                };
+            }
+            c.Opacity = 0;
+            // 等这一帧渲染完再置 1，过渡才会真正跑（同帧 0→1 会被合并成一次赋值）
+            Dispatcher.UIThread.Post(() => { try { c.Opacity = 1; } catch { } }, DispatcherPriority.Background);
+        }
+        catch { }
     }
 
     private void OnBackToConsole(object? sender, RoutedEventArgs e) => ShowView("console");
