@@ -7,3 +7,9 @@ publish/
 
 # TEdit 源码（按需 clone，见 scripts/get-tedit.ps1；不入库）
 third_party/
+
+# 运行期配置（含 DPAPI 加密的 REST token 与 SSH 密钥路径）—— 绝不入库
+servers.json
+servers.json.bak
+connection.json
+*.log
