@@ -113,9 +113,11 @@
           <!-- 服务器区：标题 + 新增 -->
           <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="8,0,2,4">
             <TextBlock Grid.Column="0" Text="服务器" FontSize="11" Foreground="{DynamicResource TextTertiary}" VerticalAlignment="Center"/>
-            <Button Grid.Column="1" x:Name="BtnAddServer" Content="＋" FontSize="13" Padding="7,0" CornerRadius="6"
+            <Button Grid.Column="1" x:Name="BtnAddServer" Content="" FontSize="13" Padding="7,0" CornerRadius="6"
                     Background="Transparent" Foreground="{DynamicResource Accent}" VerticalAlignment="Center"
-                    ToolTip.Tip="新增一台服务器（复制当前档的连接设置）" Click="OnAddServer"/>
+                    ToolTip.Tip="新增一台服务器（复制当前档的连接设置）" Click="OnAddServer">
+                    <Path Classes="icon" Data="{StaticResource IcoPlus}" Stroke="{DynamicResource Accent}" Width="13" Height="13" Margin="0"/>
+                  </Button>
           </Grid>
           <!-- ★ Avalonia 的滚动条是覆盖式的：必须给右侧留 12px，否则会压住卡片右边缘（"3 世界"会被切掉） -->
           <ScrollViewer DockPanel.Dock="Top" MaxHeight="330" Margin="0,0,0,10" Padding="0,0,12,0"
@@ -186,7 +188,10 @@
           <Border Classes="card" Grid.Column="0" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" Padding="16,14" Margin="0,0,5,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Grid.Column="0" x:Name="CpuTitle" Text="CPU 使用量" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                  <Path Classes="icon" Data="{StaticResource IcoPulse}" Stroke="{DynamicResource TextSecondary}" Width="13" Height="13" Margin="0,0,7,0"/>
+                  <TextBlock x:Name="CpuTitle" Text="CPU 使用量" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                </StackPanel>
                 <TextBlock Grid.Column="1" x:Name="CpuNow" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
               </Grid>
               <Grid ColumnDefinitions="Auto,*" Margin="0,8,0,0">
@@ -199,7 +204,10 @@
           <Border Classes="card" Grid.Column="1" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" Padding="16,14" Margin="5,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Grid.Column="0" x:Name="MemTitle" Text="内存使用量" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                  <Path Classes="icon" Data="{StaticResource IcoMem}" Stroke="{DynamicResource TextSecondary}" Width="13" Height="13" Margin="0,0,7,0"/>
+                  <TextBlock x:Name="MemTitle" Text="内存使用量" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                </StackPanel>
                 <TextBlock Grid.Column="1" x:Name="MemNow" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
               </Grid>
               <Grid ColumnDefinitions="Auto,*" Margin="0,8,0,0">
@@ -212,7 +220,10 @@
           <Border Classes="card" Grid.Column="2" Background="{DynamicResource MatPanel}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="8" Padding="16,14" Margin="5,0,0,0">
             <StackPanel>
               <Grid ColumnDefinitions="*,Auto">
-                <TextBlock Grid.Column="0" x:Name="NetTitle" Text="网络流量" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                  <Path Classes="icon" Data="{StaticResource IcoNet}" Stroke="{DynamicResource TextSecondary}" Width="13" Height="13" Margin="0,0,7,0"/>
+                  <TextBlock x:Name="NetTitle" Text="网络流量" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                </StackPanel>
                 <TextBlock Grid.Column="1" x:Name="NetNow" Text="—" FontSize="11" Foreground="{DynamicResource TextSecondary}"/>
               </Grid>
               <Grid ColumnDefinitions="Auto,*" Margin="0,8,0,0">
@@ -578,13 +589,48 @@
           <TextBlock x:Name="PluginMetricsHeader" Text="插件指标" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}" Margin="4,14,0,6" IsVisible="False"/>
           <StackPanel x:Name="PluginMetricsHost" Spacing="4"/>
           <TextBlock Text="功能" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}" Margin="4,14,0,6"/>
-          <Button x:Name="BtnConn" Classes="menu" Content="&#xE774;  连接设置" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="6" Click="OnShowConn"/>
-          <Button x:Name="BtnChain" Classes="menu" Content="&#xE71B;  世界链" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="6" Click="OnShowChain"/>
-          <Button x:Name="BtnConfig" Classes="menu" Content="&#xE713;  配置编辑" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="6" Click="OnShowConfig"/>
-          <Button x:Name="BtnPlugins" Classes="menu" Content="&#xE8B7;  文件管理" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="6" Click="OnShowPlugins"/>
-          <Button x:Name="BtnMap" Classes="menu" Content="&#xE707;  地图预览" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="6" Click="OnShowMap"/>
-          <Button x:Name="BtnMaint" Classes="menu" Content="&#xE90F;  维护" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="6" Click="OnShowMaint"/>
-          <Button x:Name="BtnMgrPlugins" Classes="menu" Content="&#xEA86;  插件管理" FontFamily="Segoe MDL2 Assets, Microsoft YaHei" CornerRadius="6" Click="OnShowMgrPlugins"/>
+          <Button x:Name="BtnConn" Classes="menu" CornerRadius="6" Click="OnShowConn">
+            <StackPanel Orientation="Horizontal">
+              <Path Classes="icon" Data="{StaticResource IcoConn}" Stroke="{Binding $parent[Button].Foreground}"/>
+              <TextBlock Text="连接设置" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Button>
+          <Button x:Name="BtnChain" Classes="menu" CornerRadius="6" Click="OnShowChain">
+            <StackPanel Orientation="Horizontal">
+              <Path Classes="icon" Data="{StaticResource IcoChain}" Stroke="{Binding $parent[Button].Foreground}"/>
+              <TextBlock Text="世界链" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Button>
+          <Button x:Name="BtnConfig" Classes="menu" CornerRadius="6" Click="OnShowConfig">
+            <StackPanel Orientation="Horizontal">
+              <Path Classes="icon" Data="{StaticResource IcoEdit}" Stroke="{Binding $parent[Button].Foreground}"/>
+              <TextBlock Text="配置编辑" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Button>
+          <Button x:Name="BtnPlugins" Classes="menu" CornerRadius="6" Click="OnShowPlugins">
+            <StackPanel Orientation="Horizontal">
+              <Path Classes="icon" Data="{StaticResource IcoFolder}" Stroke="{Binding $parent[Button].Foreground}"/>
+              <TextBlock Text="文件管理" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Button>
+          <Button x:Name="BtnMap" Classes="menu" CornerRadius="6" Click="OnShowMap">
+            <StackPanel Orientation="Horizontal">
+              <Path Classes="icon" Data="{StaticResource IcoMap}" Stroke="{Binding $parent[Button].Foreground}"/>
+              <TextBlock Text="地图预览" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Button>
+          <Button x:Name="BtnMaint" Classes="menu" CornerRadius="6" Click="OnShowMaint">
+            <StackPanel Orientation="Horizontal">
+              <Path Classes="icon" Data="{StaticResource IcoShield}" Stroke="{Binding $parent[Button].Foreground}"/>
+              <TextBlock Text="维护" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Button>
+          <Button x:Name="BtnMgrPlugins" Classes="menu" CornerRadius="6" Click="OnShowMgrPlugins">
+            <StackPanel Orientation="Horizontal">
+              <Path Classes="icon" Data="{StaticResource IcoBlocks}" Stroke="{Binding $parent[Button].Foreground}"/>
+              <TextBlock Text="插件管理" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Button>
           <!-- 下面的按钮已合并进「维护」视图，保留元素是为了不破坏代码里对 BtnReset/BtnBackup/BtnRestore 的引用 -->
           <StackPanel IsVisible="False">
             <Button x:Name="BtnReset" Click="OnResetClicked"/>

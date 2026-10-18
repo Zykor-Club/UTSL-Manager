@@ -1,0 +1,63 @@
+<!--
+  L4 · 图标（Icons）
+  ────────────────────────────────────────────────────────────────────────────
+  原来右栏用的是 Segoe MDL2 Assets 字形（`&#xE774;` 这些）——那是 Windows 的系统图标字体，
+  形态偏"Windows 10"，是这套界面里离 macOS 最远的一处。
+
+  这里改成**自绘线性图标**：24×24 视框、1.8 描边、圆头圆角、只用直线与简单弧。
+  统一走 Path.icon 这一条样式，颜色用 `Stroke="{Binding $parent[Button].Foreground}"`
+  跟按钮文字同步（导航选中变白字时图标也变白）。
+
+  ★ 为什么不用图标字体：字形随字体版本变、无法统一描边宽度、也没法跟着文字色走。
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <Styles.Resources>
+    <!-- 连接设置：一对插头 + 中间连线 -->
+    <StreamGeometry x:Key="IcoConn">M3,9 H9 V15 H3 Z M15,9 H21 V15 H15 Z M9,12 H15</StreamGeometry>
+
+    <!-- 世界链：两个相对的弧，像一节链条 -->
+    <!-- 世界链：两个交叠的圆环（读作"链接"；之前两个相对的弧看起来像括号） -->
+    <StreamGeometry x:Key="IcoChain">M10,8.2 A3.9,3.9 0 1 1 10,15.8 A3.9,3.9 0 1 1 10,8.2 M14,8.2 A3.9,3.9 0 1 1 14,15.8 A3.9,3.9 0 1 1 14,8.2</StreamGeometry>
+
+    <!-- 配置编辑：铅笔 -->
+    <StreamGeometry x:Key="IcoEdit">M4,20 V16 L16,4 L20,8 L8,20 Z M13,7 L17,11</StreamGeometry>
+
+    <!-- 文件管理：文件夹 -->
+    <StreamGeometry x:Key="IcoFolder">M4,7 H10 L12,9 H20 V19 H4 Z</StreamGeometry>
+
+    <!-- 地图预览：三折地图 -->
+    <StreamGeometry x:Key="IcoMap">M4,6.5 L9,4.5 L15,6.5 L20,4.5 V17.5 L15,19.5 L9,17.5 L4,19.5 Z M9,4.5 V17.5 M15,6.5 V19.5</StreamGeometry>
+
+    <!-- 维护：盾牌 + 勾 -->
+    <StreamGeometry x:Key="IcoShield">M12,3 L20,6 V12 C20,16.4 16.4,19.6 12,21 C7.6,19.6 4,16.4 4,12 V6 Z M8.6,12 L11,14.4 L15.8,9.6</StreamGeometry>
+
+    <!-- 插件管理：四块拼图格 -->
+    <StreamGeometry x:Key="IcoBlocks">M4,4 H10 V10 H4 Z M14,4 H20 V10 H14 Z M4,14 H10 V20 H4 Z M14,14 H20 V20 H14 Z</StreamGeometry>
+
+    <!-- 新增：加号 -->
+    <StreamGeometry x:Key="IcoPlus">M12,5 V19 M5,12 H19</StreamGeometry>
+
+    <!-- 指标卡：脉搏（CPU） -->
+    <StreamGeometry x:Key="IcoPulse">M3,12 H7 L10,5 L14,19 L17,12 H21</StreamGeometry>
+
+    <!-- 指标卡：内存条 -->
+    <StreamGeometry x:Key="IcoMem">M6,8 H18 V16 H6 Z M9,5 V8 M12,5 V8 M15,5 V8 M9,16 V19 M12,16 V19 M15,16 V19</StreamGeometry>
+
+    <!-- 指标卡：上升折线（网络） -->
+    <StreamGeometry x:Key="IcoNet">M4,17 L9,12 L13,15 L20,7 M20,7 H15 M20,7 V12</StreamGeometry>
+  </Styles.Resources>
+
+  <!-- 统一线性图标：1.8 描边、圆头圆角、等比缩放 -->
+  <Style Selector="Path.icon">
+    <Setter Property="StrokeThickness" Value="1.8" />
+    <Setter Property="StrokeLineCap" Value="Round" />
+    <Setter Property="StrokeJoin" Value="Round" />
+    <Setter Property="Width" Value="16" />
+    <Setter Property="Height" Value="16" />
+    <Setter Property="Stretch" Value="Uniform" />
+    <Setter Property="VerticalAlignment" Value="Center" />
+    <Setter Property="Margin" Value="0,0,9,0" />
+  </Style>
+</Styles>

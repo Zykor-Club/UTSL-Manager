@@ -15,6 +15,7 @@
     <StyleInclude Source="avares://UTSLManager/Styles/10-Surfaces.axaml" />
     <StyleInclude Source="avares://UTSLManager/Styles/20-Scale.axaml" />
     <StyleInclude Source="avares://UTSLManager/Styles/30-Motion.axaml" />
+    <StyleInclude Source="avares://UTSLManager/Styles/40-Icons.axaml" />
 
     <!-- ★ P0 全局字体链：此前【没有指定中文字体】→ 中文吃系统默认（微软雅黑，笔画偏重、层次差）。
          优先 Noto Sans SC（开源 OFL，本机已装），没装的机器依次降级，最后回退系统 UI 字体。
