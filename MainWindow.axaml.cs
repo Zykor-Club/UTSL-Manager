@@ -3710,6 +3710,8 @@ public partial class MainWindow : Window
                 _ = ReloadMapForActiveServerAsync();
             }
             if (ChainView.IsVisible) { RefreshChain(); }                               // 世界链：重取（async void）
+            // ★ 连接设置页：卡片要跟着"当前激活档"走（本机档就高亮本机卡、远程档就高亮远程卡）
+            if (ConnView.IsVisible) { OnShowConn(null, new RoutedEventArgs()); }
             if (EditView.IsVisible)                                                     // 编辑器：标明"属于另一台"
             {
                 EditHint.Text = "⚠ 服务器已切换：这个编辑缓冲区属于上一台服务器，保存会被拦下。请切回原服务器，或重新打开文件。";
@@ -4833,6 +4835,8 @@ public partial class MainWindow : Window
                 cardRemote.BorderBrush = new SolidColorBrush(Color.Parse(remoteOn ? "#4D0A84FF" : "#14FFFFFF"));
                 badgeLocal.IsVisible = !remoteOn;
                 badgeRemote.IsVisible = remoteOn;
+                // ★ 顺手把"当前正在使用"的那张卡滚进视野：连接页很长，点完服务器还要自己找卡片很别扭
+                try { (remoteOn ? cardRemote : cardLocal).BringIntoView(); } catch { }
             }
             bool suppressMode = false;      // 代码里改开关时不要触发"保存并应用"
             modeSwitch.IsCheckedChanged += (_, _) =>
@@ -4854,6 +4858,11 @@ public partial class MainWindow : Window
                     : $"已切换到本机管理（{LocalDir}）—— 正在刷新各页面…";
                 AfterModeSwitch();
             };
+            // ★ 进入页面时把"本机/远程"开关拨到当前激活档的真实模式：
+            //   左侧点哪台服务器，这里就显示那台的模式（之前开关停在上次的状态，容易自相矛盾）
+            suppressMode = true;
+            modeSwitch.IsChecked = UseRemote;
+            suppressMode = false;
             ApplyMode();
 
             // ---- 行为：测试连接 ----

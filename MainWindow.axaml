@@ -590,46 +590,46 @@
           <StackPanel x:Name="PluginMetricsHost" Spacing="4"/>
           <TextBlock Text="功能" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}" Margin="4,14,0,6"/>
           <Button x:Name="BtnConn" Classes="menu" CornerRadius="6" AutomationProperties.Name="连接设置" Click="OnShowConn">
-            <StackPanel Orientation="Horizontal">
-              <Path Classes="icon" Data="{StaticResource IcoConn}" Stroke="{Binding $parent[Button].Foreground}"/>
-              <TextBlock Text="连接设置" VerticalAlignment="Center"/>
-            </StackPanel>
+            <Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
+              <Path Grid.Column="0" Classes="icon" Data="{StaticResource IcoConn}" Stroke="{Binding $parent[Button].Foreground}"/>
+              <TextBlock Grid.Column="1" Text="连接设置" VerticalAlignment="Center"/>
+            </Grid>
           </Button>
           <Button x:Name="BtnChain" Classes="menu" CornerRadius="6" AutomationProperties.Name="世界链" Click="OnShowChain">
-            <StackPanel Orientation="Horizontal">
-              <Path Classes="icon" Data="{StaticResource IcoChain}" Stroke="{Binding $parent[Button].Foreground}"/>
-              <TextBlock Text="世界链" VerticalAlignment="Center"/>
-            </StackPanel>
+            <Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
+              <Path Grid.Column="0" Classes="icon" Data="{StaticResource IcoChain}" Stroke="{Binding $parent[Button].Foreground}"/>
+              <TextBlock Grid.Column="1" Text="世界链" VerticalAlignment="Center"/>
+            </Grid>
           </Button>
           <Button x:Name="BtnConfig" Classes="menu" CornerRadius="6" AutomationProperties.Name="配置编辑" Click="OnShowConfig">
-            <StackPanel Orientation="Horizontal">
-              <Path Classes="icon" Data="{StaticResource IcoEdit}" Stroke="{Binding $parent[Button].Foreground}"/>
-              <TextBlock Text="配置编辑" VerticalAlignment="Center"/>
-            </StackPanel>
+            <Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
+              <Path Grid.Column="0" Classes="icon" Data="{StaticResource IcoEdit}" Stroke="{Binding $parent[Button].Foreground}"/>
+              <TextBlock Grid.Column="1" Text="配置编辑" VerticalAlignment="Center"/>
+            </Grid>
           </Button>
           <Button x:Name="BtnPlugins" Classes="menu" CornerRadius="6" AutomationProperties.Name="文件管理" Click="OnShowPlugins">
-            <StackPanel Orientation="Horizontal">
-              <Path Classes="icon" Data="{StaticResource IcoFolder}" Stroke="{Binding $parent[Button].Foreground}"/>
-              <TextBlock Text="文件管理" VerticalAlignment="Center"/>
-            </StackPanel>
+            <Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
+              <Path Grid.Column="0" Classes="icon" Data="{StaticResource IcoFolder}" Stroke="{Binding $parent[Button].Foreground}"/>
+              <TextBlock Grid.Column="1" Text="文件管理" VerticalAlignment="Center"/>
+            </Grid>
           </Button>
           <Button x:Name="BtnMap" Classes="menu" CornerRadius="6" AutomationProperties.Name="地图预览" Click="OnShowMap">
-            <StackPanel Orientation="Horizontal">
-              <Path Classes="icon" Data="{StaticResource IcoMap}" Stroke="{Binding $parent[Button].Foreground}"/>
-              <TextBlock Text="地图预览" VerticalAlignment="Center"/>
-            </StackPanel>
+            <Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
+              <Path Grid.Column="0" Classes="icon" Data="{StaticResource IcoMap}" Stroke="{Binding $parent[Button].Foreground}"/>
+              <TextBlock Grid.Column="1" Text="地图预览" VerticalAlignment="Center"/>
+            </Grid>
           </Button>
           <Button x:Name="BtnMaint" Classes="menu" CornerRadius="6" AutomationProperties.Name="维护" Click="OnShowMaint">
-            <StackPanel Orientation="Horizontal">
-              <Path Classes="icon" Data="{StaticResource IcoShield}" Stroke="{Binding $parent[Button].Foreground}"/>
-              <TextBlock Text="维护" VerticalAlignment="Center"/>
-            </StackPanel>
+            <Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
+              <Path Grid.Column="0" Classes="icon" Data="{StaticResource IcoShield}" Stroke="{Binding $parent[Button].Foreground}"/>
+              <TextBlock Grid.Column="1" Text="维护" VerticalAlignment="Center"/>
+            </Grid>
           </Button>
           <Button x:Name="BtnMgrPlugins" Classes="menu" CornerRadius="6" AutomationProperties.Name="插件管理" Click="OnShowMgrPlugins">
-            <StackPanel Orientation="Horizontal">
-              <Path Classes="icon" Data="{StaticResource IcoBlocks}" Stroke="{Binding $parent[Button].Foreground}"/>
-              <TextBlock Text="插件管理" VerticalAlignment="Center"/>
-            </StackPanel>
+            <Grid ColumnDefinitions="Auto,Auto" VerticalAlignment="Center">
+              <Path Grid.Column="0" Classes="icon" Data="{StaticResource IcoBlocks}" Stroke="{Binding $parent[Button].Foreground}"/>
+              <TextBlock Grid.Column="1" Text="插件管理" VerticalAlignment="Center"/>
+            </Grid>
           </Button>
           <!-- 下面的按钮已合并进「维护」视图，保留元素是为了不破坏代码里对 BtnReset/BtnBackup/BtnRestore 的引用 -->
           <StackPanel IsVisible="False">
