@@ -87,7 +87,7 @@ async Task ServeAsync(int listenPort = -1)
         return;
     }
     BoundPort = ((IPEndPoint)listener.LocalEndpoint).Port;
-    Console.WriteLine($"[UTSLDaemon] v0.2.0 监听 {bindAddr}:{BoundPort}  root={root}  logs={logsDir}（logs 存在={Directory.Exists(logsDir)}）"
+    Console.WriteLine($"[UTSLDaemon] v0.2.1 监听 {bindAddr}:{BoundPort}  root={root}  logs={logsDir}（logs 存在={Directory.Exists(logsDir)}）"
         + (token.Length > 0 ? "  [已启用令牌认证]" : "  [未启用认证：仅回环]"));
     while (true)
     {
@@ -178,8 +178,8 @@ async Task HandleAsync(TcpClient client)
                     if (Environment.TickCount64 - lastPingLog > 60000) { lastPingLog = Environment.TickCount64; Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] /ping（每分钟最多记一次）"); }
                     // 未认证时只回最小信息（不泄露本机路径）；认证后给全量
                     await WriteJsonAsync(ns, authed
-                        ? new { ok = true, name = "UTSLDaemon", version = "0.2.0", root, logs = logsDir, logsExists = Directory.Exists(logsDir), auth = token.Length > 0, at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }
-                        : new { ok = true, name = "UTSLDaemon", version = "0.2.0", auth = true });
+                        ? new { ok = true, name = "UTSLDaemon", version = "0.2.1", root, logs = logsDir, logsExists = Directory.Exists(logsDir), auth = token.Length > 0, at = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }
+                        : new { ok = true, name = "UTSLDaemon", version = "0.2.1", auth = true });
                     return;
                 case "/metrics":
                     Interlocked.Increment(ref metricsCalls);
