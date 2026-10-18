@@ -47,6 +47,16 @@
     <SolidColorBrush x:Key="HairlineGhost" Color="#08FFFFFF" />
     <SolidColorBrush x:Key="ControlBorder" Color="#1FFFFFFF" />
 
+    <!-- ===== L2 · 强调色与语义色（macOS 系统 tint 表；强调色只有这一个）===== -->
+    <SolidColorBrush x:Key="Accent" Color="#0A84FF" />
+    <SolidColorBrush x:Key="AccentHover" Color="#2B93FF" />
+    <SolidColorBrush x:Key="AccentSoft" Color="#330A84FF" />
+    <SolidColorBrush x:Key="OnAccent" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="OnAccentDim" Color="#CCFFFFFF" />
+    <SolidColorBrush x:Key="SysGreen" Color="#30D158" />
+    <SolidColorBrush x:Key="SysYellow" Color="#FFD600" />
+    <SolidColorBrush x:Key="SysRed" Color="#FF4245" />
+    <SolidColorBrush x:Key="SysGray" Color="#98989F" />
     <!-- ===== 文字（alpha 白；L2 换用，先在此定义好，避免 L0 出现"半套令牌"）===== -->
     <SolidColorBrush x:Key="TextPrimary" Color="#D9FFFFFF" />
     <SolidColorBrush x:Key="TextSecondary" Color="#8CFFFFFF" />

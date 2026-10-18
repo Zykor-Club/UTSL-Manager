@@ -2481,8 +2481,8 @@ public partial class MainWindow : Window
         if (ConsoleView.IsVisible && IsActive)
         {
             DrawChart(CpuChart, CpuYLabels, CpuXLabels, [cpuHist], ["#0A84FF"], "cpu", timeHist);
-            DrawChart(MemChart, MemYLabels, MemXLabels, [memHist], ["#30D158"], "mem", timeHist);
-            DrawChart(NetChart, NetYLabels, NetXLabels, [upHist, downHist], ["#FF9F0A", "#BF5AF2"], "net", timeHist);
+            DrawChart(MemChart, MemYLabels, MemXLabels, [memHist], ["#00D2E0"], "mem", timeHist);
+            DrawChart(NetChart, NetYLabels, NetXLabels, [upHist, downHist], ["#DB34F2", "#FF9230"], "net", timeHist);
         }
     }
 
@@ -2548,8 +2548,8 @@ public partial class MainWindow : Window
         foreach (var s in series) { foreach (var v in s) { if (v > max) { max = v; } } }
         double scale = NiceMax(max);   // 轴取"顺眼"刻度（1/2/5 × 10^n）
 
-        var gridBrush = new SolidColorBrush(Color.Parse("#242429"));
-        var axisBrush = new SolidColorBrush(Color.Parse("#55555E"));
+        var gridBrush = new SolidColorBrush(Color.Parse("#14FFFFFF"));   // L2：网格线也用 alpha 白 hairline
+        var axisBrush = new SolidColorBrush(Color.Parse("#59FFFFFF"));   // L2：轴标签 35% 白（文档允许的唯一破例）
 
         if (!ChartCacheMap.TryGetValue(canvas, out ChartCache? cc)) { cc = new ChartCache(); ChartCacheMap[canvas] = cc; }
         bool gridSame = Math.Abs(cc.W - w) < 0.5 && Math.Abs(cc.H - h) < 0.5 && Math.Abs(cc.Scale - scale) < 1e-9 && cc.Kind == kind;
@@ -4502,8 +4502,8 @@ public partial class MainWindow : Window
             }
             CpuNow.Text = "—"; MemNow.Text = "—"; NetNow.Text = "—";
             DrawChart(CpuChart, CpuYLabels, CpuXLabels, [cpuHist], ["#0A84FF"], "cpu", timeHist);
-            DrawChart(MemChart, MemYLabels, MemXLabels, [memHist], ["#30D158"], "mem", timeHist);
-            DrawChart(NetChart, NetYLabels, NetXLabels, [upHist, downHist], ["#FF9F0A", "#BF5AF2"], "net", timeHist);
+            DrawChart(MemChart, MemYLabels, MemXLabels, [memHist], ["#00D2E0"], "mem", timeHist);
+            DrawChart(NetChart, NetYLabels, NetXLabels, [upHist, downHist], ["#DB34F2", "#FF9230"], "net", timeHist);
         }
         catch { }
     }
