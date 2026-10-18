@@ -284,6 +284,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, ObservableCollection<TermLine>> termViewByServer = [];
     private readonly Dictionary<string, string> termFilterByServer = [];
     private bool suppressFilterEvent;      // 代码改过滤框文本时不要触发重建
+    private bool HideTermNoise;            // "隐藏抓包噪声"（全局偏好，不按档记）
     private string lastLogFile = "";
     private long logPos;
     // ★ 自检修复（卡顿大主因）：ItemsControl 不虚拟化，1500 个 TextBlock（每行还 Wrap）
@@ -724,8 +725,31 @@ public partial class MainWindow : Window
     /// 日志里的正则元字符太多，用户随手输入一个 "[" 就让整条过滤失效，得不偿失。</summary>
     private bool MatchesFilter(string profileId, TermLine line)
     {
+        string text = line.Text ?? "";
+        // ★ 噪声排除："隐藏抓包噪声"勾上时，先把这类每秒刷屏的行筛掉（只影响显示，Raw 不动）
+        if (HideTermNoise && IsNoiseLine(text)) { return false; }
         string q = FilterFor(profileId);
-        return q.Length == 0 || (line.Text ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0;
+        return q.Length == 0 || text.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    /// <summary>终端噪声判定。目前只认 UTSL 每秒刷的抓包行；
+    /// 要加新的，往这个数组里塞一个标记就行（别写成正则，用户输入的正则坑太多）。</summary>
+    private static readonly string[] TermNoiseMarkers =
+    {
+        "[NetPacketChannel]",
+    };
+
+    private static bool IsNoiseLine(string text)
+    {
+        foreach (var m in TermNoiseMarkers) { if (text.IndexOf(m, StringComparison.OrdinalIgnoreCase) >= 0) { return true; } }
+        return false;
+    }
+
+    /// <summary>"隐藏抓包噪声"开关：改完按 Raw 重建显示视图（和过滤同一个入口）。</summary>
+    private void OnHideNoiseToggle(object? sender, RoutedEventArgs e)
+    {
+        HideTermNoise = ChkHideNoise?.IsChecked == true;
+        RebuildTermView(ActiveSrv.Id);
     }
 
     /// <summary>取某档的"显示视图"。
@@ -772,6 +796,13 @@ public partial class MainWindow : Window
     {
         if (TermTitle is null) { return; }
         string t = "服务器终端";
+        // 隐藏噪声时把"藏了多少行"写进标题，否则用户不知道是"没日志"还是"被藏了"
+        if (HideTermNoise)
+        {
+            int noise = 0;
+            foreach (var l in term) { if (IsNoiseLine(l.Text ?? "")) { noise++; } }
+            if (noise > 0) { t += $"（已隐藏噪声 {noise} 行）"; }
+        }
         string q = FilterFor(ActiveSrv.Id);
         if (q.Length > 0) { t += $"（过滤「{q}」：显示 {termView.Count}/{term.Count} 行）"; }
         if (termDropped > 0) { t += $"（更早的 {termDropped} 行已丢弃）"; }

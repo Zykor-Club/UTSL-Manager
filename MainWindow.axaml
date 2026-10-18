@@ -244,6 +244,9 @@
                 <TextBox x:Name="TbTermFilter" Width="150" FontSize="11" Padding="6,1" CornerRadius="6"
                          Watermark="过滤日志（关键字/正则）" ToolTip.Tip="只影响显示：原始缓冲保留，清空过滤即恢复；切档各自记住"
                          TextChanged="OnTermFilterChanged"/>
+                <CheckBox x:Name="ChkHideNoise" Content="隐藏抓包噪声" FontSize="11" IsChecked="False"
+                          ToolTip.Tip="隐藏 [NetPacketChannel] 这类每秒刷屏的噪声行（只影响显示，原始缓冲保留）"
+                          Click="OnHideNoiseToggle"/>
                 <CheckBox x:Name="ChkAutoScroll" Content="自动滚动" FontSize="11" IsChecked="True" Click="OnAutoScrollToggle"/>
                 <Button x:Name="BtnClearTerm" Content="清屏" FontSize="11" Padding="8,1" CornerRadius="6" Click="OnClearTerm"/>
               </StackPanel>
@@ -289,7 +292,7 @@
                                Width="168" FontSize="11" Foreground="{DynamicResource TextTertiary}"
                                FontFamily="Cascadia Mono,Consolas,monospace" VerticalAlignment="Center"/>
                     <TextBlock Grid.Column="1" Text="{Binding ColLevel}" IsVisible="{Binding HasColumns}"
-                               Width="44" Margin="8,0,0,0" FontSize="11" FontWeight="SemiBold"
+                               Width="58" Margin="8,0,0,0" FontSize="11" FontWeight="SemiBold"
                                Foreground="{Binding ColLevelBrush}"
                                FontFamily="Cascadia Mono,Consolas,monospace" VerticalAlignment="Center"/>
                     <TextBlock Grid.Column="2" Text="{Binding ColText}" Foreground="{Binding ColTextBrush}"
