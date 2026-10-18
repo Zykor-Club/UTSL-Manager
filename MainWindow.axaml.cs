@@ -5066,7 +5066,9 @@ public partial class MainWindow : Window
                 });
                 string last = t.LastRunAt.Length > 0 ? $"上次 {t.LastRunAt} · {t.LastResult}" : "还没运行过";
                 var meta = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 10 };
-                meta.Children.Add(new TextBlock { Text = t.CronText, FontSize = 11, Foreground = txtSec });
+                var cronTb = new TextBlock { Text = t.CronText, FontSize = 11, Foreground = txtSec };
+                Avalonia.Controls.ToolTip.SetTip(cronTb, "cron: " + t.Cron);
+                meta.Children.Add(cronTb);
                 meta.Children.Add(new TextBlock
                 {
                     Text = last, FontSize = 11,

@@ -83,28 +83,58 @@ public sealed class ScheduledTask
         return false;
     }
 
-    /// <summary>人类可读的调度描述（界面用；只覆盖常见形态，看不懂就原样显示 cron）。</summary>
+    /// <summary>人类可读的调度描述。覆盖常见形态；看不懂就原样显示 cron（绝不给错的中文）。
+    /// ★ 之前只处理"分钟=数字 + 小时=*"，遇到 `0 */6 * * *` 会退化成原样显示，所以这里按
+    ///   「分钟 / 小时 / 日 / 月 / 周」逐段解释，再拼句子。</summary>
     public string CronText
     {
         get
         {
             var f = (Cron ?? "").Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
             if (f.Length != 5) { return Cron ?? ""; }
-            if (f[0] == "*" && f[1] == "*" && f[2] == "*" && f[3] == "*" && f[4] == "*") { return "每分钟"; }
-            if (f[0].StartsWith("*/") && f[1] == "*" && f[2] == "*" && f[3] == "*" && f[4] == "*") { return $"每 {f[0][2..]} 分钟"; }
-            if (f[1] == "*" && f[2] == "*" && f[3] == "*" && f[4] == "*" && int.TryParse(f[0], out int mm))
+            string mm = f[0], hh = f[1], dom = f[2], mon = f[3], dow = f[4];
+            bool star = dom == "*" && mon == "*" && dow == "*";
+
+            if (mm == "*" && hh == "*" && star) { return "每分钟"; }
+            if (mm.StartsWith("*/") && hh == "*" && star) { return $"每 {mm[2..]} 分钟"; }
+
+            // 小时是 */n：每 n 小时
+            string hourText = hh.StartsWith("*/") && int.TryParse(hh[2..], out int hn) && hn > 0
+                ? $"每 {hn} 小时"
+                : (int.TryParse(hh, out int h) ? $"{h:00}" : "");
+
+            // 分钟：数字 / 列表 / *
+            string minText = mm == "*" ? ("每 " + (hh == "*" ? "分钟" : "小时内的每一分")) : (mm == "0" ? "整点" : mm);
+
+            if (star)
             {
-                return $"每小时 {mm:00} 分";
+                if (hh == "*" && mm != "*") { return mm == "0" ? "每小时整点" : $"每小时第 {minText} 分"; }
+                if (hh.StartsWith("*/")) { return minText == "整点" ? $"{hourText}（整点）" : $"{hourText}（第 {minText} 分）"; }
+                if (int.TryParse(hh, out _) && int.TryParse(mm, out _)) { return $"每天 {hourText}:{int.Parse(mm):00}"; }
+                if (int.TryParse(hh, out _)) { return $"每天 {hourText}:{minText}"; }
             }
-            if (f[2] == "*" && f[3] == "*" && f[4] == "*"
-                && int.TryParse(f[0], out int m2) && int.TryParse(f[1], out int h2))
+            // 周几
+            if (dom == "*" && mon == "*" && dow != "*")
             {
-                return $"每天 {h2:00}:{m2:00}";
+                string day = dow switch
+                {
+                    "0" or "7" => "周日", "1" => "周一", "2" => "周二", "3" => "周三",
+                    "4" => "周四", "5" => "周五", "6" => "周六",
+                    "1-5" => "工作日", "0,6" or "6,0" or "0,7" => "周末",
+                    _ => "周 " + dow,
+                };
+                if (int.TryParse(mm, out int m3) && int.TryParse(hh, out int h3)) { return $"每{day} {h3:00}:{m3:00}"; }
+                return $"每{day}（{Cron}）";
+            }
+            // 每月
+            if (mon == "*" && dow == "*" && dom != "*")
+            {
+                if (int.TryParse(mm, out int m4) && int.TryParse(hh, out int h4)) { return $"每月 {dom} 日 {h4:00}:{m4:00}"; }
+                return $"每月 {dom} 日（{Cron}）";
             }
             return Cron ?? "";
         }
     }
-
     /// <summary>下一次会触发的时刻（从 now 起最多看 48 小时）；算不出来返回空串。
     /// 任务卡上显示"下次 04:00"，比只写 cron 表达式好用得多。</summary>
     public string NextRunText(DateTime now)
