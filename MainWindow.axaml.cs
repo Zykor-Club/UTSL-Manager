@@ -4158,6 +4158,11 @@ public partial class MainWindow : Window
             catch (Exception ex) { ERR("切档换插件数据目录失败: " + ex.Message); }
             ApplyConsoleMode();
             Phase("重置状态");
+            // ★ serverWasUp 原来是"只置 true 从不复位"的单向闩锁：切档后它仍是上一档的"曾经在跑"，
+            //   于是切到一张停着的卡时，掉线自启会拿别人的旧状态把这张卡拉起来。切档必须清零。
+            serverWasUp = false;
+            downTicks = 0;
+            watchdogFailures = 0;
 
             // ⑥ 起新档的隧道与流（★ 显式传目标档：切档期间别的线程不允许建隧道）
             if (target.IsRemote)
@@ -4473,6 +4478,13 @@ public partial class MainWindow : Window
             };
             ConnHostPanel.Children.Add(chkWorldConsoles);
 
+            // ---- 停机方式（两种模式共用）----
+            var stopPanel = new StackPanel { Margin = new Avalonia.Thickness(0, 12, 0, 0) };
+            var tbStopCmd = Field(stopPanel, "停机指令:", ActiveSrv.StopCommand, 200);
+            var tbStopSec = Field(stopPanel, "等待秒数:", ActiveSrv.StopTimeoutSec.ToString(), 90);
+            ConnHostPanel.Children.Add(stopPanel);
+            ConnHostPanel.Children.Add(Hint("停机三段式：先发这条指令到服务端控制台（UTSL 的 /off = 存盘 + 踢人 + 断开），再等「世界全停」或超时，最后才结束进程。空 = 直接结束进程。★ UTSL 宿主进程不会因 /off 自己退出（实测：世界停了、进程还在、REST 仍 200），所以最后那一步不能省；能省掉的是「数据来不及存盘就被杀」。"));
+
             // ---- 多服务器行为（全档通用，落 servers.json 顶层）----
             ConnHostPanel.Children.Add(new TextBlock
             {
@@ -4575,6 +4587,8 @@ public partial class MainWindow : Window
                 Token = tbTok.Text ?? "";
                 ActiveSrv.StartArgs = (tbStartArgs.Text ?? "").Trim();
                 ActiveSrv.StartEnv = (tbStartEnv.Text ?? "").Trim().Replace("\r\n", "\n");
+                ActiveSrv.StopCommand = (tbStopCmd.Text ?? "").Trim();
+                ActiveSrv.StopTimeoutSec = int.TryParse(tbStopSec.Text, out int sts) && sts >= 0 ? Math.Min(sts, 120) : 10;
                 LocalDir = (tbLocal.Text ?? "").Trim().Length > 0 ? (tbLocal.Text ?? "").Trim() : LocalDir;
                 SshHost = (tbSshHost.Text ?? "").Trim();
                 SshPort = int.TryParse(tbSshPort.Text, out int sp) && sp > 0 ? sp : 22;
@@ -6901,6 +6915,7 @@ public partial class MainWindow : Window
         try
         {
             Term($"--- 插件请求停止服务端（{reason}）---", "#FEBC2E");
+            await GracefulStopAsync();
             ProcessResult r = await ProcessBackend.StopAsync();
             Term(r.Message, PickColor(r.Message));
             ErrText.Text = r.Ok ? "插件已请求停止服务端" : r.Message;
@@ -6948,6 +6963,7 @@ public partial class MainWindow : Window
             Term("--- 远端停止中（只杀 UTSL，不动机器人）---", "#79C0FF");
             ErrText.Text = "远端停止中…";
         }
+        await GracefulStopAsync();          // ★ 三段式第 1~2 段：先请它自己收尾（存盘/踢人），等世界全停
         ProcessResult r = await ProcessBackend.StopAsync();
         // ★ 用户手动停机：明确告诉掉线自启"这一次不要自动拉起"（重新点启动会清掉这个标记）
         ActiveSrv.UserStopped = true;
@@ -6958,6 +6974,67 @@ public partial class MainWindow : Window
         }
         else if (!r.Ok) { ErrText.Text = r.Message; }
         NotifyServerState(false);
+    }
+
+    /// <summary>
+    /// 停机三段式（第 1~2 段）：先发停机指令请服务端自己收尾（UTSL 的 /off = 存盘 + 踢人 + 断开），
+    /// 再等「世界全部停掉」或超时，最后才由调用方结束进程。
+    /// ★ 实测（2026-10-18）：UTSL 的宿主进程【不会】因为 /off 自己退出 —— 世界停了、进程还在、REST 仍 200。
+    ///   所以第 3 段（kill）不能省；能省掉的是"数据来不及存盘就被杀"。
+    /// </summary>
+    private async Task GracefulStopAsync()
+    {
+        ServerProfile prof = ActiveSrv;
+        string cmd = (prof.StopCommand ?? "").Trim();
+        int timeoutSec = prof.StopTimeoutSec;
+        if (cmd.Length == 0 || timeoutSec <= 0)
+        {
+            Term("--- 停机：本档未配置停机指令 → 直接结束进程（可用「连接设置 → 停机指令」打开）---", "#8E8E93");
+            return;
+        }
+        try { _ = await Http.GetStringAsync(Rest + "/world/list?token=" + Uri.EscapeDataString(Token)); }
+        catch
+        {
+            Term("--- 停机：REST 不可达 → 跳过停机指令，直接结束进程 ---", "#FEBC2E");
+            return;
+        }
+        try
+        {
+            string url = Rest + "/world/command?token=" + Uri.EscapeDataString(Token)
+                       + "&world=all&cmd=" + Uri.EscapeDataString(cmd) + "&scope=console";
+            string res = await Http.GetStringAsync(url);
+            Term($"→ 停机指令 {cmd}（全部世界）  " + res.Replace("\n", " ").Replace("\r", "").Trim(), "#79C0FF");
+        }
+        catch (Exception ex)
+        {
+            Term("停机指令发送失败（继续直接结束进程）: " + ex.Message, "#FEBC2E");
+            return;
+        }
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.Elapsed.TotalSeconds < timeoutSec)
+        {
+            await Task.Delay(400);
+            if (!UseRemote && !LocalProcessBackend.AnyAliveIn(ServerDir))
+            {
+                Term($"停机：进程已在 {sw.Elapsed.TotalSeconds:F1}s 内自行退出", "#30D158");
+                return;
+            }
+            bool anyRunning;
+            try
+            {
+                string txt = await Http.GetStringAsync(Rest + "/world/list?token=" + Uri.EscapeDataString(Token));
+                using var doc = JsonDocument.Parse(txt);
+                anyRunning = doc.RootElement.TryGetProperty("worlds", out var ws)
+                             && ws.EnumerateArray().Any(w => w.TryGetProperty("running", out var r) && r.GetBoolean());
+            }
+            catch { anyRunning = false; }        // REST 已经不通 = 正在收尾
+            if (!anyRunning)
+            {
+                Term($"停机：世界已全部停止（{sw.Elapsed.TotalSeconds:F1}s，已存盘），接下来结束进程", "#30D158");
+                return;
+            }
+        }
+        Term($"停机：{timeoutSec}s 内世界仍未全停 → 直接结束进程（可能有未保存的进度）", "#FEBC2E");
     }
 
     private async void OnRestartServer(object? sender, RoutedEventArgs e)

@@ -56,6 +56,13 @@ public sealed class ServerProfile
     /// <summary>本机档启动时额外注入的环境变量（每行 KEY=VALUE；空 = 不加）。</summary>
     public string StartEnv { get; set; } = "";
 
+    /// <summary>停机指令（发到服务端控制台，scope=console，world=all）。UTSL 的 /off = 存盘 + 踢人 + 断开。
+    ///   空 = 不发指令，直接结束进程。</summary>
+    public string StopCommand { get; set; } = "/off";
+
+    /// <summary>发完停机指令后等"世界全停"的秒数（= 已存盘），超时才强制结束进程。0 = 不等。</summary>
+    public int StopTimeoutSec { get; set; } = 10;
+
     /// <summary>旧版本写死的启动参数：只有「主档」（本机档里的第一台）在缺键时才默认用它。</summary>
     public const string LegacyStartArgs = "-joinserver first -logmode txt";
 
@@ -343,6 +350,10 @@ public sealed class ServersConfig
                 //   （第二份部署带 -joinserver first -logmode txt 会起不来，实测）。
                 p.StartArgs = so["paths"]?["startArgs"]?.ToString() ?? "";
                 p.StartEnv = so["paths"]?["startEnv"]?.ToString() ?? "";
+                p.StopCommand = so["paths"]?["stopCommand"]?.ToString() ?? "/off";
+                if (int.TryParse(so["paths"]?["stopTimeoutSec"]?.ToString(), out int stsec) && stsec >= 0) { p.StopTimeoutSec = Math.Min(stsec, 120); }
+                // ★ 用户手动停过机这件事要落盘：否则管理器重启后这个标记丢失，掉线自启可能把它又拉起来
+                p.UserStopped = so["paths"]?["userStopped"]?.GetValue<bool>() ?? false;
                 if (!p.IsRemote)
                 {
                     if (so["paths"]?["startArgs"] is null && !localSeen) { p.StartArgs = ServerProfile.LegacyStartArgs; }
@@ -382,6 +393,8 @@ public sealed class ServersConfig
                     ["forceLocal"] = p.ForceLocal, ["worldConsoles"] = p.WorldConsoles,
                     // 本机档启动参数/环境变量（空串也要落盘：靠键在不在区分"没配过"和"故意清空"）
                     ["startArgs"] = p.StartArgs, ["startEnv"] = p.StartEnv,
+                    ["stopCommand"] = p.StopCommand, ["stopTimeoutSec"] = p.StopTimeoutSec,
+                    ["userStopped"] = p.UserStopped,
                 },
             };
             // ★ 安全：令牌一律 DPAPI 加密后落盘（同机的其他用户读到也解不开）；加密不可用才退回明文。

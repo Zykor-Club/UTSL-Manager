@@ -314,6 +314,7 @@ object CollectMetrics()
                 p.Refresh();
                 string fp = "";
                 try { fp = p.MainModule?.FileName ?? ""; } catch { }
+                if (!InRootPath(fp)) { continue; }        // ★ 只算本部署目录里的进程（同机多部署时不能把别人的算进来）
                 seen.Add((p.Id, fp, p.PrivateMemorySize64, p.WorkingSet64, p.Threads.Count, p.HandleCount, p.TotalProcessorTime));
             }
             catch { }
@@ -497,6 +498,25 @@ object ProcStatus()
         if (p is not null && !p.HasExited) { p.Refresh(); running = true; pid = p.Id; privMB = p.PrivateMemorySize64 / 1048576; }
     }
     catch { }
+    // ★ 不是本 agent 拉起的（例如历史上用 SSH 启动器起的）也要认出来：按【本部署目录】扫，且必须是活进程。
+    //   原来只看 serverProc → 那种情况下 running 永远 false，管理器会误判"服务端停了"。
+    if (!running)
+    {
+        try
+        {
+            foreach (Process q in Process.GetProcessesByName("UnifierTSL"))
+            {
+                using (q)
+                {
+                    if (!InRoot(q)) { continue; }
+                    q.Refresh();
+                    running = true; pid = q.Id; privMB = q.PrivateMemorySize64 / 1048576;
+                    break;
+                }
+            }
+        }
+        catch { }
+    }
     return new { ok = true, running, pid, privateMB = privMB, exe = ServerExePath(), ring = stdoutRing.Count };
 }
 
@@ -540,7 +560,20 @@ async Task ProcStartAsync(NetworkStream ns, string consoleMode = "", string star
         // ★ 原来写死 -joinserver first -logmode txt（第二份部署带它必挂）。现在按档传，空 = 不带参数。
         string startArgsTrim = (startArgs ?? "").Trim();
         sb.AppendLine("\"" + ServerExePath() + "\"" + (startArgsTrim.Length > 0 ? " " + startArgsTrim : ""));
-        try { File.WriteAllText(wrapper, sb.ToString(), new UTF8Encoding(false)); }
+        try
+        {
+            // ★ .cmd 必须用【系统 OEM 代码页】写：cmd.exe 按 ANSI/OEM 解析批处理文件内容，
+            //   用 UTF-8 写时，路径里的中文（例如 C:\Users\星梦\…）会变成 ?? → cmd 报"系统找不到指定的路径"（实测）。
+            //   远端 C:\utsl-deploy 是纯 ASCII，所以这个坑以前没暴露。
+            Encoding enc = new UTF8Encoding(false);
+            try
+            {
+                Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+                enc = Encoding.GetEncoding(NativeMethods.GetOEMCP());   // ★ 不能用 CurrentCulture：InvariantGlobalization 下拿不到 936
+            }
+            catch { }
+            File.WriteAllText(wrapper, sb.ToString(), enc);
+        }
         catch (Exception ex) { await WriteJsonAsync(ns, new { ok = false, error = "写启动脚本失败: " + ex.Message }); return; }
         var psi = new ProcessStartInfo("cmd.exe")
         {
@@ -586,9 +619,24 @@ async Task ProcStopAsync(NetworkStream ns)
     {
         var p = serverProc;
         if (p is not null && !p.HasExited) { p.Kill(entireProcessTree: true); killed++; }
-        // 子世界控制台客户端也要收掉
-        foreach (var c in Process.GetProcessesByName("UnifierTSL.ConsoleClient")) { try { c.Kill(); killed++; } catch { } }
-        await WriteJsonAsync(ns, new { ok = true, killed });
+        // 子世界控制台客户端 / 别处启动的本部署进程也要收掉，但**只收本部署目录里的**：
+        //   原来按进程名一刀切，同机多部署时会把别人的服务端一起杀掉。
+        int outside = 0;
+        foreach (string procName in new[] { "UnifierTSL", "UnifierTSL.ConsoleClient" })
+        {
+            foreach (var c in Process.GetProcessesByName(procName))
+            {
+                try
+                {
+                    if (c.HasExited) { continue; }
+                    if (!InRoot(c)) { outside++; continue; }
+                    c.Kill(); killed++;
+                }
+                catch { }
+                finally { try { c.Dispose(); } catch { } }
+            }
+        }
+        await WriteJsonAsync(ns, new { ok = true, killed, outside });
     }
     catch (Exception ex) { await WriteJsonAsync(ns, new { ok = false, error = ex.Message }); }
 }
@@ -648,6 +696,25 @@ bool IsRootItself(string full)
         return f.Equals(r, StringComparison.OrdinalIgnoreCase);
     }
     catch { return true; }   // 判不了就按"是根"处理（安全侧）
+}
+
+/// <summary>该 exe 路径是否就在本 agent 的部署根目录【之内】（带分隔符比，不吃 utsl-deploy-b 这种同名前缀）。</summary>
+bool InRootPath(string? file)
+{
+    if (string.IsNullOrEmpty(file)) { return false; }
+    try
+    {
+        string r = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return file.StartsWith(r, StringComparison.OrdinalIgnoreCase);
+    }
+    catch { return false; }
+}
+
+/// <summary>该进程是否属于本 agent 的部署根。★ 原来判活/停机都按进程名一刀切：
+/// 同一台机器上还有别的 UTSL 部署时，停一份会把另一份一起杀掉。</summary>
+bool InRoot(Process p)
+{
+    try { return !p.HasExited && InRootPath(p.MainModule?.FileName); } catch { return false; }
 }
 
 bool ResolveSafe(string rel, out string full, out string err)
@@ -774,7 +841,7 @@ Dictionary<string, object> TrimServerMemory()
         {
             try
             {
-                if (p.HasExited) { continue; }
+                if (p.HasExited || !InRoot(p)) { continue; }
                 before += p.WorkingSet64;
                 NativeMethods.EmptyWorkingSet(p.Handle);
                 p.Refresh();
