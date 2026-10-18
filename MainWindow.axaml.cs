@@ -2651,9 +2651,25 @@ public partial class MainWindow : Window
             var pts = new List<Avalonia.Point>();
             for (int i = 0; i < s.Count; i++) { pts.Add(new Avalonia.Point(XFor(i, w), YFor(s[i], scale, h))); }
             var brush = new SolidColorBrush(Color.Parse(colors[si]));
-            // ★ 三张图统一"纯折线 + 末端当前值圆点"，**不做面积填充**。
-            //   曾经按"有波动才填 10%"处理 → 内存是一条裸线、网络却有一大块暗红（两条线各填 10% 叠出来的），
-            //   三张图观感不一致比"少一个填充"更伤质感。Apple 的图表就是一条线 + 末端一点。
+            // ★ 三张图统一"折线 + 竖向渐变面积 + 末端圆点"。
+            //   纯裸线太干；纯色块在平直序列上又是一块实心（原来的毛病）。
+            //   渐变面积（顶部一线颜色 → 底部透明）两者都不是：有份量、又不糊住网格。
+            // 面积填充：**实心 12%**（画在折线之前，线压在上面）。
+            //   试过两种都更差：纯裸线太干；竖向渐变面积在"平直序列"上会变成一个半透明方框（内存那张）。
+            //   实心低透明度是 Activity Monitor 的做法：起伏序列 = 带峰的填充面积，平直序列 = 一条"填充量规"，
+            //   两者是同一种语言，不会互相打架。想调浓淡只改下面这个常数。
+            // ★ 只给第一条序列填充：网络的"上行/下行"两条线各填 12% 会叠成浑浊的棕色，
+            //   主序列填充 + 次序列只画线，是仪表盘里标准的层级做法。
+            var c0 = Color.Parse(colors[si]);
+            if (si == 0)
+            {
+                var areaPts = new List<Avalonia.Point>(pts) { new(pts[^1].X, PlotBottom(h)), new(pts[0].X, PlotBottom(h)) };
+                canvas.Children.Add(new Avalonia.Controls.Shapes.Polygon
+                {
+                    Points = areaPts,
+                    Fill = new SolidColorBrush(Color.FromArgb(0x1F, c0.R, c0.G, c0.B)),   // 12% 不透明
+                });
+            }
             canvas.Children.Add(new Avalonia.Controls.Shapes.Polyline
             {
                 Points = pts,
