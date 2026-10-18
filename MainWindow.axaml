@@ -271,8 +271,20 @@
               </ListBox.Styles>
               <ListBox.ItemTemplate>
                 <DataTemplate>
-                  <TextBlock Text="{Binding Text}" Foreground="{Binding Brush}" FontSize="13"
-                             FontFamily="Cascadia Mono,Consolas,monospace" TextWrapping="Wrap" Margin="12,0,12,1"/>
+                  <!-- ★ 三列：时间（定宽 150，暗）｜级别（定宽 44，上色）｜消息（中性色）。
+                       不是日志行时前两列 IsVisible=False 且定宽列会缩到 0，管理层消息照旧从左边开始。 -->
+                  <Grid ColumnDefinitions="Auto,Auto,*" Margin="12,0,12,1" ToolTip.Tip="{Binding Text}">
+                    <TextBlock Grid.Column="0" Text="{Binding ColTime}" IsVisible="{Binding HasColumns}"
+                               Width="168" FontSize="11" Foreground="{DynamicResource TextTertiary}"
+                               FontFamily="Cascadia Mono,Consolas,monospace" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="1" Text="{Binding ColLevel}" IsVisible="{Binding HasColumns}"
+                               Width="44" Margin="8,0,0,0" FontSize="11" FontWeight="SemiBold"
+                               Foreground="{Binding ColLevelBrush}"
+                               FontFamily="Cascadia Mono,Consolas,monospace" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="2" Text="{Binding ColText}" Foreground="{Binding ColTextBrush}"
+                               FontSize="13" FontFamily="Cascadia Mono,Consolas,monospace"
+                               TextWrapping="Wrap"/>
+                  </Grid>
                 </DataTemplate>
               </ListBox.ItemTemplate>
             </ListBox>

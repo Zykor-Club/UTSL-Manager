@@ -64,11 +64,66 @@ public sealed class ServerCardRow : System.ComponentModel.INotifyPropertyChanged
     public string NetText { get => netText; set { if (netText == value) { return; } netText = value; Raise(nameof(NetText)); } }
 }
 
-/// <summary>终端里的一行（文字 + 颜色）。</summary>
+/// <summary>终端里的一行（文字 + 颜色）。
+/// ★ 三列显示（时间 / 级别 / 消息）：服务端日志行会被拆成三列，只给"级别"上色；
+///   管理层自己写的消息（"已切换到…"）不拆列，原样落在消息列。
+///   过滤 / 暂停计数 / 复制 仍然只看 Text（原始整行），所以这些功能的语义完全没变。</summary>
 public sealed class TermLine
 {
-    public string Text { get; set; } = "";
+    private static readonly System.Text.RegularExpressions.Regex LogRx = new(
+        @"^(?<t>\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+)\s+[+-]\d\d:\d\d\s+\[(?<lv>[A-Za-z]+)\](?<rest>.*)$",   // 时间列不含时区偏移（省 7 个字符，够宽不贴边）
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // Immutable 画刷：不可变、无 UI 线程亲和性（TermLine 可能在后台线程构造）
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush NeutralText =
+        new(Avalonia.Media.Color.Parse("#D9FFFFFF"));
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush LvInfo =
+        new(Avalonia.Media.Color.Parse("#30D158"));
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush LvWarn =
+        new(Avalonia.Media.Color.Parse("#FFD600"));
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush LvErr =
+        new(Avalonia.Media.Color.Parse("#FF4245"));
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush LvDebug =
+        new(Avalonia.Media.Color.Parse("#8CFFFFFF"));
+
+    private string _text = "";
+    public string Text
+    {
+        get => _text;
+        set { _text = value ?? ""; Parse(); }
+    }
+
     public IBrush Brush { get; set; } = new SolidColorBrush(Color.Parse("#B9B9C0"));
+
+    /// <summary>是否拆成了三列（服务端日志行才有时间/级别）。</summary>
+    public bool HasColumns { get; private set; }
+    public string ColTime { get; private set; } = "";
+    public string ColLevel { get; private set; } = "";
+    public string ColText { get; private set; } = "";
+    /// <summary>级别色：只给级别上色；消息一律中性色（整行染色会把日志看得更吵）。</summary>
+    public IBrush ColLevelBrush { get; private set; } = LvInfo;
+    public IBrush ColTextBrush => HasColumns ? NeutralText : Brush;
+
+    private void Parse()
+    {
+        var m = LogRx.Match(_text);
+        if (!m.Success)
+        {
+            HasColumns = false; ColTime = ""; ColLevel = ""; ColText = _text;
+            return;
+        }
+        HasColumns = true;
+        ColTime = m.Groups["t"].Value;
+        ColLevel = m.Groups["lv"].Value.ToUpperInvariant();
+        ColText = m.Groups["rest"].Value.TrimStart();
+        ColLevelBrush = ColLevel switch
+        {
+            "WARN" or "WARNING" => LvWarn,
+            "ERROR" or "ERR" or "FATAL" => LvErr,
+            "DEBUG" or "TRACE" => LvDebug,
+            _ => LvInfo,           // Info / OK / Success 都是绿
+        };
+    }
 }
 
 public partial class MainWindow : Window
