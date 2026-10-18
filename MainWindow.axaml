@@ -218,9 +218,9 @@
         <Border Grid.Row="3" Background="#171A20" BorderBrush="#242A33" BorderThickness="1" CornerRadius="12" Margin="0,0,0,10" ClipToBounds="True">
           <DockPanel>
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="14,9,14,7">
-              <TextBlock Grid.Column="0" Text="服务器终端" FontSize="11" Foreground="#9BA3AE"/>
+              <TextBlock Grid.Column="0" x:Name="TermTitle" Text="服务器终端" FontSize="11" Foreground="#9BA3AE"/>
               <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10">
-                <CheckBox x:Name="ChkAutoScroll" Content="自动滚动" FontSize="11" IsChecked="True"/>
+                <CheckBox x:Name="ChkAutoScroll" Content="自动滚动" FontSize="11" IsChecked="True" Click="OnAutoScrollToggle"/>
                 <Button x:Name="BtnClearTerm" Content="清屏" FontSize="11" Padding="8,1" CornerRadius="6" Click="OnClearTerm"/>
               </StackPanel>
             </Grid>
@@ -234,7 +234,13 @@
             <!-- ★ 自检修复（卡顿主因）：原来是 ScrollViewer + ItemsControl，Avalonia 的 ItemsControl 不虚拟化，
                  300~1500 个 TextBlock（且 TextWrapping=Wrap）会让任何布局变化都重新测量整个日志 —— 改成 ListBox（自带虚拟化）。 -->
             <ListBox x:Name="TermLines" Padding="0,0,12,0" Background="#0E0E10" BorderThickness="0" CornerRadius="0"
-                     ScrollViewer.AllowAutoHide="False" SelectionMode="Single" IsTabStop="False">
+                     ScrollViewer.AllowAutoHide="False" SelectionMode="Multiple" IsTabStop="False"
+                     KeyDown="OnTermKeyDown">
+              <ListBox.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="复制选中行 (Ctrl+C)" Click="OnCopyTermClick"/>
+                </ContextMenu>
+              </ListBox.ContextMenu>
               <ListBox.Styles>
                 <Style Selector="ListBoxItem">
                   <Setter Property="Padding" Value="0"/>

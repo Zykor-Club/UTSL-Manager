@@ -4,6 +4,7 @@ using System.Net.NetworkInformation;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Avalonia.Controls;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -571,7 +572,15 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>往终端追加一行（带颜色 + 上限 + 自动滚动）。</summary>
+    // ===== 终端：攒批 / 溢出留痕 / 暂停滚动 =====
+    private readonly List<TermLine> termPending = [];
+    private DispatcherTimer? termFlushTimer;
+    private int termDropped;        // 因上限被丢掉的旧行总数（给标题显示，避免"以为日志断流"）
+    private int termPausedNew;      // 暂停滚动期间新增的行数
+
+    /// <summary>往终端追加一行（带颜色）。★ 不直接进集合：先入待办，由 50ms 定时器一次性刷进去。
+    /// 原来每行一次集合 Add + 一次 ScrollIntoView 的 Dispatcher.Post —— 日志高峰（服务端刷屏）时
+    /// 每秒几十次布局，UI 会顿；攒批后同样的行数只需一次布局。</summary>
     private void Term(string text, string color)
     {
         // ★ 修 bug#3：插件命令在 Task.Run 里执行、后台任务异常也会走 ctx.Log → Term，
@@ -582,16 +591,7 @@ public partial class MainWindow : Window
             Dispatcher.UIThread.Post(() => Term(text, color));
             return;
         }
-        // ★ 写"当前激活档"的缓冲：字段 term 是"当前显示的那一份"，但它可能被切档过程短暂置换成
-        //   别的档（历史 bug：切到新档后终端出现上一台的日志）。按 ActiveSrv.Id 路由可以从根上避免。
-        var target = TermFor(ActiveSrv.Id);
-        target.Add(new TermLine { Text = text, Brush = GetBrush(color) });
-        if (target.Count > MaxTermLines)
-        {
-            int drop = target.Count - MaxTermLines;
-            for (int i = 0; i < drop; i++) { target.RemoveAt(0); }
-        }
-        // 事件总线（P1-5）：没有插件订阅时零开销；再入保护防止插件在处理里又写日志造成递归
+        // 事件总线（P1-5）：订阅者要实时，逐行触发；再入保护防止插件在处理里又写日志造成递归
         if (!raisingTerminal && pluginHost is not null && pluginHost.Events.HasTerminalLineSubscribers)
         {
             raisingTerminal = true;
@@ -599,13 +599,86 @@ public partial class MainWindow : Window
             catch { }
             finally { raisingTerminal = false; }
         }
+        termPending.Add(new TermLine { Text = text, Brush = GetBrush(color) });
+        if (ChkAutoScroll?.IsChecked != true) { termPausedNew++; }   // 暂停滚动：只计数，不打断用户看的内容
+        if (termFlushTimer is null)
+        {
+            termFlushTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+            termFlushTimer.Tick += (_, _) => FlushTermPending();
+            termFlushTimer.Start();
+        }
+    }
+
+    /// <summary>把攒下的行一次性写进终端（50ms 一次）。</summary>
+    private void FlushTermPending()
+    {
+        if (termPending.Count == 0) { return; }
+        // ★ 写"当前激活档"的缓冲：字段 term 是"当前显示的那一份"，但它可能被切档过程短暂置换成
+        //   别的档（历史 bug：切到新档后终端出现上一台的日志）。按 ActiveSrv.Id 路由可以从根上避免。
+        var target = TermFor(ActiveSrv.Id);
+        foreach (var line in termPending) { target.Add(line); }
+        termPending.Clear();
+        if (target.Count > MaxTermLines)
+        {
+            int drop = target.Count - MaxTermLines;
+            for (int i = 0; i < drop; i++) { target.RemoveAt(0); }
+            termDropped += drop;
+        }
         if (ChkAutoScroll?.IsChecked == true)
         {
-            Dispatcher.UIThread.Post(() =>
-            {
-                try { if (term.Count > 0) { TermLines.ScrollIntoView(term[^1]); } } catch { }
-            }, DispatcherPriority.Background);
+            try { if (term.Count > 0) { TermLines.ScrollIntoView(term[^1]); } } catch { }
         }
+        UpdateTermTitle();
+    }
+
+    /// <summary>标题上写清"丢了多少行 / 暂停期间新增多少行"——静默丢弃会让人以为日志断流。</summary>
+    private void UpdateTermTitle()
+    {
+        if (TermTitle is null) { return; }
+        string t = "服务器终端";
+        if (termDropped > 0) { t += $"（更早的 {termDropped} 行已丢弃）"; }
+        if (ChkAutoScroll?.IsChecked != true && termPausedNew > 0) { t += $"（已暂停，期间新增 {termPausedNew} 行）"; }
+        if (TermTitle.Text != t) { TermTitle.Text = t; }
+    }
+
+    /// <summary>自动滚动勾掉 = 暂停（继续写缓冲，只是不跟到底）；勾回来 = 一次滚到底。</summary>
+    private void OnAutoScrollToggle(object? sender, RoutedEventArgs e)
+    {
+        if (ChkAutoScroll?.IsChecked == true)
+        {
+            termPausedNew = 0;
+            try { if (term.Count > 0) { TermLines.ScrollIntoView(term[^1]); } } catch { }
+        }
+        UpdateTermTitle();
+    }
+
+    /// <summary>Ctrl+C：有选中行才复制（否则不拦，留给默认行为）。</summary>
+    private void OnTermKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
+    {
+        if (e.Key == Avalonia.Input.Key.C && e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control))
+        {
+            if (CopySelectedTerm()) { e.Handled = true; }
+        }
+    }
+
+    private void OnCopyTermClick(object? sender, RoutedEventArgs e) => CopySelectedTerm();
+
+    private bool CopySelectedTerm()
+    {
+        try
+        {
+            var picked = TermLines.SelectedItems is null
+                ? new List<string>()
+                : TermLines.SelectedItems.OfType<TermLine>().Select(l => l.Text).ToList();
+            if (picked.Count == 0) { return false; }
+            string text = string.Join(Environment.NewLine, picked);
+            var clip = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clip is null) { ERR("复制失败：拿不到剪贴板"); return false; }
+            _ = clip.SetTextAsync(text);
+            ERR($"已复制 {picked.Count} 行到剪贴板");
+            return true;
+        }
+        catch (Exception ex) { ERR("复制失败: " + ex.Message); return false; }
     }
 
     private static string LevelOf(string color) => color switch
@@ -2591,6 +2664,9 @@ public partial class MainWindow : Window
     }
 
     /// <summary>往"指定档"的终端缓冲写一行（用于后台重载这类异步来源）。</summary>
+    /// <summary>往【指定档】的终端追加一行（后台档日志流走这里）。
+    /// ★ 服务端日志行是终端里的绝大部分内容，所以"溢出留痕 / 暂停计数"也必须在这里跟着算，
+    ///   否则标题只统计管理层自己那几行，用户看到的仍是"日志莫名少了"。</summary>
     private void TermTo(string profileId, string text, string color)
     {
         if (!Dispatcher.UIThread.CheckAccess()) { Dispatcher.UIThread.Post(() => TermTo(profileId, text, color)); return; }
@@ -2598,7 +2674,15 @@ public partial class MainWindow : Window
         {
             var c = TermFor(profileId);
             c.Add(new TermLine { Text = text, Brush = GetBrush(color) });
-            while (c.Count > MaxTermLines) { c.RemoveAt(0); }
+            int dropped = 0;
+            while (c.Count > MaxTermLines) { c.RemoveAt(0); dropped++; }
+            // 只有"当前显示的那一份"才影响标题与暂停计数
+            if (string.Equals(profileId, ActiveSrv.Id, StringComparison.Ordinal))
+            {
+                if (dropped > 0) { termDropped += dropped; }
+                if (ChkAutoScroll?.IsChecked != true) { termPausedNew++; }
+                UpdateTermTitle();
+            }
         }
         catch { }
     }
