@@ -1,0 +1,58 @@
+<!--
+  L4 · 动效（Motion）
+  ────────────────────────────────────────────────────────────────────────────
+  原则（UTSL-UI-优化建议.md §四 L4）：hover 必须有过渡，但**不做装饰性动画**；
+  macOS 的时长是 fast 150ms / normal 250ms，缓动默认（EaseOut 类），只动颜色与透明度。
+
+  ★ 这里只加"过渡"，不加关键帧动画 —— 动效只为引导注意力，不为炫技。
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- 按钮：底色/描边 150ms -->
+  <Style Selector="Button">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.15" />
+        <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <!-- 右侧导航：底色画在模板里的 ContentPresenter 上，过渡也要挂在它身上 -->
+  <Style Selector="Button.menu /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.15" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <!-- 服务器列表行：hover / 选中 都是换底色，150ms 过渡比瞬变"高级"得多 -->
+  <Style Selector="Border.srvcard">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.15" />
+        <BrushTransition Property="BorderBrush" Duration="0:0:0.15" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <!-- 列表行（世界名 / 终端行）hover -->
+  <Style Selector="ListBoxItem /template/ ContentPresenter">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.12" />
+      </Transitions>
+    </Setter>
+  </Style>
+
+  <!-- 进程/状态点：颜色变化（灰→绿→黄）也走过渡，闪一下就变绿会显得廉价 -->
+  <Style Selector="Border.dot">
+    <Setter Property="Transitions">
+      <Transitions>
+        <BrushTransition Property="Background" Duration="0:0:0.20" />
+      </Transitions>
+    </Setter>
+  </Style>
+</Styles>

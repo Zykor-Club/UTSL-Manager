@@ -548,22 +548,26 @@
               <TextBlock x:Name="ConnState" Text="未运行" FontSize="11" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
             </StackPanel>
           </Border>
-          <!-- ★ 连接健康三灯（移植 MCSManager 的显式连接状态思路）：隧道 / 命令通道 / REST 接口 -->
-          <Border Background="{DynamicResource FillPrimary}" BorderBrush="{DynamicResource Hairline}" BorderThickness="1" CornerRadius="6" Padding="10,7" Margin="0,4,0,0" ToolTip.Tip="绿灯=正常；橙灯=降级/回退；灰灯=未启用">
-            <StackPanel Orientation="Horizontal" Spacing="12">
-              <StackPanel Orientation="Horizontal" Spacing="5">
-                <Border x:Name="DotTunnel" Width="7" Height="7" CornerRadius="3.5" Background="{DynamicResource SysGray}" VerticalAlignment="Center"/>
+          <!-- ★ 连接健康三灯（移植 MCSManager 的显式连接状态思路）：隧道 / 命令通道 / REST 接口
+               形态用 macOS「分段控件」的轨道（一条底 + 细分割线），但语义仍是三个状态灯，
+               所以没有"选中段填充"——颜色只表达健康度。 -->
+          <Border Classes="segment" Margin="0,4,0,0" ToolTip.Tip="绿灯=正常；橙灯=降级/回退；灰灯=未启用">
+            <Grid ColumnDefinitions="*,Auto,*,Auto,*">
+              <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="5" HorizontalAlignment="Center" Margin="0,4">
+                <Border Classes="dot" x:Name="DotTunnel" Width="7" Height="7" CornerRadius="3.5" Background="{DynamicResource SysGray}" VerticalAlignment="Center"/>
                 <TextBlock Text="隧道" FontSize="11" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
               </StackPanel>
-              <StackPanel Orientation="Horizontal" Spacing="5">
-                <Border x:Name="DotShell" Width="7" Height="7" CornerRadius="3.5" Background="{DynamicResource SysGray}" VerticalAlignment="Center"/>
+              <Border Grid.Column="1" Width="1" Background="{DynamicResource Hairline}" Margin="0,5"/>
+              <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="5" HorizontalAlignment="Center" Margin="0,4">
+                <Border Classes="dot" x:Name="DotShell" Width="7" Height="7" CornerRadius="3.5" Background="{DynamicResource SysGray}" VerticalAlignment="Center"/>
                 <TextBlock Text="通道" FontSize="11" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
               </StackPanel>
-              <StackPanel Orientation="Horizontal" Spacing="5">
-                <Border x:Name="DotRest" Width="7" Height="7" CornerRadius="3.5" Background="{DynamicResource SysGray}" VerticalAlignment="Center"/>
+              <Border Grid.Column="3" Width="1" Background="{DynamicResource Hairline}" Margin="0,5"/>
+              <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="5" HorizontalAlignment="Center" Margin="0,4">
+                <Border Classes="dot" x:Name="DotRest" Width="7" Height="7" CornerRadius="3.5" Background="{DynamicResource SysGray}" VerticalAlignment="Center"/>
                 <TextBlock Text="接口" FontSize="11" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
               </StackPanel>
-            </StackPanel>
+            </Grid>
           </Border>
           <Grid ColumnDefinitions="*,*" Margin="0,4,0,0">
             <Button Grid.Column="0" x:Name="BtnStart" Content="▶  启动" FontSize="13" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Padding="0,6" CornerRadius="6" Margin="0,0,3,0" Click="OnStartServer"/>
