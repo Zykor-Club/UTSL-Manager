@@ -5954,7 +5954,12 @@ public partial class MainWindow : Window
     }
 
     /// <summary>服务端世界存档目录（唯一地图来源，不读别处）。</summary>
-    private static string WorldsDir => Path.Combine(Env.FileRoot, "lib", "Saves", "Worlds");
+    /// <summary>世界目录。★ 必须按档的 legacyDataRoot 分流：
+    ///   legacy=true  → &lt;根&gt;\lib\Saves\Worlds（服务端 A，30 个 .wld）
+    ///   legacy=false → &lt;根&gt;\Saves\Worlds    （服务端 B，如 Big3/BlankWorldB）
+    /// 原来硬编码 lib，导致非 legacy 布局的档打开地图找不到世界（报 0×0 / 找不到文件）。</summary>
+    private string WorldsDir => Path.Combine(Env.FileRoot,
+        ActiveSrv.LegacyDataRoot ? Path.Combine("lib", "Saves", "Worlds") : Path.Combine("Saves", "Worlds"));
 
     // 下拉里几组条目的前缀标记（用前缀而不是自定义对象，是因为 ItemsSource 用的是字符串）
     private const string VirtualMarker = "假世界：";      // 尘歌壶等虚拟世界的存档
@@ -5987,7 +5992,7 @@ public partial class MainWindow : Window
         return names;
     }
 
-    private static List<string> WorldFilesIn(string subDir, Func<string, bool>? filter = null)
+    private List<string> WorldFilesIn(string subDir, Func<string, bool>? filter = null)
         => FsList(Path.Combine(WorldsDir, subDir))
             .Where(e => !e.IsDir && e.Name.EndsWith(".wld", StringComparison.OrdinalIgnoreCase))
             .Where(e => e.Size > 1024)          // 0 字节/截断的存档列出来也渲染不了（远端就有一个），直接过滤
@@ -6014,7 +6019,7 @@ public partial class MainWindow : Window
     private static string tplCacheKey = "";
 
     /// <summary>拉一次世界目录（带 60 秒缓存），返回 文件名→(大小, mtime)。</summary>
-    private static Dictionary<string, (long Size, DateTime Mtime)> WorldInfoSnapshot(bool force = false)
+    private Dictionary<string, (long Size, DateTime Mtime)> WorldInfoSnapshot(bool force = false)
     {
         string key = WorldsDir;
         if (!force && worldInfoKey == key && Environment.TickCount64 - worldInfoAtMs < 60000 && worldInfoCache.Count > 0)
@@ -6083,6 +6088,9 @@ public partial class MainWindow : Window
             }
             return list;
         });
+        // ★ 诊断：一条日志就能看出"这个档从哪个目录、读到了多少个世界"
+        //   legacy=true → lib\Saves\Worlds；legacy=false → Saves\Worlds
+        Program.Log($"MAP picker profile={ActiveSrv.Name} legacy={ActiveSrv.LegacyDataRoot} dir={WorldsDir} items={items.Count}");
         MapPicker.ItemsSource = items;
         MapPicker.SelectedIndex = items.Count == 0 ? -1 : Math.Max(0, items.IndexOf(sel));
     }
@@ -6106,7 +6114,7 @@ public partial class MainWindow : Window
         catch { return false; }
     }
 
-    private static string? ResolveWorldFile(string rel, Action<string>? status = null)
+    private string? ResolveWorldFile(string rel, Action<string>? status = null)
     {
         string full = Path.Combine(WorldsDir, rel);
         Program.Log($"MAP resolve rel={rel} full={full} remote={Env.IsRemote} root={Env.FileRoot}");
@@ -6402,7 +6410,7 @@ public partial class MainWindow : Window
 
     /// <summary>取区块模板文件（只从服务端 _utpl_templates 取）；远端模式拉一份本地副本。
     /// ★ 暂存不用 %TEMP%（这台机器上它不可写），放程序目录下。</summary>
-    private static async Task<string?> ResolveTemplateFileAsync(string name)
+    private async Task<string?> ResolveTemplateFileAsync(string name)
     {
         string full = Path.Combine(WorldsDir, "_utpl_templates", name + UtplCodec.Extension);
         if (!Env.IsRemote) { return File.Exists(full) ? full : null; }
