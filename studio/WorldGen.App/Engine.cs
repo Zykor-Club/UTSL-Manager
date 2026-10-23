@@ -25,6 +25,7 @@ public sealed class StudioEngine
     public event Action<string, double>? Stage;      // (阶段文案, 0..100)
 
     private Process? _engine;
+    private string _lastStage = "";
 
     // ---- Win32：CREATE_NEW_CONSOLE + 最小化窗口 ----
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -133,6 +134,24 @@ public sealed class StudioEngine
                 Stage?.Invoke("生成中（UTSL 无阶段回调前按时间估算）", lastPct);
             }
 
+            // ★ 引擎写出的实时阶段（"正在生成沙漠/清理树/放置陷阱"）+ 真实百分比
+            try
+            {
+                string live = Path.Combine(r.DeployRoot, "live", "progress.json");
+                if (File.Exists(live))
+                {
+                    using var fs = File.OpenRead(live);
+                    using var doc = JsonDocument.Parse(fs);
+                    string stage = doc.RootElement.TryGetProperty("stage", out var sEl) ? sEl.GetString() ?? "" : "";
+                    double p = doc.RootElement.TryGetProperty("pct", out var pEl) ? pEl.GetDouble() : 0;
+                    if (stage.Length > 0)
+                    {
+                        if (stage != _lastStage) { _lastStage = stage; Log("阶段> " + stage); }
+                        Stage?.Invoke(stage, Math.Clamp(8 + p * 85, 8, 93));
+                    }
+                }
+            }
+            catch { }
             // 抓 UTSL 日志最后一行当阶段名
             try
             {
