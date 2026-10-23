@@ -1,0 +1,29 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="UTSLManager.Ui.Controls.TrafficLights">
+  <!--
+    macOS 风格圆角红绿灯（从管理器的标题栏原样抽出来，两个程序共用）。
+    · 直径 12、圆角 6；关闭 #FF5F57 / 最小化 SysYellow / 最大化 #28C840
+    · 悬停才显出 ✕ − + 字形（常态 opacity=0），和管理器一致
+    · 窗口失焦时整体降到 0.45（macOS 行为），重新聚焦恢复 1.0
+  -->
+  <UserControl.Styles>
+    <Style Selector="Border.tl:pointerover TextBlock">
+      <Setter Property="Opacity" Value="1"/>
+    </Style>
+  </UserControl.Styles>
+  <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+    <Border x:Name="BtnClose" Classes="tl" Width="12" Height="12" CornerRadius="6" Background="#FF5F57"
+            Cursor="Hand" ToolTip.Tip="关闭">
+      <TextBlock Text="✕" FontSize="7" Foreground="#7A0B06" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0"/>
+    </Border>
+    <Border x:Name="BtnMin" Classes="tl" Width="12" Height="12" CornerRadius="6" Background="{DynamicResource SysYellow}"
+            Cursor="Hand" ToolTip.Tip="最小化">
+      <TextBlock Text="−" FontSize="8" Foreground="#8A5A00" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0"/>
+    </Border>
+    <Border x:Name="BtnMax" Classes="tl" Width="12" Height="12" CornerRadius="6" Background="#28C840"
+            Cursor="Hand" ToolTip.Tip="最大化">
+      <TextBlock Text="+" FontSize="8" Foreground="#0B5A18" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0"/>
+    </Border>
+  </StackPanel>
+</UserControl>
