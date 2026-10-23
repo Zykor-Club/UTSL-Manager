@@ -60,9 +60,9 @@
 
           <TextBlock Grid.Row="2" Grid.Column="0" Text="母图尺寸" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,10,0"/>
           <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
-            <TextBox x:Name="TxtWidth" Text="12000" Width="100"/>
+            <TextBox x:Name="TxtWidth" Text="4200" Width="100"/>
             <TextBlock Text="×" Foreground="{DynamicResource TextTertiary}" VerticalAlignment="Center"/>
-            <TextBox x:Name="TxtHeight" Text="2400" Width="100"/>
+            <TextBox x:Name="TxtHeight" Text="1200" Width="100"/>
             <TextBlock x:Name="TxtSafe" Text="2880 万格 / 上限 2900 万（99%）" FontSize="11"
                        Foreground="{DynamicResource SysYellow}" VerticalAlignment="Center" Margin="6,0,0,0"/>
           </StackPanel>
@@ -73,7 +73,7 @@
 
           <TextBlock Grid.Row="3" Grid.Column="0" Text="输出位置" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,10,0"/>
           <TextBox   Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="4" x:Name="TxtOut"
-                     Text="C:\Users\星梦\Desktop\01_UTSL平台\utsl-verify\out\gen6"/>
+                     Text="C:\Users\星梦\Desktop\01_UTSL平台\utsl-verify\out\gen13"/>
         </Grid>
       </Border>
 

@@ -104,6 +104,15 @@ internal static class Program
         Call(api, "InitializeCore");
         Stage("core-initialized-offline");
 
+        // 游戏内地图配色表（mod 那种"游戏自己画的图"就是用它）：纯 CPU，不需要显卡
+        try
+        {
+            Terraria.Map.MapHelper.Initialize();
+            var cl = Terraria.Map.MapHelper.colorLookup;
+            Stage($"maphelper-init len={cl.Length} 样例(石头1)={cl[1].R},{cl[1].G},{cl[1].B}");
+        }
+        catch (Exception ex) { Stage("maphelper-init FAIL " + ex.GetType().Name + " " + ex.Message); }
+
         // 生成参数：尺寸/难度/种子
         On.Terraria.WorldGenSystemContext.GenerateWorld += (orig, ctx, progress, controller) =>
         {
