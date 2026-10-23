@@ -27,6 +27,11 @@ public sealed class PluginHostOptions
     // ===== v3：由管理器注入的「统一部署目录访问」回调（远端走 SSH、本机直接读盘）=====
     /// <summary>当前实际部署目录（远端=远端目录，本机=本机目录）。</summary>
     public Func<string>? FilesRoot { get; init; }
+    /// <summary>
+    /// 当前档的世界目录（相对 FilesRoot，不带斜杠）：legacy 布局是 <c>lib/Saves/Worlds</c>，否则 <c>Saves/Worlds</c>。
+    /// 没注入时宿主退回 legacy 路径（历史唯一形态）。
+    /// </summary>
+    public Func<string>? WorldsRelDir { get; init; }
     /// <summary>列目录：入参为「相对 FilesRoot 的路径」，返回条目。</summary>
     public Func<string, IReadOnlyList<PluginFileInfo>>? ListFiles { get; init; }
     public Func<string, bool>? FileExists { get; init; }
@@ -419,6 +424,19 @@ internal sealed class PluginContext : IManagerContext
     // ===== v3：文件（统一部署目录，全部经沙箱解析）=====
 
     public string FilesRoot => _host.Options.FilesRoot?.Invoke() ?? DeployRoot;
+
+    public string WorldsRelDir
+    {
+        get
+        {
+            try
+            {
+                string d = _host.Options.WorldsRelDir?.Invoke() ?? "";
+                return d.Length > 0 ? d.Replace('\\', '/').Trim('/') : "lib/Saves/Worlds";
+            }
+            catch { return "lib/Saves/Worlds"; }
+        }
+    }
 
     public IReadOnlyList<PluginFileInfo>? ListFiles(string relativeDir)
     {

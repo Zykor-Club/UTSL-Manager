@@ -114,6 +114,14 @@ public interface IManagerContext
     // ===== 文件（v3；远端/本机统一，需 fs 权限）=====
     /// <summary>当前实际的部署目录：远端模式=远端目录，本机模式=本机目录。下面所有相对路径都相对它。</summary>
     string FilesRoot { get; }
+    /// <summary>
+    /// 当前档的**世界目录**（相对 <see cref="FilesRoot"/>，不带首尾斜杠）。
+    /// 服务端有两种数据布局：<c>legacyDataRoot=true</c> → <c>lib/Saves/Worlds</c>；否则 <c>Saves/Worlds</c>。
+    /// ★ 插件拼世界/模板路径必须用它，**不要再写死 lib/Saves/Worlds**
+    ///   —— 写死会让非 legacy 档（本机B）的模板读写落到不存在的目录里（与坑 #1 同一家族）。
+    /// 默认值给老插件留个台阶：宿主不实现时退回历史上唯一存在的路径。
+    /// </summary>
+    string WorldsRelDir => "lib/Saves/Worlds";
     /// <summary>列目录（relativeDir 为空=根）。返回 null 表示读取失败。</summary>
     IReadOnlyList<PluginFileInfo>? ListFiles(string relativeDir);
     /// <summary>判断文件/目录是否存在。</summary>

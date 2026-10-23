@@ -2953,6 +2953,8 @@ public partial class MainWindow : Window
                 // ★ v3：把「统一部署目录访问」注入插件宿主 —— 远端走 SSH / scp，本机直接读盘。
                 //   插件因此不再受"只能读本机目录"的限制（旧 ReadDeployText 在远端模式下读错了目标）。
                 FilesRoot = () => FsRoot,
+                // ★ 世界目录按档的 legacy 布局分流（坑 #1）：插件别再写死 lib/Saves/Worlds
+                WorldsRelDir = () => ActiveSrv.LegacyDataRoot ? "lib/Saves/Worlds" : "Saves/Worlds",
                 ListFiles = dir => FsList(dir).Select(e => new PluginFileInfo(e.Name, e.IsDir, e.Size, e.Mtime)).ToList(),
                 FileExists = p => FsExists(p),
                 ReadText = p => FsReadText(p),

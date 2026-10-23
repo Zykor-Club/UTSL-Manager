@@ -110,7 +110,7 @@ public sealed class MapTemplatesPlugin : IManagerPlugin, IMapContributionPlugin
     }
 
     private static List<string> ListTemplates(IManagerContext ctx)
-        => (ctx.ListFiles("lib/Saves/Worlds/_utpl_templates") ?? Array.Empty<PluginFileInfo>())
+        => (ctx.ListFiles(ctx.WorldsRelDir + "/_utpl_templates") ?? Array.Empty<PluginFileInfo>())
             .Where(f => !f.IsDirectory && f.Name.EndsWith(UtplCodec.Extension, StringComparison.OrdinalIgnoreCase))
             .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
             .Select(f => Path.GetFileNameWithoutExtension(f.Name))
@@ -164,7 +164,7 @@ public sealed class MapTemplatesPlugin : IManagerPlugin, IMapContributionPlugin
         }
         if (name.Length == 0) { host.SetStatus("模板名不合法"); return; }
 
-        string rel = "lib/Saves/Worlds/_utpl_templates/" + name + UtplCodec.Extension;
+        string rel = ctx.WorldsRelDir + "/_utpl_templates/" + name + UtplCodec.Extension;
         if (ctx.FileExists(rel) && _armedName != name)
         {
             _armedName = name;      // ★ 同名模板绝不静默覆盖
@@ -217,11 +217,12 @@ public sealed class MapTemplatesPlugin : IManagerPlugin, IMapContributionPlugin
     /// <summary>拿世界文件的本地可读路径（本机直读；远端下载到插件数据目录 —— 不用 %TEMP%，它可能不可写）。</summary>
     private static string? ResolveWorldFile(IManagerContext ctx, string worldRel)
     {
-        // ★ worldRel 是相对【世界目录】的（lib/Saves/Worlds），而 ctx.FilesRoot 是部署根。
+        // ★ worldRel 是相对【世界目录】的，而 ctx.FilesRoot 是部署根，两者之间那层目录按档不同
+        //   （legacy = lib/Saves/Worlds，否则 Saves/Worlds）—— 用 ctx.WorldsRelDir，别写死。
         //   原来直接 Path.Combine(ctx.FilesRoot, worldRel) → 少了一层，本机和远端都"找不到世界文件"。
         try
         {
-            string localRel = $"lib{Path.DirectorySeparatorChar}Saves{Path.DirectorySeparatorChar}Worlds{Path.DirectorySeparatorChar}";
+            string localRel = ctx.WorldsRelDir.Replace('/', Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
             string full = Path.Combine(ctx.FilesRoot, localRel + worldRel.Replace('/', Path.DirectorySeparatorChar));
             if (File.Exists(full)) { return full; }
             ctx.Log("[建筑模板] 本地世界路径不存在: " + full);
@@ -233,7 +234,7 @@ public sealed class MapTemplatesPlugin : IManagerPlugin, IMapContributionPlugin
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(staging)!);
-            string relRoot = "lib/Saves/Worlds/" + worldRel.Replace('\\', '/');
+            string relRoot = ctx.WorldsRelDir + "/" + worldRel.Replace('\\', '/');
             ctx.Log("[建筑模板] 远端下载世界: " + relRoot);
             if (ctx.Download(relRoot, staging) || File.Exists(staging)) { return staging; }
             ctx.Log("[建筑模板] 远端下载失败: " + relRoot);
@@ -253,7 +254,7 @@ public sealed class MapTemplatesPlugin : IManagerPlugin, IMapContributionPlugin
             sb.AppendLine(cap.Supported ? "→ 地图页上已挂：框选 / 导出模板 / 区块模板浏览" : "→ 服务端没有这套能力，地图页上不会出现相关按钮");
             sb.AppendLine();
             List<string> list = ListTemplates(ctx);
-            sb.AppendLine($"区块模板目录（lib\\Saves\\Worlds\\_utpl_templates）：{list.Count} 个");
+            sb.AppendLine($"区块模板目录（{ctx.WorldsRelDir}\\_utpl_templates）：{list.Count} 个");
             foreach (string n in list) { sb.AppendLine("  · " + n + UtplCodec.Extension); }
             sb.AppendLine();
             sb.AppendLine("插件数据目录：" + ctx.DataDir);
