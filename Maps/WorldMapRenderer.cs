@@ -94,6 +94,15 @@ public static class WorldMapRenderer
     private static string _cacheKey = "";
     private static World? _cacheWorld;
 
+    /// <summary>
+    /// 每真正解析一个新世界（缓存换新）就 +1。
+    /// 宿主据此判断"被换掉的那份世界已经变成垃圾"——它是 LOH 上的 ~330MB，
+    /// 不做压缩式 Gen2 GC 就一直占着（实测：连换 2 个世界 WS 690→710MB 不回落，
+    /// 一次 GC.Collect(2, Aggressive, compacting) 立刻 -330MB，耗时 116ms）。
+    /// 缓存命中（同文件未改）不递增。
+    /// </summary>
+    public static int CacheVersion { get; private set; }
+
     /// <summary>把回调直接当 IProgress 用（Progress&lt;T&gt; 会异步 post，这里要同步转发）。</summary>
     private sealed class SyncProgress<T>(Action<T> onReport) : IProgress<T>
     {
@@ -136,6 +145,7 @@ public static class WorldMapRenderer
         {
             _cacheKey = key;
             _cacheWorld = w;      // 旧的交给 GC
+            CacheVersion++;       // 通知宿主：上一份世界成了 LOH 垃圾，该做压缩 GC 了
         }
         return (w, "");
     }

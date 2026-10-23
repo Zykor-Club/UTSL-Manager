@@ -3794,6 +3794,25 @@ public partial class MainWindow : Window
         catch (Exception ex) { SetStatusLine("切档后重载地图失败: " + ex.Message); }
     }
 
+    private static int mapCacheGcBusy;       // 0/1：连点世界时别叠一堆 GC
+
+    /// <summary>
+    /// 换掉一份缓存世界之后，在**后台线程**做一次压缩式 Gen2 GC（与拼接路径同一套理由）。
+    /// ★ 那份被换掉的 World 是 LOH 上约 330MB 的垃圾：普通 GC 不压缩、WS 也不还给系统。
+    ///   实测（93 号 §4-1）：连换 2 个世界后管理器 WS 从 ~300MB 涨到 690~710MB，
+    ///   再叠几次就到 1.6~2.0GB，把门禁 20.1（WS&lt;1500MB）直接弄红；一次压缩 GC **-330MB / 116ms**。
+    /// </summary>
+    private static void ScheduleWorldCacheGc()
+    {
+        if (Interlocked.CompareExchange(ref mapCacheGcBusy, 1, 0) != 0) { return; }
+        _ = Task.Run(() =>
+        {
+            try { GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true); }
+            catch { }
+            finally { Interlocked.Exchange(ref mapCacheGcBusy, 0); }
+        });
+    }
+
     /// <summary>丢弃地图预览里上一台服务器的图（图是"世界文件渲染结果"，跨台展示就是错的）。</summary>
     private void ForgetMapView()
     {
@@ -6528,6 +6547,7 @@ public partial class MainWindow : Window
 
             mapLoadSeq++;                       // 新一轮加载：上一轮遗留的预览全部作废
             int seqThisLoad = mapLoadSeq;       // ★ 本轮的序号：完成时若已被取代（切档/换了世界）就丢弃结果
+            int cacheVerBefore = WorldMapRenderer.CacheVersion;   // 换世界会让缓存那份世界变成 LOH 垃圾
             MapInfo.Text = label + " · 渲染中…";
             ShowMapProgress(true, 0);
             // ★ TEdit 的载入进度不是单调的（换阶段会从 0 重新报，实测拼接会出现 7 次回退），
@@ -6682,6 +6702,11 @@ public partial class MainWindow : Window
             mapViewState = new MapViewState(label, !stitch, stitch, false,
                 result.Stats?.WorldWidth ?? 0, result.Stats?.WorldHeight ?? 0, relThisLoad);
             RaiseMapViewChanged();           // v4：通知插件视图变了
+            // ★ 换了世界 → 被换掉的那份（LOH 上约 330MB）要靠压缩式 Gen2 GC 才收得回来。
+            //   实测：不做的话连换 2 个世界 WS 就停在 690~710MB，管理器整体涨到 1.6~2.0GB；
+            //   做一次 -330MB、耗时 116ms（后台线程，不影响界面）。
+            //   只在真的换过缓存（CacheVersion 变了）时做，缓存命中重渲染不白花这 116ms。
+            if (WorldMapRenderer.CacheVersion != cacheVerBefore) { ScheduleWorldCacheGc(); }
         }
         catch (Exception ex) { ShowMapProgress(false, 0); MapInfo.Text = "渲染失败: " + ex.Message; }
     }
