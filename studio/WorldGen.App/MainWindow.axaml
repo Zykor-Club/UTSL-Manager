@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="using:UTSLManager.Ui.Controls"
         x:Class="WorldGen.MainWindow"
@@ -111,7 +111,7 @@
         </Grid>
         <TextBlock Grid.Row="1" x:Name="TxtNote" Text="实际图格色块预览（非客户端贴图）· 帧 — · —×— · 最近采样 —"
                    FontSize="11" Foreground="{DynamicResource TextTertiary}" Margin="0,6,0,6"/>
-        <Border Grid.Row="2" Background="{DynamicResource MatWell}" CornerRadius="10"
+        <Border Grid.Row="2" Height="190" Background="{DynamicResource MatWell}" CornerRadius="10"
                 BorderBrush="{DynamicResource HairlineSubtle}" BorderThickness="1">
           <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="12,8">
             <SelectableTextBlock x:Name="TxtLog" FontSize="11.5" Foreground="{DynamicResource TextSecondary}"

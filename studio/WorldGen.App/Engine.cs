@@ -51,8 +51,25 @@ public sealed class StudioEngine
     private const short SW_SHOWMINIMIZED = 2;
 
     /// <summary>按请求写好部署副本的 config.json，清掉旧的源世界文件。返回随机端口。</summary>
+    /// <summary>清掉同一部署根下遗留的引擎（上次被强杀 studio 时会留下子进程，两份同时写 progress.json 会串日志）。</summary>
+    public static int KillStaleEngines(string deployRoot)
+    {
+        int killed = 0;
+        string exe = Path.GetFullPath(Path.Combine(deployRoot, "UnifierTSL.exe"));
+        foreach (var p in Process.GetProcessesByName("UnifierTSL"))
+        {
+            try
+            {
+                if (string.Equals(p.MainModule?.FileName, exe, StringComparison.OrdinalIgnoreCase)) { p.Kill(true); killed++; }
+            }
+            catch { }
+        }
+        return killed;
+    }
     public int Prepare(GenRequest r)
     {
+        int stale = KillStaleEngines(r.DeployRoot);
+        if (stale > 0) { Log($"清理遗留引擎 {stale} 个"); }
         Directory.CreateDirectory(Path.Combine(r.DeployRoot, "config"));
         int port = FindFreePort();
         var cfg = new
@@ -209,6 +226,27 @@ public sealed class StudioEngine
         return parts;
     }
 
+    /// <summary>
+    /// 读引擎写出的实时帧：live\frame.bin（int32 magic 'UTWF' · int32 w · int32 h · ushort[w*h]）。
+    /// bit15=1 表示墙 id，否则是图格 id，0 表示空。返回 null 表示还没有帧或读失败。
+    /// </summary>
+    public static (int W, int H, ushort[] Px)? ReadFrame(string deployRoot)
+    {
+        try
+        {
+            string path = Path.Combine(deployRoot, "live", "frame.bin");
+            if (!File.Exists(path)) { return null; }
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var br = new BinaryReader(fs);
+            if (br.ReadInt32() != 0x46575455) { return null; }
+            int w = br.ReadInt32(), h = br.ReadInt32();
+            if (w <= 0 || h <= 0 || w > 4096 || h > 4096) { return null; }
+            var px = new ushort[w * h];
+            for (int i = 0; i < px.Length; i++) { px[i] = br.ReadUInt16(); }
+            return (w, h, px);
+        }
+        catch { return null; }
+    }
     public void KillEngine()
     {
         try

@@ -48,6 +48,7 @@ public partial class MainWindow : Window
         });
 
         LoadPreview();
+        InitFrames();
         ChkSeam.IsCheckedChanged += (_, _) => DrawSeams();
         BtnRefresh.Click += (_, _) => LoadPreview();
         BtnOpenOut.Click += (_, _) => OpenOutDir();
