@@ -1,0 +1,87 @@
+<!--
+  L5 · 全局（Global）
+  ────────────────────────────────────────────────────────────────────────────
+  从管理器的 App.axaml 里**原样搬出来**的两段全局设置：
+
+  1) 字体链：此前没有指定中文字体 → 中文吃系统默认（微软雅黑，笔画偏重、层次差）。
+     Noto Sans SC（开源 OFL，本机已装）优先，没装依次降级，最后回退系统 UI 字体。
+     图标按钮用的是 Segoe MDL2 Assets 且已写死 FontFamily → 不受影响。
+
+  2) 全局滚动条：**只留滑块，不要轨道**。
+     主题自带的滚动槽位是一条贴边拉伸的长条（上下端点被裁掉，看着像"没闭口"）。
+     做法：替换 ScrollBar 的 ControlTheme（Track 是 Control 基类、没有 Background 属性，
+     没法只把轨道刷透明，只能换模板）。只留 PART_Track：Track 自身不画背景 → 只剩 Thumb；
+     翻页按钮保留但透明；滑块常态半透明、悬停/按下变亮。
+     ★ 放在 Styles.Resources 里（ControlTheme 不能直接进 Application.Styles）。
+     ★ 注意：ScrollViewer 模板会给 ScrollBar 设**局部值** Background，局部值优先级更高，
+       所以管理器里还有一段类处理器（App.axaml.cs）兜底 —— 这一段是行为，不进样式库。
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <Style Selector="Window">
+    <Setter Property="FontFamily" Value="Noto Sans SC, MiSans, HarmonyOS Sans SC, Microsoft YaHei UI, Segoe UI" />
+  </Style>
+
+  <Styles.Resources>
+    <ControlTheme x:Key="{x:Type ScrollBar}" TargetType="ScrollBar">
+      <Setter Property="Background" Value="Transparent" />
+      <!-- 保持常显：替换 ControlTheme 会丢掉主题里这条设置，所以显式补上 -->
+      <Setter Property="AllowAutoHide" Value="False" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <!-- ★ 必须把 ScrollBar 的 Minimum/Maximum/Value/ViewportSize 绑到 Track 上：
+             不绑的话 Track 一直是默认的 0~100，滑块的位置和长度都不会跟着内容走（实测回归）。
+             ViewportSize 决定滑块长度比例，Value 决定滑块位置。 -->
+          <Track Name="PART_Track"
+                 Orientation="{TemplateBinding Orientation}"
+                 Minimum="{TemplateBinding Minimum}"
+                 Maximum="{TemplateBinding Maximum}"
+                 Value="{Binding Value, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}"
+                 ViewportSize="{TemplateBinding ViewportSize}">
+            <Track.DecreaseButton>
+              <Button Name="PART_LineUpButton" Background="Transparent" BorderThickness="0"
+                      Focusable="False" IsTabStop="False" />
+            </Track.DecreaseButton>
+            <Track.Thumb>
+              <Thumb Name="PART_Thumb" MinWidth="16" MinHeight="16" Background="#5AFFFFFF">
+                <Thumb.Template>
+                  <ControlTemplate>
+                    <Border Background="{TemplateBinding Background}" CornerRadius="5" Margin="2" />
+                  </ControlTemplate>
+                </Thumb.Template>
+              </Thumb>
+            </Track.Thumb>
+            <Track.IncreaseButton>
+              <Button Name="PART_LineDownButton" Background="Transparent" BorderThickness="0"
+                      Focusable="False" IsTabStop="False" />
+            </Track.IncreaseButton>
+          </Track>
+        </ControlTemplate>
+      </Setter>
+
+      <Style Selector="^:vertical">
+        <Setter Property="Width" Value="12" />
+        <Setter Property="MinWidth" Value="12" />
+      </Style>
+      <Style Selector="^:horizontal">
+        <Setter Property="Height" Value="12" />
+        <Setter Property="MinHeight" Value="12" />
+      </Style>
+      <!-- 方向：竖排滚动条的 Track 必须 IsDirectionReversed=True（Value 增大 → 滑块向下），
+           横排为 False。Track 默认 False，漏了就会"滑块方向与实际滚动相反"（实测踩过）。 -->
+      <Style Selector="^:vertical /template/ Track">
+        <Setter Property="IsDirectionReversed" Value="True" />
+      </Style>
+      <Style Selector="^:horizontal /template/ Track">
+        <Setter Property="IsDirectionReversed" Value="False" />
+      </Style>
+      <Style Selector="^:pointerover /template/ Thumb">
+        <Setter Property="Background" Value="#9AFFFFFF" />
+      </Style>
+      <Style Selector="^:pressed /template/ Thumb">
+        <Setter Property="Background" Value="#C4FFFFFF" />
+      </Style>
+    </ControlTheme>
+  </Styles.Resources>
+</Styles>

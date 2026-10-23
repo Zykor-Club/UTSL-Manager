@@ -1,0 +1,18 @@
+<!--
+  UTSLManager.Ui · Theme —— 两个程序（UTSLManager / UTSL 世界生成器）共用的唯一入口。
+
+  用法（任意 Avalonia 程序，App.axaml 的 Application.Styles 里一行）：
+      <StyleInclude Source="avares://UTSLManager.Ui/Theme.axaml" />
+
+  顺序有含义：00 令牌 → 10 面与线 → 20 尺度 → 30 动效 → 40 图标 → 50 全局。
+  新增一层样式请追加编号文件，并在这里补一行；不要在各自程序的 App.axaml 里再内联样式。
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <StyleInclude Source="avares://UTSLManager.Ui/Styles/00-Material.axaml" />
+  <StyleInclude Source="avares://UTSLManager.Ui/Styles/10-Surfaces.axaml" />
+  <StyleInclude Source="avares://UTSLManager.Ui/Styles/20-Scale.axaml" />
+  <StyleInclude Source="avares://UTSLManager.Ui/Styles/30-Motion.axaml" />
+  <StyleInclude Source="avares://UTSLManager.Ui/Styles/40-Icons.axaml" />
+  <StyleInclude Source="avares://UTSLManager.Ui/Styles/50-Global.axaml" />
+</Styles>

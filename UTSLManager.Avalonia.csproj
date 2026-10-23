@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
@@ -58,6 +58,8 @@
          （旧插件 dll 与旧插件源码都无需改动）；输出目录里有了这个 dll 后，PluginHost.BuildHostAssemblies
          会自动把它算作宿主程序集，插件拿到的永远是宿主那一份类型。 -->
     <ProjectReference Include="UTSLManager.Plugin.Abstractions\UTSLManager.Plugin.Abstractions.csproj" />
+    <!-- 视觉层：两个程序共用的样式令牌（见 UTSLManager.Ui\Theme.axaml） -->
+    <ProjectReference Include="UTSLManager.Ui\UTSLManager.Ui.csproj" />
     <Compile Include="third_party\TEdit\src\TEdit5\Controls\PixelMap.cs" Link="TEdit5\PixelMap.cs" />
     <Compile Include="third_party\TEdit\src\TEdit5\Controls\WorldRenderEngine\SkiaTEditExtensions.cs" Link="TEdit5\SkiaTEditExtensions.cs" />
   </ItemGroup>

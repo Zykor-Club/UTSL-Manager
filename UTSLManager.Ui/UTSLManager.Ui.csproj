@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    UTSLManager.Ui —— 管理器与「UTSL 世界生成器」共用的视觉层（只放样式/令牌，不放业务）。
+
+    为什么要它：界面那套效果是三部分——5 个令牌文件 + 全局字体链 + 滚动条 ControlTheme。
+    后两段原来内联在管理器的 App.axaml 里；一旦第二个程序要"长得一样"，复制粘贴必漂移。
+    所以全部搬到这里，两个程序各引一行 avares://UTSLManager.Ui/Theme.axaml 即可。
+
+    ★ 版本必须与管理器一致（Avalonia 12.1.2）：同一套 XAML 编译器与主题程序集。
+    ★ 这个库不引 Avalonia.Desktop / 业务包，只保证 XAML 资源可编译、可被 avares 寻址。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>UTSLManager.Ui</RootNamespace>
+    <AssemblyName>UTSLManager.Ui</AssemblyName>
+    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.2" />
+    <!-- 与管理器同一个 macOS 主题（管理器的 App.axaml 里 mac:DevolutionsMacOsTheme 就是它） -->
+    <PackageReference Include="Devolutions.AvaloniaTheme.MacOS" Version="*" />
+  </ItemGroup>
+</Project>
