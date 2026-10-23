@@ -151,10 +151,15 @@ public sealed class MapTemplatesPlugin : IManagerPlugin, IMapContributionPlugin
         }
 
         int w = sel.Width, h = sel.Height;
+        // ★ 自动名必须用「实际会被裁出来的尺寸」：Crop 会贴边截断、超过模板上限时还会截高。
+        //   按选区尺寸起名 → 自动名 545x397 里装的却是 541×816 的图（92 号文档 §9 待办 3）。
+        //   命名与裁切共用 WorldCropper.ClampRegion，两处不会再漂移。
+        (int cx, int cy, int cw, int ch, string clampNote) =
+            WorldCropper.ClampRegion(view.TilesWide, view.TilesHigh, sel.X, sel.Y, sel.Width, sel.Height);
         string name = UtplCodec.SanitizeName(_nameBox?.Text);
         if (name.Length == 0)
         {
-            name = UtplCodec.SanitizeName(Path.GetFileNameWithoutExtension(view.WorldRelPath) + "_" + w + "x" + h);
+            name = UtplCodec.SanitizeName(Path.GetFileNameWithoutExtension(view.WorldRelPath) + "_" + cw + "x" + ch);
             if (_nameBox is not null) { _nameBox.Text = name; }
         }
         if (name.Length == 0) { host.SetStatus("模板名不合法"); return; }
@@ -168,7 +173,7 @@ public sealed class MapTemplatesPlugin : IManagerPlugin, IMapContributionPlugin
         }
 
         if (_exportBtn is not null) { _exportBtn.IsEnabled = false; }
-        host.SetStatus("导出中：" + name + " " + w + "×" + h + " …");
+        host.SetStatus("导出中：" + name + " " + cw + "×" + ch + " …" + clampNote);
         try
         {
             string worldRel = view.WorldRelPath;

@@ -8,14 +8,20 @@ public static class WorldCropper
     public sealed record CropResult(UtplRegion Region, string Warning);
 
     /// <summary>
-    /// 裁 (x0,y0) 起 w×h 的区域。所有记录都转成**模板内相对坐标**（服务端贴的时候是"贴入点 + 记录坐标"）。
+    /// 选区 → **实际会被裁出来的**矩形（含贴边截断 / 单边 8192 上限 / 总格数上限导致的截高）。
+    /// ★ 抽出来的原因：插件按选区尺寸给模板起名，而 Crop 会截断 → 名字里的尺寸和文件里的尺寸对不上
+    ///   （实测自动名 `Dev_545x397`，实际裁出 `541×816`）。命名和裁切必须用同一套夹取逻辑，否则必然漂移。
+    /// tilesWide/tilesHigh 传世界图格尺寸；未知时传 0 表示"不做贴边夹取"。
     /// </summary>
-    public static CropResult Crop(World world, int x0, int y0, int w, int h)
+    public static (int X, int Y, int W, int H, string Note) ClampRegion(
+        int tilesWide, int tilesHigh, int x0, int y0, int w, int h)
     {
-        x0 = Math.Clamp(x0, 0, Math.Max(0, world.TilesWide - 1));
-        y0 = Math.Clamp(y0, 0, Math.Max(0, world.TilesHigh - 1));
-        w = Math.Clamp(w, 1, Math.Min(world.TilesWide - x0, UtplCodec.MaxDim));
-        h = Math.Clamp(h, 1, Math.Min(world.TilesHigh - y0, UtplCodec.MaxDim));
+        if (tilesWide > 0) { x0 = Math.Clamp(x0, 0, Math.Max(0, tilesWide - 1)); }
+        if (tilesHigh > 0) { y0 = Math.Clamp(y0, 0, Math.Max(0, tilesHigh - 1)); }
+        int maxW = tilesWide > 0 ? Math.Min(tilesWide - x0, UtplCodec.MaxDim) : UtplCodec.MaxDim;
+        int maxH = tilesHigh > 0 ? Math.Min(tilesHigh - y0, UtplCodec.MaxDim) : UtplCodec.MaxDim;
+        w = Math.Clamp(w, 1, Math.Max(1, maxW));
+        h = Math.Clamp(h, 1, Math.Max(1, maxH));
         // ★ 单边受 MaxDim(8192) 限制还不够：UtplCodec.MaxCells 是 2048×2048 ≈ 419 万格，
         //   否则会裁出"导出成功、却读不回来"的模板（Read 会拒绝，用户白等一场）。
         //   这里只【截断高度】而不缩放 —— 缩放会改变建筑的实际尺寸，是错的。
@@ -26,6 +32,15 @@ public static class WorldCropper
             limitNote = $"（选区过大：高度从 {h} 截断到 {newH} 格，模板上限 {UtplCodec.MaxCells} 格）";
             h = newH;
         }
+        return (x0, y0, w, h, limitNote);
+    }
+
+    /// <summary>
+    /// 裁 (x0,y0) 起 w×h 的区域。所有记录都转成**模板内相对坐标**（服务端贴的时候是"贴入点 + 记录坐标"）。
+    /// </summary>
+    public static CropResult Crop(World world, int x0, int y0, int w, int h)
+    {
+        (x0, y0, w, h, string limitNote) = ClampRegion(world.TilesWide, world.TilesHigh, x0, y0, w, h);
 
         var tiles = new Tile[w * h];
         for (int y = 0; y < h; y++)
