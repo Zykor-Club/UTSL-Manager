@@ -16,8 +16,6 @@ public partial class MainWindow : Window
     private const int Delta = 3900;
     private const int SliceWidth = 4200;
 
-    /// <summary>隔离部署副本（B′）：UTSL 启动器在这里生成母图，绝不碰生产 utsl-deploy。</summary>
-    private const string GenRoot = @"C:\Users\星梦\Desktop\01_UTSL平台\utsl-verify\poc-gen\gen1";
 
     private readonly string[] _chainLabels = { "西", "中（默认）", "东" };
     private readonly StudioEngine _engine = new();
@@ -59,7 +57,7 @@ public partial class MainWindow : Window
 
         Log($"[几何] 母图 {MotherWidth}×2400 · 片宽 {SliceWidth} · Δ{Delta} · 重叠 300/缝");
         Log("[就绪] 预览图来自 utsl-verify\\out\\gen2\\preview.png（真实 12000×2400 母图渲染，非示意）");
-        Log("[引擎] B′ 路线：隔离副本 " + GenRoot);
+        Log("[引擎] 原生 worker：" + StudioEngine.WorkerExe);
     }
 
     // ==================== 生成流程 ====================
@@ -85,7 +83,6 @@ public partial class MainWindow : Window
                 Slices: 3,
                 Overlap: 100,
                 Chain: new[] { "West", "Dev", "East" },
-                DeployRoot: GenRoot,
                 OutDir: TxtOut.Text ?? @"C:\Users\星梦\Desktop\01_UTSL平台\utsl-verify\out\gen3");
 
             Directory.CreateDirectory(req.OutDir);
@@ -94,16 +91,16 @@ public partial class MainWindow : Window
                 new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
             Log($"[请求] 已写 {reqFile}");
 
-            int port = _engine.Prepare(req);
-            Log($"[准备] 配置已写（端口 {port}，单世界 {req.WorldName}，种子 {req.Seed}，{req.Width}×{req.Height}）");
+            _engine.Prepare(req);
+            Log($"[准备] 工作目录就绪（种子 {req.Seed}，{req.Width}×{req.Height}，难度 {req.Difficulty}，邪恶 {req.Evil}）");
 
-            _engine.Launch(req, port);
+            _engine.Launch(req);
             TxtStage.Text = "生成中";
-            Log("[生成] 已拉起 UTSL（独立控制台，最小化）—— 12000×2400 约需 6~7 分钟");
+            Log("[生成] 已拉起原生 worker（headless，无控制台）—— 12000×2400 预计 3~5 分钟");
 
             string mother = await _engine.WaitWorldAsync(req, _cts.Token, TimeSpan.FromMinutes(20));
             Log($"[生成] 母图落盘 {new FileInfo(mother).Length / 1048576.0:F1} MB · {_sw.Elapsed:mm\\:ss}");
-            _engine.KillEngine();
+            _engine.KillWorker();
             BarProgress.Value = 96;
 
             var parts = await _engine.SplitAsync(req, mother, _cts.Token);
@@ -123,7 +120,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            _engine.KillEngine();
+            _engine.KillWorker();
             _cts?.Dispose();
             _cts = null;
             BtnStart.IsEnabled = true;
@@ -136,7 +133,7 @@ public partial class MainWindow : Window
     private void Cancel()
     {
         try { _cts?.Cancel(); } catch { }
-        _engine.KillEngine();
+        _engine.KillWorker();
     }
 
     // ==================== 标题栏 / 预览 / 日志 ====================

@@ -73,7 +73,7 @@
 
           <TextBlock Grid.Row="3" Grid.Column="0" Text="输出位置" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,10,0"/>
           <TextBox   Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="4" x:Name="TxtOut"
-                     Text="C:\Users\星梦\Desktop\01_UTSL平台\utsl-verify\out\gen3"/>
+                     Text="C:\Users\星梦\Desktop\01_UTSL平台\utsl-verify\out\gen6"/>
         </Grid>
       </Border>
 

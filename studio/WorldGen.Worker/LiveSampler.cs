@@ -83,12 +83,13 @@ internal sealed class LiveSampler
                 {
                     int sx = Math.Min(W - 1, x * step);
                     ushort pick = 0, liquid = 0, wall = 0;
-                    for (int dy = 0; dy < 2 && pick == 0; dy++)
+                    // 3×3 取样：5×5 的块只采两个角会漏掉大部分图格，地形看起来全是洞（天空下出现"空地条"）
+                    for (int dy = 0; dy < 3 && pick == 0; dy++)
                     {
-                        int yy = Math.Min(H - 1, sy + dy * Math.Max(1, step / 2));
-                        for (int dx = 0; dx < 2; dx++)
+                        int yy = Math.Min(H - 1, sy + dy * Math.Max(1, step / 3));
+                        for (int dx = 0; dx < 3; dx++)
                         {
-                            int xx = Math.Min(W - 1, sx + dx * Math.Max(1, step / 2));
+                            int xx = Math.Min(W - 1, sx + dx * Math.Max(1, step / 3));
                             var td = m.tile[xx, yy];
                             if (td.type != 0 && td.type != ushort.MaxValue) { pick = td.type; break; }
                             if (td.liquid > 0 && liquid == 0) { liquid = (ushort)(0x4000 | (td.liquidType() & 0x0F)); }

@@ -17,12 +17,12 @@ namespace WorldGen;
 public partial class MainWindow
 {
     private Dictionary<int, Color>? _palette;
-    private Color _sky = Color.Parse("#4A90C4");
+    private Color _sky = Color.Parse("#7FB4DC");
     private Color _wall = Color.Parse("#383039");
-    private Color _dirt = Color.Parse("#5A4632");
-    private Color _rock = Color.Parse("#3A3A40");
+    private Color _dirt = Color.Parse("#3A2E24");
+    private Color _rock = Color.Parse("#2A2A30");
     private Color _fallback = Color.Parse("#768879");
-    private Color _water = Color.Parse("#3C8BC5");
+    private Color _water = Color.Parse("#2E6F9E");
     private Color _lava = Color.Parse("#F26839");
     private Color _honey = Color.Parse("#D9A739");
     private Color _shimmer = Color.Parse("#BA83E5");
@@ -67,15 +67,15 @@ public partial class MainWindow
 
     private void PollFrame()
     {
-        if (_cts is null || _frameBusy) { return; }        // 只在生成期间刷帧；上一帧没画完就跳过
+        if (_cts is null || _frameBusy || StudioEngine.WorkDir.Length == 0) { return; }
 
-        string path = Path.Combine(GenRoot, "live", "frame.bin");
+        string path = Path.Combine(StudioEngine.WorkDir, "live", "frame.bin");
         if (!File.Exists(path)) { return; }
         var stamp = File.GetLastWriteTimeUtc(path);
         if (stamp == _lastFrameStamp) { return; }
         _lastFrameStamp = stamp;
 
-        var frame = StudioEngine.ReadFrame(GenRoot);
+        var frame = StudioEngine.ReadFrame();
         if (frame is null) { return; }
         ReadHorizonFromProgress();
 
@@ -115,7 +115,7 @@ public partial class MainWindow
     {
         try
         {
-            string p = Path.Combine(GenRoot, "live", "progress.json");
+            string p = Path.Combine(StudioEngine.WorkDir, "live", "progress.json");
             if (!File.Exists(p)) { return; }
             using var doc = JsonDocument.Parse(File.ReadAllText(p));
             if (doc.RootElement.TryGetProperty("surface", out var s) && s.GetInt32() > 0) { _engineSurface = s.GetInt32(); }
@@ -140,8 +140,12 @@ public partial class MainWindow
             }
         }
         var solids = firstSolid.Where(v => v < h).OrderBy(v => v).ToArray();
-        int surface = solids.Length > 0 ? solids[(int)(solids.Length * 0.15)] : (int)(h * 0.17);
-        int rockLine = _engineRock > 0 ? Math.Clamp(_engineRock * h / 2400, surface + 1, h - 1)
+        int totalH = 2400;
+        // ★ 图格分位优先：worker 报的 worldSurface(587=24.5%) 是"标称地表"，比真实地形低一大截
+        //   （实测首个实心图格 10% 分位 = 269 行 = 11.2%），用它画天空会盖住真实地形。
+        int surface = solids.Length > 0 ? solids[(int)(solids.Length * 0.10)]
+                                        : (_engineSurface > 0 ? Math.Clamp(_engineSurface * h / totalH, 0, h - 1) : (int)(h * 0.10));
+        int rockLine = _engineRock > 0 ? Math.Clamp(_engineRock * h / totalH, surface + 1, h - 1)
                                        : Math.Min(h - 1, (int)(h * 0.45));
 
         int rowBytes = w * 4;
