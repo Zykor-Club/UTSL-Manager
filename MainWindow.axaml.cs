@@ -3811,6 +3811,26 @@ public partial class MainWindow : Window
         catch { }
     }
 
+    /// <summary>
+    /// 切档时**立刻**丢掉地图画布，并把插件看到的地图视图状态复位成"没有图"。
+    /// ★ 原来只有 400ms 后的 RefreshActiveViews 才调 ForgetMapView：
+    ///   于是切档诊断行（switchperf 里的 mapImg=）读到的是上一台的图，真机上那 400ms 里
+    ///   界面上也还挂着上一台的世界图（A-suite 40.2 抓的就是这个，之前没人开过地图页所以一直是假绿）。
+    ///   顺带 mapLoadSeq++：作废正在跑的渲染，否则迟到的成品会在清空之后又把旧图画回去。
+    /// </summary>
+    private void ResetMapOnProfileSwitch()
+    {
+        mapLoadSeq++;
+        ForgetMapView();
+        ClearSelection();
+        mapPreviewShown = false;
+        mapIsStitch = false;
+        mapSpawnX = -1; mapSpawnY = -1;
+        lastWorldLocalPath = null;
+        mapViewState = new MapViewState("—", false, false, false, 0, 0, "");
+        RaiseMapViewChanged();      // 插件（导出模板等）据此立刻置灰
+    }
+
     // ===== 多服务器：切换激活档 =====
     /// <summary>切档门闩：4 个定时器 + 3 条流在切换期间一律让路（否则旧档的采样/日志会写进新档）。</summary>
     private static bool switching;
@@ -4501,6 +4521,8 @@ public partial class MainWindow : Window
             serverWasUp = false;
             downTicks = 0;
             watchdogFailures = 0;
+            // ★ 地图画布立刻清空（诊断行 mapImg= 与真机一致，见 ResetMapOnProfileSwitch 注释）
+            try { ResetMapOnProfileSwitch(); } catch { }
 
             // ⑥ 起新档的隧道与流（★ 显式传目标档：切档期间别的线程不允许建隧道）
             if (target.IsRemote)
@@ -6505,6 +6527,7 @@ public partial class MainWindow : Window
                 : pick + ".wld";
 
             mapLoadSeq++;                       // 新一轮加载：上一轮遗留的预览全部作废
+            int seqThisLoad = mapLoadSeq;       // ★ 本轮的序号：完成时若已被取代（切档/换了世界）就丢弃结果
             MapInfo.Text = label + " · 渲染中…";
             ShowMapProgress(true, 0);
             // ★ TEdit 的载入进度不是单调的（换阶段会从 0 重新报，实测拼接会出现 7 次回退），
@@ -6626,7 +6649,14 @@ public partial class MainWindow : Window
                     w.SpawnX, w.SpawnY));
             });
 
+            // ★ 迟到结果：这次渲染已被取代（切档清了画布 / 用户换了世界）→ 直接丢掉，
+            //   否则切档后旧世界的图会被"渲染完成"写回画布（实测残留就是这么来的）。
             SKBitmap? outBmp = result.Bmp;
+            if (seqThisLoad != mapLoadSeq)
+            {
+                outBmp?.Dispose();
+                return;
+            }
             if (outBmp is null)
             {
                 ShowMapProgress(false, 0);
