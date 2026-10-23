@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
@@ -17,15 +17,21 @@ namespace WorldGen;
 public partial class MainWindow
 {
     private Dictionary<int, Color>? _palette;
-    private Color _sky = Color.Parse("#74AEDA");
-    private Color _wall = Color.Parse("#3E3432");
-    private Color _dirt = Color.Parse("#372B21");
-    private Color _rock = Color.Parse("#19191F");
-    private Color _fallback = Color.Parse("#4A4A52");
+    private Color _sky = Color.Parse("#4A90C4");
+    private Color _wall = Color.Parse("#383039");
+    private Color _dirt = Color.Parse("#5A4632");
+    private Color _rock = Color.Parse("#3A3A40");
+    private Color _fallback = Color.Parse("#768879");
+    private Color _water = Color.Parse("#3C8BC5");
+    private Color _lava = Color.Parse("#F26839");
+    private Color _honey = Color.Parse("#D9A739");
+    private Color _shimmer = Color.Parse("#BA83E5");
     private DispatcherTimer? _frameTimer;
     private DateTime _lastFrameStamp = DateTime.MinValue;
     private int _framesSeen;
     private Bitmap? _liveBitmap;
+    private int _engineSurface;
+    private int _engineRock;
     private volatile bool _frameBusy;
 
     private void InitFrames()
@@ -44,10 +50,8 @@ public partial class MainWindow
             if (!File.Exists(path)) { Log("[帧] 找不到配色表 " + path); return; }
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             var root = doc.RootElement;
-            if (root.TryGetProperty("sky", out var s)) { _sky = Color.Parse(s.GetString()!); }
+            // 天空/土/岩/墙 用 Frames.cs 里的常量（社区那套深色系），不被静态全景的配色表覆盖
             if (root.TryGetProperty("wall", out var w)) { _wall = Color.Parse(w.GetString()!); }
-            if (root.TryGetProperty("dirt", out var d)) { _dirt = Color.Parse(d.GetString()!); }
-            if (root.TryGetProperty("rock", out var r2)) { _rock = Color.Parse(r2.GetString()!); }
             _palette = new Dictionary<int, Color>(1024);
             if (root.TryGetProperty("tiles", out var tiles))
             {
@@ -73,6 +77,7 @@ public partial class MainWindow
 
         var frame = StudioEngine.ReadFrame(GenRoot);
         if (frame is null) { return; }
+        ReadHorizonFromProgress();
 
         var (w, h, px) = frame.Value;
         _frameBusy = true;
@@ -105,22 +110,39 @@ public partial class MainWindow
         });
     }
 
+    /// <summary>从 progress.json 读引擎算出的 worldSurface / rockLayer（比按图格猜准得多）。</summary>
+    private void ReadHorizonFromProgress()
+    {
+        try
+        {
+            string p = Path.Combine(GenRoot, "live", "progress.json");
+            if (!File.Exists(p)) { return; }
+            using var doc = JsonDocument.Parse(File.ReadAllText(p));
+            if (doc.RootElement.TryGetProperty("surface", out var s) && s.GetInt32() > 0) { _engineSurface = s.GetInt32(); }
+            if (doc.RootElement.TryGetProperty("rock", out var r) && r.GetInt32() > 0) { _engineRock = r.GetInt32(); }
+        }
+        catch { }
+    }
     /// <summary>纯托管 32 位 BMP（bottom-up BGRA + 4 字节对齐）。不调用 Skia 编码器，后台线程可安全使用。</summary>
     private byte[] EncodeBmp(int w, int h, ushort[] px)
     {
-        // 地平线：墙（bit15）首次出现的 10% 分位；没有墙就退化成 20% 高度
-        var firstWall = new int[w];
+        // 地平线：每列首个"实心图格"（不算墙/液体）的 15% 分位。
+        // 实测这个世界的分位：10%→11.2% 高度、20%→17.1%，取 15% 落在山脚/树线之间，
+        // 既不会被丛林树顶到天上，也不会像 worldSurface(587=24.5%) 那样把天空涂到真实地形上。
+        var firstSolid = new int[w];
         for (int x = 0; x < w; x++)
         {
-            firstWall[x] = h;
+            firstSolid[x] = h;
             for (int y = 0; y < h; y++)
             {
-                if ((px[y * w + x] & 0x8000) != 0) { firstWall[x] = y; break; }
+                ushort vv = px[y * w + x];
+                if (vv != 0 && (vv & 0xC000) == 0) { firstSolid[x] = y; break; }
             }
         }
-        var walls = firstWall.Where(v => v < h).OrderBy(v => v).ToArray();
-        int surface = walls.Length > 0 ? walls[(int)(walls.Length * 0.10)] : (int)(h * 0.20);
-        int rockLine = (int)(h * 0.45);
+        var solids = firstSolid.Where(v => v < h).OrderBy(v => v).ToArray();
+        int surface = solids.Length > 0 ? solids[(int)(solids.Length * 0.15)] : (int)(h * 0.17);
+        int rockLine = _engineRock > 0 ? Math.Clamp(_engineRock * h / 2400, surface + 1, h - 1)
+                                       : Math.Min(h - 1, (int)(h * 0.45));
 
         int rowBytes = w * 4;
         int pad = (4 - rowBytes % 4) % 4;
@@ -146,7 +168,11 @@ public partial class MainWindow
             {
                 ushort v = px[srcRow + x];
                 Color c;
-                if (v == 0)
+                if ((v & 0x4000) != 0)
+                {
+                    c = (v & 0x0F) switch { 1 => _lava, 2 => _honey, 3 => _shimmer, _ => _water };
+                }
+                else if (v == 0)
                 {
                     c = y < surface ? _sky : (y < rockLine ? _dirt : _rock);
                 }
