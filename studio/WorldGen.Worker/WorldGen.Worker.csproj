@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    UTSLWorldGen.Worker —— 「UTSL 世界生成器」的原生生成 worker。
+
+    为什么要有它（照社区 UTSL-MapStudio 的架构）：
+      从外部进程（UTSL 启动器）抽 Main.tile 写实时帧，拿到的是"还没落盘的那份数组"，
+      顶部和最终 .wld 对不上（实测：帧第 0 行 38% 有图格，而落盘世界 <5% 的列在 178 行以上有图格）。
+      把生成放进 worker 自己进程里，帧和落盘就是同一份数据 —— 社区那份能实时看就是这个原因。
+
+    关键技术点（都来自社区 worker 的实测配方）：
+      · UTSL_CONSOLE_MODE=headless + LauncherSurfaceConsole.Initialize(TerminalLauncherSurfaceHost)
+        → 不需要真实控制台，也不会崩在 Console.WindowHeight
+      · UnifierTSL.Initializer.InitializeResolver() → 从引擎目录解析 OTAPI/UnifierTSL
+      · reflection 调 HandleCommandLinePreRun / PrepareRuntime / InitializeCore
+        → 离线初始化，不启网络、不加载插件
+      · 拦 NetplaySystemContext.StartServer：在联网之前把世界保存掉然后退出
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>UTSLWorldGen.Worker</AssemblyName>
+    <RootNamespace>WorldGen.Worker</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Platforms>AnyCPU</Platforms>
+  </PropertyGroup>
+  <PropertyGroup>
+    <EngineDir Condition="'$(EngineDir)' == ''">C:\Users\星梦\Desktop\01_UTSL平台\utsl-deploy\lib</EngineDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="UnifierTSL"><HintPath>$(EngineDir)\UnifierTSL.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="OTAPI"><HintPath>$(EngineDir)\OTAPI.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="OTAPI.Runtime"><HintPath>$(EngineDir)\OTAPI.Runtime.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>
