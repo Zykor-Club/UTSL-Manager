@@ -136,6 +136,14 @@ public sealed class StudioEngine
             ct.ThrowIfCancellationRequested();
             await Task.Delay(2000, ct);
 
+            // 看门狗：引擎要是没了（崩了/被杀了），立刻报出来，别让人干等 20 分钟
+            if (_engine is { HasExited: true })
+            {
+                int code = -1;
+                try { code = _engine.ExitCode; } catch { }
+                throw new InvalidOperationException($"引擎异常退出（exit={code}）—— 见 {Path.Combine(r.DeployRoot, "logs")} 下最新日志");
+            }
+
             // 进度：无阶段回调前，用"时间 + 世界文件是否出现"做粗粒度
             if (File.Exists(wld))
             {

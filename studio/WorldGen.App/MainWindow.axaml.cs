@@ -42,6 +42,7 @@ public partial class MainWindow : Window
         _engine.Stage += (stage, pct) => Dispatcher.UIThread.Post(() =>
         {
             if (_finished) { return; }          // 收尾后别再被"迟到的阶段事件"盖掉
+            if (pct < BarProgress.Value) { return; }   // 迟到的低进度也不能把进度条往回拉
             TxtStage.Text = stage;
             BarProgress.Value = Math.Clamp(pct, 0, 100);
             TxtEta.Text = $"{pct:F0}% · {_sw.Elapsed:mm\\:ss}";
@@ -227,12 +228,12 @@ public partial class MainWindow : Window
         catch (Exception ex) { Log("[打开输出] 失败: " + ex.Message); }
     }
 
+    private readonly System.Collections.Generic.List<string> _lines = new();
     private void Log(string line)
     {
-        string prev = TxtLog.Text ?? "";
-        string next = (prev.Length > 0 ? prev + "\n" : "") + $"[{DateTime.Now:HH:mm:ss}] {line}";
-        var lines = next.Split('\n');
-        if (lines.Length > 300) { next = string.Join('\n', lines[^300..]); }
-        TxtLog.Text = next;
+        _lines.Add($"[{DateTime.Now:HH:mm:ss}] {line}");
+        if (_lines.Count > 150) { _lines.RemoveRange(0, _lines.Count - 150); }
+        // 一次性把字符串拼好再赋值，避免每次全量 split 造成的重排
+        TxtLog.Text = string.Join("\n", _lines);
     }
 }
