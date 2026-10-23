@@ -1,0 +1,108 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="WorldGen.MainWindow"
+        Title="UTSL 世界生成器"
+        Width="1320" Height="880"
+        Background="{DynamicResource MatWindow}"
+        FontFamily="Noto Sans SC, MiSans, Microsoft YaHei UI, Segoe UI">
+  <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" Margin="18,14,18,14">
+
+    <!-- ===== 标题 ===== -->
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,12">
+      <StackPanel Spacing="2">
+        <TextBlock Text="UTSL 世界生成器" FontSize="25" FontWeight="Bold" Foreground="{DynamicResource TextPrimary}"/>
+        <TextBlock Text="三联世界 · 离线生成与切分" FontSize="12" Foreground="{DynamicResource TextSecondary}"/>
+      </StackPanel>
+      <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="2">
+        <TextBlock Text="离线生成 · 不连接生产" FontSize="12" Foreground="{DynamicResource TextSecondary}" HorizontalAlignment="Right"/>
+        <TextBlock Text="西 — 中（默认）— 东" FontSize="12" Foreground="{DynamicResource TextTertiary}" HorizontalAlignment="Right"/>
+      </StackPanel>
+    </Grid>
+
+    <!-- ===== 参数卡 ===== -->
+    <Border Grid.Row="1" Background="{DynamicResource MatPanel}" CornerRadius="12"
+            BorderBrush="{DynamicResource Hairline}" BorderThickness="1" Padding="16,14">
+      <Grid ColumnDefinitions="Auto,*,24,Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" >
+        <TextBlock Grid.Row="0" Grid.Column="0" Text="世界名称" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtWorldName" Text="SourceMap" Margin="0,0,0,8"/>
+
+        <TextBlock Grid.Row="0" Grid.Column="3" Text="生成种子" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+        <TextBox   Grid.Row="0" Grid.Column="4" x:Name="TxtSeed" Text="20261023" Margin="0,0,0,8"/>
+
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="地图样式" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+        <ComboBox  Grid.Row="1" Grid.Column="1" x:Name="CmbStyle" SelectedIndex="0" Margin="0,0,0,8">
+          <ComboBoxItem>原版</ComboBoxItem>
+          <ComboBoxItem>醉酒世界</ComboBoxItem>
+          <ComboBoxItem>颠倒世界</ComboBoxItem>
+        </ComboBox>
+
+        <TextBlock Grid.Row="1" Grid.Column="3" Text="世界难度" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+        <ComboBox  Grid.Row="1" Grid.Column="4" x:Name="CmbDifficulty" SelectedIndex="2" Margin="0,0,0,8">
+          <ComboBoxItem>旅行</ComboBoxItem>
+          <ComboBoxItem>专家</ComboBoxItem>
+          <ComboBoxItem>大师</ComboBoxItem>
+        </ComboBox>
+
+        <TextBlock Grid.Row="2" Grid.Column="0" Text="母图尺寸" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+        <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+          <TextBox x:Name="TxtWidth" Text="12000" Width="100"/>
+          <TextBlock Text="×" Foreground="{DynamicResource TextTertiary}" VerticalAlignment="Center"/>
+          <TextBox x:Name="TxtHeight" Text="2400" Width="100"/>
+          <TextBlock x:Name="TxtSafe" Text="2880 万格 / 上限 2900 万（99%）" FontSize="11"
+                     Foreground="{DynamicResource SysYellow}" VerticalAlignment="Center" Margin="6,0,0,0"/>
+        </StackPanel>
+
+        <TextBlock Grid.Row="2" Grid.Column="3" Text="切片" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+        <TextBlock Grid.Row="2" Grid.Column="4" x:Name="TxtSlices" Text="3 片 · 重叠 300 格/缝 · Δ3900"
+                   Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,0,8"/>
+
+        <TextBlock Grid.Row="3" Grid.Column="0" Text="输出位置" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+        <TextBox   Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="4" x:Name="TxtOut"
+                   Text="C:\Users\星梦\Desktop\01_UTSL平台\utsl-verify\out\gen2"/>
+      </Grid>
+    </Border>
+
+    <!-- ===== 工具条 ===== -->
+    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" Margin="0,12,0,10">
+      <Button x:Name="BtnStart" Content="开始生成" Padding="16,7" CornerRadius="8"
+              Background="{DynamicResource Accent}" Foreground="{DynamicResource OnAccent}"/>
+      <Button Content="取消生成" Padding="14,7" CornerRadius="8"/>
+      <Button x:Name="BtnOpenOut" Content="打开输出" Padding="14,7" CornerRadius="8"/>
+      <Button Content="全景视图" Padding="14,7" CornerRadius="8"/>
+      <CheckBox Content="实时预览" IsChecked="True" Margin="6,0,0,0"/>
+      <CheckBox x:Name="ChkSeam" Content="显示接缝" IsChecked="True"/>
+      <Button x:Name="BtnRefresh" Content="刷新预览" Padding="14,7" CornerRadius="8" Margin="6,0,0,0"/>
+    </StackPanel>
+
+    <!-- ===== 预览 ===== -->
+    <Border Grid.Row="3" Background="{DynamicResource MatWell}" CornerRadius="12"
+            BorderBrush="{DynamicResource Hairline}" BorderThickness="1" ClipToBounds="True">
+      <Grid x:Name="PreviewHost">
+        <Image x:Name="PreviewImage" Stretch="Uniform" RenderOptions.BitmapInterpolationMode="HighQuality"/>
+        <Canvas x:Name="Overlay" IsHitTestVisible="False"/>
+        <TextBlock x:Name="PreviewHint" IsVisible="False"
+                   Text="还没有可显示的预览图 —— 生成一次，或点「刷新预览」"
+                   Foreground="{DynamicResource TextTertiary}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      </Grid>
+    </Border>
+
+    <!-- ===== 进度 + 日志 ===== -->
+    <Grid Grid.Row="4" RowDefinitions="Auto,Auto,*" Margin="0,12,0,0">
+      <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto">
+        <TextBlock x:Name="TxtStage" Text="就绪" FontSize="12" Foreground="{DynamicResource TextPrimary}"/>
+        <ProgressBar Grid.Column="1" x:Name="BarProgress" Minimum="0" Maximum="100" Value="0" Height="4"
+                     Margin="12,0" VerticalAlignment="Center"/>
+        <TextBlock Grid.Column="2" x:Name="TxtEta" Text="0% · 00:00" FontSize="12" Foreground="{DynamicResource TextSecondary}"/>
+      </Grid>
+      <TextBlock Grid.Row="1" x:Name="TxtNote" Text="实际图格色块预览（非客户端贴图）· 帧 — · —×— · 最近采样 —"
+                 FontSize="11" Foreground="{DynamicResource TextTertiary}" Margin="0,6,0,6"/>
+      <Border Grid.Row="2" Background="{DynamicResource MatWell}" CornerRadius="10"
+              BorderBrush="{DynamicResource HairlineSubtle}" BorderThickness="1">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="12,8">
+          <SelectableTextBlock x:Name="TxtLog" FontSize="11.5" Foreground="{DynamicResource TextSecondary}"
+                               TextWrapping="Wrap" Text="[就绪] 等待开始。"/>
+        </ScrollViewer>
+      </Border>
+    </Grid>
+  </Grid>
+</Window>

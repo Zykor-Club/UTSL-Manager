@@ -1,0 +1,14 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mac="clr-namespace:Devolutions.AvaloniaTheme.MacOS;assembly=Devolutions.AvaloniaTheme.MacOS"
+             x:Class="WorldGen.App"
+             RequestedThemeVariant="Dark">
+  <Application.Styles>
+    <mac:DevolutionsMacOsTheme />
+    <mac:DevolutionsMacOsThemeGlobalStyles />
+
+    <!-- ★ 与管理器共用同一套视觉层（令牌 / 面与线 / 尺度 / 动效 / 图标 / 全局字体链·滚动条）。
+         改一处两边同时生效，这里绝不内联样式。 -->
+    <StyleInclude Source="avares://UTSLManager.Ui/Theme.axaml" />
+  </Application.Styles>
+</Application>

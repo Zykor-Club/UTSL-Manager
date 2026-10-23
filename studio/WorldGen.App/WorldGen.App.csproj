@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    UTSLWorldGen —— 「UTSL 世界生成器」。
+    独立程序（不往管理器里塞页面），视觉复用 UTSLManager.Ui 的那套令牌。
+
+    S3 阶段：只做骨架 —— 参数卡 + 工具条 + 三段预览（带接缝线）+ 进度 + 日志。
+    预览图先用已渲染好的 PNG（out\gen2\preview.png），生成引擎接进来时换成帧。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>UTSLWorldGen</AssemblyName>
+    <RootNamespace>WorldGen</RootNamespace>
+    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.2" />
+    <PackageReference Include="Devolutions.AvaloniaTheme.MacOS" Version="*" />
+    <ProjectReference Include="..\..\UTSLManager.Ui\UTSLManager.Ui.csproj" />
+  </ItemGroup>
+</Project>
